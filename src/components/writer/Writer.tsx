@@ -8,6 +8,7 @@ import { BarsPanel, FullTextPanel, HistoryPanel, ProjectSettingsPanel, RhymePane
 import { PlayerProvider, UploadBeatButton } from "./Player";
 import { PatternBar } from "./PatternBar";
 import { SectionBlock } from "./SectionBlock";
+import { SectionNav } from "./SectionNav";
 import { songPattern } from "@/lib/pattern";
 
 type Tab = "full" | "bars" | "rhymes" | "history" | "settings";
@@ -239,6 +240,7 @@ export function Writer({ initial, aiEnabled }: { initial: ProjectTree; aiEnabled
             🎙 Record
           </Link>
         </header>
+        <SectionNav />
 
         {!aiEnabled && (
           <div className="border-b border-line bg-warn-soft px-4 py-1.5 text-center text-xs text-warn">

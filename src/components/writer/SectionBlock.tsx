@@ -43,7 +43,7 @@ export function SectionBlock({ section, index, total }: { section: SectionT; ind
   const offset = w.tree.sections.slice(0, index).reduce((n, s) => n + s.lines.length, 0);
 
   return (
-    <section id={`section-${section.id}`} className="scroll-mt-20">
+    <section id={`section-${section.id}`} className="scroll-mt-28 lg:scroll-mt-20">
       <div className="mb-2 flex items-center gap-2">
         <input
           className="min-w-0 flex-1 bg-transparent text-sm font-bold uppercase tracking-widest outline-none focus:text-accent"

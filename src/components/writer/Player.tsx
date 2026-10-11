@@ -243,14 +243,28 @@ function PlayerBar({ peaks, audioRef }: { peaks: number[]; audioRef: React.RefOb
   // on phones the keyboard needs the space: tuck the player away while typing
   useEffect(() => {
     const small = () => window.matchMedia("(max-width: 1023px)").matches;
-    const isField = (t: EventTarget | null) => t instanceof HTMLElement && (t.tagName === "TEXTAREA" || t.tagName === "INPUT");
-    const onIn = (e: FocusEvent) => small() && isField(e.target) && setTyping(true);
-    const onOut = (e: FocusEvent) => isField(e.target) && setTyping(false);
-    document.addEventListener("focusin", onIn);
-    document.addEventListener("focusout", onOut);
+    const isField = (t: Element | null) =>
+      t instanceof HTMLElement && (t.tagName === "TEXTAREA" || (t.tagName === "INPUT" && (t as HTMLInputElement).type !== "checkbox"));
+    // don't trust focusout alone (iOS skips it when a focused field re-renders or the keyboard
+    // is dismissed): always re-check what actually has focus
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const recheck = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => setTyping(small() && isField(document.activeElement)), 60);
+    };
+    const vv = window.visualViewport;
+    document.addEventListener("focusin", recheck);
+    document.addEventListener("focusout", recheck);
+    document.addEventListener("touchend", recheck, true);
+    vv?.addEventListener("resize", recheck);
+    const poll = setInterval(recheck, 1500);
     return () => {
-      document.removeEventListener("focusin", onIn);
-      document.removeEventListener("focusout", onOut);
+      clearTimeout(timer);
+      clearInterval(poll);
+      document.removeEventListener("focusin", recheck);
+      document.removeEventListener("focusout", recheck);
+      document.removeEventListener("touchend", recheck, true);
+      vv?.removeEventListener("resize", recheck);
     };
   }, []);
   const expanded = mode === "full";
@@ -311,6 +325,29 @@ function PlayerBar({ peaks, audioRef }: { peaks: number[]; audioRef: React.RefOb
   if (mode === "hidden" || typing) {
     return (
       <>
+        {typing && (
+          // while the keyboard is open: a small pill under the header so play/pause stays reachable
+          <div className="fixed right-2 top-[6.25rem] z-40 flex items-center overflow-hidden rounded-full border border-line bg-panel/95 text-xs shadow-lg backdrop-blur">
+            <button
+              className="px-3 py-1.5"
+              disabled={!p.ready}
+              onMouseDown={(e) => e.preventDefault()}
+              onTouchStart={(e) => e.preventDefault()}
+              onClick={p.toggle}
+              onTouchEnd={(e) => {
+                e.preventDefault();
+                p.toggle();
+              }}
+              title="Play / pause"
+            >
+              {p.playing ? "❚❚" : "▶"}
+            </button>
+            <span className="border-l border-line px-2 py-1.5 font-mono tabular-nums">
+              {fmtTime(time)}
+              {pos ? ` · bar ${Math.max(1, pos.bar)}` : ""}
+            </span>
+          </div>
+        )}
         {!typing && (
           <div className="fixed bottom-[4.5rem] right-3 z-30 flex overflow-hidden rounded-full border border-line bg-panel shadow-lg lg:bottom-4 lg:right-[396px]">
             <button className="px-3 py-2 text-sm" disabled={!p.ready} onClick={p.toggle} title="Play / pause">
@@ -335,15 +372,16 @@ function PlayerBar({ peaks, audioRef }: { peaks: number[]; audioRef: React.RefOb
         <button className="btn-primary w-16 justify-center" disabled={!p.ready} onClick={p.toggle} title="Play / pause (space)">
           {p.ready ? (p.playing ? "❚❚" : "▶") : "…"}
         </button>
-        <span className="font-mono text-xs tabular-nums">
-          {fmtTime(time)} / {fmtTime(duration)}
+        <span className="whitespace-nowrap font-mono text-xs tabular-nums">
+          {fmtTime(time)}
+          <span className={expanded ? "" : "hidden sm:inline"}> / {fmtTime(duration)}</span>
         </span>
         {pos && (
-          <span className="rounded bg-panel-2 px-1.5 py-0.5 font-mono text-xs tabular-nums" title="bar . beat">
+          <span className="whitespace-nowrap rounded bg-panel-2 px-1.5 py-0.5 font-mono text-xs tabular-nums" title="bar . beat">
             bar {Math.max(1, pos.bar)}.{pos.beat}
           </span>
         )}
-        {current && <span className="truncate text-xs font-semibold uppercase tracking-wide text-accent">{current.name}</span>}
+        {current && <span className="min-w-0 truncate text-xs font-semibold uppercase tracking-wide text-accent">{current.name}</span>}
 
         <span className="ml-auto flex items-center gap-1 text-xs">
           {bpmEdit !== null ? (
@@ -360,7 +398,7 @@ function PlayerBar({ peaks, audioRef }: { peaks: number[]; audioRef: React.RefOb
               onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
             />
           ) : (
-            <button className="btn px-2 py-1 text-xs font-semibold" title="Detected tempo — click to correct" onClick={() => setBpmEdit(String(audio.bpm ?? ""))}>
+            <button className="btn whitespace-nowrap px-2 py-1 text-xs font-semibold" title="Detected tempo — click to correct" onClick={() => setBpmEdit(String(audio.bpm ?? ""))}>
               {audio.bpm ? `${audio.bpm} BPM` : "BPM ?"}
             </button>
           )}
