@@ -88,6 +88,8 @@ export interface AudioTrack {
   /** time of bar 1, beat 1 (seconds) */
   beat_offset: number;
   beats_per_bar: number;
+  /** bar starts where the arrangement changes (detected from the beat) */
+  changes: { t: number; s: number }[] | null;
 }
 
 export interface Line {

@@ -4,7 +4,8 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { analyzeAudio, decodeAudio } from "@/lib/audio/analyze-file";
 import { barLength, fmtTime, sectionRanges } from "@/lib/audio/song-map";
 import { buildTimeline, lineStart as timelineLineStart, positionIn, type Timeline } from "@/lib/audio/timeline";
-import { barAt, snapToBar, waveformPeaks } from "@/lib/audio/tempo";
+import { analyseBeat } from "@/lib/audio/structure";
+import { barAt, detectTempo, snapToBar, waveformPeaks } from "@/lib/audio/tempo";
 import { useWriter } from "./context";
 import { LyricsDialog } from "./LyricsDialog";
 import { TapSync } from "./TapSync";
@@ -29,6 +30,11 @@ interface PlayerApi {
   /** current time snapped to the nearest bar line */
   snappedNow: () => number;
   upload: (file: File) => Promise<void>;
+  /**
+   * set the tempo (null = detect) and fit the exact grid + beat changes to the song;
+   * align = also move the section starts onto the beat
+   */
+  fitBeat: (bpm: number | null, align?: boolean) => Promise<void>;
   status: string | null;
 }
 
@@ -46,6 +52,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const pid = tree.project.id;
   const audioMeta = tree.audio;
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const samplesRef = useRef<{ mono: Float32Array; sampleRate: number } | null>(null);
   const [src, setSrc] = useState<string | null>(null);
   const [peaks, setPeaks] = useState<number[]>([]);
   const [playing, setPlaying] = useState(false);
@@ -78,8 +85,10 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         if (cancelled) return;
         objectUrl = URL.createObjectURL(blob);
         setSrc(objectUrl);
-        const { mono } = await decodeAudio(blob);
-        if (!cancelled) setPeaks(waveformPeaks(mono, 600));
+        const { mono, sampleRate } = await decodeAudio(blob);
+        if (cancelled) return;
+        samplesRef.current = { mono, sampleRate };
+        setPeaks(waveformPeaks(mono, 600));
         setStatus(null);
       } catch {
         if (!cancelled) setStatus("Could not load the beat.");
@@ -186,11 +195,55 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
           duration: analysis.duration,
           bpm: analysis.tempo.bpm || null,
           beat_offset: analysis.tempo.offset,
+          changes: analysis.changes,
         });
         setStatus(null);
       } catch (e) {
         setStatus(e instanceof Error ? e.message : "Upload failed");
       }
+    },
+    [mutate, pid],
+  );
+
+  const fitBeat = useCallback(
+    async (bpm: number | null, align = false) => {
+      const smp = samplesRef.current;
+      const meta = treeRef.current.audio;
+      if (!smp || !meta) {
+        if (bpm) await mutate(`/api/projects/${pid}/audio`, { action: "update", bpm });
+        return;
+      }
+      setStatus("Listening to the beat…");
+      // let the status paint before the analysis blocks the main thread for a moment
+      await new Promise((r) => setTimeout(r, 30));
+      let approx = bpm;
+      let note = "";
+      if (!approx) {
+        // detect; keep the writer's octave (half / double time) when it is one of the readings
+        const d = detectTempo(smp.mono.subarray(0, Math.min(smp.mono.length, smp.sampleRate * 180)), smp.sampleRate).bpm;
+        const cur = meta.bpm;
+        const readings = [d / 2, d, d * 2];
+        const same = cur ? readings.find((r) => Math.abs(r / cur - 1) <= 0.04) : undefined;
+        approx = same ?? (cur ? readings.sort((a, b) => Math.abs(Math.log(a / cur)) - Math.abs(Math.log(b / cur)))[0] : d);
+        if (cur && !same) note = ` Tempo ${cur} → ${Math.round(approx * 100) / 100} BPM: ${cur} doesn't match the beat of this song.`;
+      }
+      if (!approx) {
+        setStatus("No clear beat found — enter the BPM.");
+        return;
+      }
+      const fit = analyseBeat(smp.mono, smp.sampleRate, approx, meta.beats_per_bar || 4);
+      await mutate(`/api/projects/${pid}/audio`, { action: "update", bpm: fit.bpm, beat_offset: fit.offset, changes: fit.changes });
+      let moved = 0;
+      if (align) {
+        const res = await mutate(`/api/projects/${pid}/audio`, { action: "alignSections" });
+        moved = Number(res?.headers.get("x-moved") ?? 0);
+      }
+      setStatus(
+        `${fit.bpm} BPM · bar 1 at ${fit.offset.toFixed(2)} s · ${fit.changes.length} beat changes` +
+          (align ? ` · ${moved} section${moved === 1 ? "" : "s"} moved onto the beat` : "") +
+          "." +
+          note,
+      );
     },
     [mutate, pid],
   );
@@ -211,9 +264,10 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       now,
       snappedNow,
       upload,
+      fitBeat,
       status,
     }),
-    [audioMeta, src, filename, playing, position, loopId, toggle, seek, lineStart, playSection, cueSection, now, snappedNow, upload, status],
+    [audioMeta, src, filename, playing, position, loopId, toggle, seek, lineStart, playSection, cueSection, now, snappedNow, upload, fitBeat, status],
   );
 
   return (
@@ -424,7 +478,7 @@ function PlayerBar({ peaks, audioRef }: { peaks: number[]; audioRef: React.RefOb
               onChange={(e) => setBpmEdit(e.target.value)}
               onBlur={() => {
                 const v = parseFloat(bpmEdit.replace(",", "."));
-                if (v >= 30 && v <= 300) update({ bpm: v });
+                if (v >= 30 && v <= 300) void p.fitBeat(v);
                 setBpmEdit(null);
               }}
               onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
@@ -436,10 +490,10 @@ function PlayerBar({ peaks, audioRef }: { peaks: number[]; audioRef: React.RefOb
           )}
           {audio.bpm && expanded && (
             <>
-              <button className="btn-ghost px-1 text-xs" title="Half time" onClick={() => update({ bpm: Math.round((audio.bpm! / 2) * 10) / 10 })}>
+              <button className="btn-ghost px-1 text-xs" title="Half time" onClick={() => void p.fitBeat(audio.bpm! / 2)}>
                 ÷2
               </button>
-              <button className="btn-ghost px-1 text-xs" title="Double time" onClick={() => update({ bpm: Math.round(audio.bpm! * 2 * 10) / 10 })}>
+              <button className="btn-ghost px-1 text-xs" title="Double time" onClick={() => void p.fitBeat(audio.bpm! * 2)}>
                 ×2
               </button>
               <button
@@ -493,6 +547,14 @@ function PlayerBar({ peaks, audioRef }: { peaks: number[]; audioRef: React.RefOb
           </div>
 
           <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
+            <button
+              className="btn-primary px-2 py-0.5 text-xs"
+              disabled={!p.ready}
+              onClick={() => void p.fitBeat(null, true)}
+              title="Finds the exact tempo and bar 1 from the song, the bars where the beat changes, and moves every section start onto them"
+            >
+              🧲 Snap sections to the beat
+            </button>
             <span className="text-muted">Section starts here{audio.bpm ? " (snaps to bar)" : ""}:</span>
             {w.tree.sections.map((s) => (
               <button

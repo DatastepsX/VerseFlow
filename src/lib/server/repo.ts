@@ -102,7 +102,7 @@ export async function getTree(projectId: string): Promise<ProjectTree> {
     db().from("ai_calls").select("input_tokens, output_tokens").eq("project_id", projectId),
     db()
       .from("audio_tracks")
-      .select("filename, duration, bpm, beat_offset, beats_per_bar")
+      .select("filename, duration, bpm, beat_offset, beats_per_bar, changes")
       .eq("project_id", projectId)
       .maybeSingle(),
   ]);
@@ -658,7 +658,14 @@ export async function audioUploadUrl(projectId: string, filename: string) {
 
 export async function saveAudio(
   projectId: string,
-  t: { path: string; filename: string; duration: number | null; bpm: number | null; beat_offset: number },
+  t: {
+    path: string;
+    filename: string;
+    duration: number | null;
+    bpm: number | null;
+    beat_offset: number;
+    changes: AudioTrack["changes"];
+  },
 ) {
   if (!t.path.startsWith(`${projectId}/`)) throw new Error("Invalid audio path");
   const old = check(await db().from("audio_tracks").select("path").eq("project_id", projectId).maybeSingle()) as {
@@ -667,12 +674,20 @@ export async function saveAudio(
   check(
     await db()
       .from("audio_tracks")
-      .upsert({ project_id: projectId, path: t.path, filename: t.filename, duration: t.duration, bpm: t.bpm, beat_offset: t.beat_offset }),
+      .upsert({
+        project_id: projectId,
+        path: t.path,
+        filename: t.filename,
+        duration: t.duration,
+        bpm: t.bpm,
+        beat_offset: t.beat_offset,
+        changes: t.changes,
+      }),
   );
   if (old && old.path !== t.path) await db().storage.from(BUCKET).remove([old.path]);
 }
 
-export async function updateAudio(projectId: string, patch: Partial<Pick<AudioTrack, "bpm" | "beat_offset" | "beats_per_bar">>) {
+export async function updateAudio(projectId: string, patch: Partial<Pick<AudioTrack, "bpm" | "beat_offset" | "beats_per_bar" | "changes">>) {
   check(await db().from("audio_tracks").update(patch).eq("project_id", projectId));
 }
 

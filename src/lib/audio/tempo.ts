@@ -24,7 +24,7 @@ export interface TempoResult {
 /** target analysis rate; the exact rate is sampleRate / hop */
 const FRAME_RATE = 100;
 
-function onsetEnvelope(x: Float32Array, sr: number) {
+export function onsetEnvelope(x: Float32Array, sr: number) {
   const hop = Math.round(sr / FRAME_RATE);
   const frames = Math.floor(x.length / hop);
   const low = new Float32Array(frames);

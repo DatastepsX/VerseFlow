@@ -1,10 +1,13 @@
 "use client";
 
+import { analyseBeat, type BeatChange } from "./structure";
 import { detectTempo, waveformPeaks, type TempoResult } from "./tempo";
 
 export interface AudioAnalysis {
   duration: number;
   tempo: TempoResult;
+  /** beat changes on the fitted grid */
+  changes: BeatChange[];
   peaks: number[];
 }
 
@@ -32,5 +35,9 @@ export async function analyzeAudio(data: Blob, buckets = 600): Promise<AudioAnal
   const { mono, sampleRate, duration } = await decodeAudio(data);
   // analyse at most the first 3 minutes for tempo; the grid is constant for most beats
   const slice = mono.subarray(0, Math.min(mono.length, Math.floor(sampleRate * 180)));
-  return { duration, tempo: detectTempo(slice, sampleRate), peaks: waveformPeaks(mono, buckets) };
+  const tempo = detectTempo(slice, sampleRate);
+  if (!tempo.bpm) return { duration, tempo, changes: [], peaks: waveformPeaks(mono, buckets) };
+  // exact tempo + bar 1 over the whole song, and where the beat changes
+  const beat = analyseBeat(mono, sampleRate, tempo.bpm);
+  return { duration, tempo: { ...tempo, bpm: beat.bpm, offset: beat.offset }, changes: beat.changes, peaks: waveformPeaks(mono, buckets) };
 }

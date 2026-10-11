@@ -12,6 +12,8 @@
  *   empty or missing lines receive the transcribed text.
  */
 
+import { alignStarts, type BeatChange } from "./structure";
+
 export interface TimedWord {
   text: string;
   start: number;
@@ -23,6 +25,8 @@ export interface Grid {
   beat_offset: number;
   beats_per_bar: number;
   duration: number | null;
+  /** bar starts where the beat changes: new sections start there when one is close */
+  changes?: BeatChange[] | null;
 }
 
 export interface PlanSectionInput {
@@ -267,6 +271,17 @@ export function planLyrics(opts: {
         lines: [],
       }));
       if (targets.length) targets[0].start = Math.min(targets[0].start, grid.beat_offset);
+      // vocal blocks start where the beat changes when a change is within about a bar
+      if (grid.changes?.length) {
+        const starts = alignStarts(
+          targets.map((t) => t.start),
+          grid,
+        );
+        targets.forEach((t, i) => {
+          if (i > 0) t.start = starts[i];
+          if (i > 0) targets[i - 1].end = t.start;
+        });
+      }
     } else {
       // no grid: one section per vocal block separated by ≥ 3 s of silence
       const phrases = phraseLines(words);
