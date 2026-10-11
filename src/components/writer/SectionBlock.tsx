@@ -230,6 +230,20 @@ function Composer({
             })
           }
           onChange={(e) => setText(e.target.value.replace(/\n/g, ""))}
+          onPaste={(e) => {
+            // several lines pasted at once: each becomes its own line
+            const lines = e.clipboardData
+              .getData("text")
+              .split(/\r?\n/)
+              .map((l) => l.replace(/\s+/g, " ").trim())
+              .filter(Boolean);
+            if (lines.length < 2) return;
+            e.preventDefault();
+            void w.mutate(`/api/sections/${section.id}`, {
+              action: "addLines",
+              lines: lines.map((t) => ({ text: t, status: asDraft ? "OPEN" : "APPROVED" })),
+            });
+          }}
           onKeyDown={(e) => {
             if (e.key === "Enter") {
               e.preventDefault();

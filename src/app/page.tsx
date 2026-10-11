@@ -26,6 +26,7 @@ export default function Dashboard() {
     genre: "",
     style: "",
     simpleLanguage: true,
+    text: "",
   });
 
   useEffect(() => {
@@ -43,12 +44,19 @@ export default function Dashboard() {
           language: form.language,
           concept: form.concept || null,
           settings: { genre: form.genre || undefined, style: form.style || undefined, simpleLanguage: form.simpleLanguage },
+          text: form.text || undefined,
         },
       });
       if (song) {
         try {
           await api(`/api/projects/${p.id}/audio`, { body: await uploadBeat(p.id, song, setStatus) });
-          if (readLyrics) {
+          if (readLyrics && form.text.trim()) {
+            // pasted text + song: keep the text, time its lines to the vocals
+            setStatus("Reading the lyrics from the song… (up to a minute)");
+            await api(`/api/projects/${p.id}/lyrics`, { body: { action: "transcribe", autoSections: true } });
+            setStatus("Syncing your lines to the vocals…");
+            await api(`/api/projects/${p.id}/lyrics`, { body: { action: "sync" } });
+          } else if (readLyrics) {
             // 1 ElevenLabs call, then the song is rebuilt from its vocals (sections + lines, free)
             setStatus("Reading the lyrics from the song… (up to a minute)");
             await api(`/api/projects/${p.id}/lyrics`, { body: { action: "transcribe", autoSections: true } });
@@ -134,7 +142,9 @@ export default function Dashboard() {
               <label className="mt-2 flex items-center gap-2 text-sm">
                 <input type="checkbox" checked={readLyrics} onChange={(e) => setReadLyrics(e.target.checked)} />
                 <span>
-                  Has vocals: read the lyrics and build the sections (verse, chorus, rap…) · 1 call
+                  {form.text.trim()
+                    ? "Has vocals: read them and time my lines to the singing · 1 call"
+                    : "Has vocals: read the lyrics and build the sections (verse, chorus, rap…) · 1 call"}
                 </span>
               </label>
             )}
@@ -160,6 +170,20 @@ export default function Dashboard() {
                 ))}
               </select>
             </div>
+          </div>
+          <div>
+            <label className="label">Existing text (optional)</label>
+            <textarea
+              className="input min-h-28 font-[inherit]"
+              value={form.text}
+              placeholder={"Paste lyrics or a poem to work on.\n[Verse 1] / [Chorus] headings or blank lines between stanzas become sections."}
+              onChange={(e) => setForm({ ...form, text: e.target.value })}
+            />
+            {form.text.trim() && (
+              <p className="mt-1 text-xs text-muted">
+                {form.text.split("\n").filter((l) => l.trim()).length} lines — imported as drafts you can keep ✓, replace ✕ or polish with AI.
+              </p>
+            )}
           </div>
           <div>
             <label className="label">Story / concept (optional)</label>

@@ -1,5 +1,5 @@
 import { draftPlan, draftSection, fillBank, fitLine } from "@/lib/server/ai";
-import { addLine, appendLines, applyDraft, clearBank, deleteSection, getTree, insertBank, mergeIntoPrevious, moveSection, setBankState, updateLine, updateSection } from "@/lib/server/repo";
+import { addLine, appendLines, applyDraft, applyPolish, clearBank, deleteSection, getTree, insertBank, mergeIntoPrevious, moveSection, setBankState, updateLine, updateSection } from "@/lib/server/repo";
 import { rhymePartners } from "@/lib/scheme";
 import { db } from "@/lib/server/db";
 import { body, handle, pick, treeResponse } from "@/lib/server/http";
@@ -39,7 +39,7 @@ export async function POST(req: Request, ctx: RouteContext<"/api/sections/[id]">
       replace?: boolean;
       reference?: string;
       lines?: { text: string; status?: LineStatus; bankId?: string }[];
-      mode?: "fill" | "replace";
+      mode?: "fill" | "replace" | "polish";
       indices?: number[];
     }>(req);
     if (b.action === "addLine") {
@@ -53,7 +53,7 @@ export async function POST(req: Request, ctx: RouteContext<"/api/sections/[id]">
       // no AI call: creates the section's missing bars (fill) and returns the chunks (x-parts) the client then
       // drafts in parallel — one call each — so a 40-bar section takes about as long as 8 bars
       const s = await sectionProject(id);
-      const mode = b.mode === "replace" ? "replace" : "fill";
+      const mode = b.mode === "replace" || b.mode === "polish" ? b.mode : "fill";
       const plan = draftPlan(await getTree(s), id, mode);
       if (plan.n > plan.lyricCount)
         await appendLines(id, Array.from({ length: plan.n - plan.lyricCount }, () => ({ text: "", status: "OPEN" as LineStatus })));
@@ -61,13 +61,14 @@ export async function POST(req: Request, ctx: RouteContext<"/api/sections/[id]">
       res.headers.set("x-parts", JSON.stringify(plan.chunks));
       return res;
     }
-    if (b.action === "fill" || b.action === "replace") {
+    if (b.action === "fill" || b.action === "replace" || b.action === "polish") {
       // one AI call for a chunk of ~8 bars (b.indices, else the first chunk): open bars (fill) or the bars marked ✕
       // (replace), from the section's pattern. x-remaining = open bars not written by this call.
       const s = await sectionProject(id);
       const only = Array.isArray(b.indices) ? b.indices.filter((k) => Number.isInteger(k)).slice(0, 16) : undefined;
       const { slots, remaining } = await draftSection(await getTree(s), id, b.action, b.instruction?.slice(0, 500), only);
-      await applyDraft(id, slots);
+      if (b.action === "polish") await applyPolish(id, slots);
+      else await applyDraft(id, slots);
       const res = await treeResponse(s);
       res.headers.set("x-remaining", String(slots.length ? remaining : 0));
       return res;
@@ -82,7 +83,7 @@ export async function POST(req: Request, ctx: RouteContext<"/api/sections/[id]">
     }
     if (b.action === "addLines") {
       // several lines at once (e.g. a whole couplet from the bank), appended in order
-      const items = (b.lines ?? []).filter((l) => l.text?.trim()).slice(0, 8);
+      const items = (b.lines ?? []).filter((l) => l.text?.trim()).slice(0, 200);
       await appendLines(id, items.map((l) => ({ text: l.text.trim(), status: l.status ?? "APPROVED" })));
       for (const l of items) if (l.bankId) await setBankState(l.bankId, "used");
       return treeResponse(await sectionProject(id));

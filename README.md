@@ -29,6 +29,11 @@ Product spec: see the original `verseflow_product_spec.md` (Phase 1 + core of Ph
   (bar-synchronous timbre/harmony self-similarity). Typing the BPM or ÷2/×2 refits the grid; “🧲 Snap sections to
   the beat” also moves every section start onto the nearest beat change (≤ ~1 bar / 2.5 s) or bar line. Sections
   created from the lyrics start on beat changes too.
+- **Start from existing text** (`src/lib/text-import.ts`): paste lyrics or a poem in the new-project form —
+  `[Verse 1]` / `Chorus:` / `## Hook` headings or blank lines between stanzas become sections (a repeated stanza is the
+  chorus); lines come in as drafts. Pasting several lines into “Write the next line…” adds them all.
+- **✨ Polish N lines** (section panel, 1 call per ~8 lines, parallel): 3 improved versions of every line not yet
+  approved, stored as options (↻ on the line) — the text itself is never replaced.
 - **New project with its song**: the new-project form takes the MP3 (title from the file name); optionally it reads
   the lyrics right away (1 ElevenLabs call) and rebuilds the song from them. Upload logic: `src/lib/client/beat.ts`.
 - **Rebuild the song from the vocals** (`src/lib/audio/song-lines.ts`, Lyrics dialog, free): lines as they are sung

@@ -3,12 +3,15 @@ import {
   deleteProject,
   duplicateProject,
   redo,
+  getTree,
+  importSections,
   saveVersion,
   setLineTimes,
   undo,
   updateProject,
 } from "@/lib/server/repo";
 import { body, handle, pick, treeResponse } from "@/lib/server/http";
+import { parseText } from "@/lib/text-import";
 import type { Project } from "@/lib/types";
 
 export async function GET(_req: Request, ctx: RouteContext<"/api/projects/[id]">) {
@@ -37,7 +40,7 @@ export const maxDuration = 300;
 export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]">) {
   return handle(async () => {
     const { id } = await ctx.params;
-    const b = await body<{ action: string; name?: string; group_size?: number; label?: string; audio_start?: number | null; times?: { id: string; at: number | null }[] }>(req);
+    const b = await body<{ action: string; name?: string; group_size?: number; label?: string; audio_start?: number | null; times?: { id: string; at: number | null }[]; text?: string }>(req);
     switch (b.action) {
       case "undo":
         await undo(id);
@@ -59,6 +62,14 @@ export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]">
             .slice(0, 200),
         );
         break;
+      case "importText": {
+        // pasted text added as new sections at the end of the project
+        const tree = await getTree(id);
+        const sections = parseText((b.text ?? "").slice(0, 50000), tree.project.type);
+        if (!sections.length) return Response.json({ error: "No text to import." }, { status: 400 });
+        await importSections(id, sections, tree.project.type === "song" || tree.project.type === "rap" ? 2 : 1, true);
+        break;
+      }
       case "saveVersion":
         await saveVersion(id, b.label ?? new Date().toLocaleString());
         break;

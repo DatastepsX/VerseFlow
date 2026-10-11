@@ -409,13 +409,19 @@ const DRAFT_EFFORT = (process.env.AI_DRAFT_EFFORT || "low") as "low" | "medium" 
  * `open` = bar indices to write, `chunks` = those split into whole line
  * groups of about DRAFT_CHUNK bars (couplets stay together), one call each.
  */
-export function draftPlan(tree: ProjectTree, sectionId: string, mode: "fill" | "replace") {
+export type DraftMode = "fill" | "replace" | "polish";
+
+const LOCKED = new Set(["APPROVED", "APPROVED_EDITED"]);
+
+export function draftPlan(tree: ProjectTree, sectionId: string, mode: DraftMode) {
   const section = tree.sections.find((s) => s.id === sectionId);
   if (!section) throw new Error("Section not found");
   const lyrics = section.lines.filter((l) => l.kind === "lyric");
   const n = mode === "fill" ? Math.max(sectionLineCount(tree, sectionId), lyrics.length) : lyrics.length;
   const isSlot = (k: number) => {
     const l = lyrics[k];
+    // polish: every written line that isn't approved yet gets improved versions (its text stays)
+    if (mode === "polish") return !!l && !!l.text.trim() && !LOCKED.has(l.status) && l.status !== "DECLINED";
     if (!l || !l.text.trim()) return mode === "fill" || !!l;
     return NEEDS.has(l.status);
   };
@@ -435,7 +441,7 @@ export function draftPlan(tree: ProjectTree, sectionId: string, mode: "fill" | "
  * first chunk. Other open bars are left out ([LATER]). `remaining` = open bars
  * not written by this call.
  */
-export async function draftSection(tree: ProjectTree, sectionId: string, mode: "fill" | "replace", instruction?: string, only?: number[]) {
+export async function draftSection(tree: ProjectTree, sectionId: string, mode: DraftMode, instruction?: string, only?: number[]) {
   if (!aiConfigured()) throw new AiUnavailable("AI is not configured yet (ANTHROPIC_API_KEY missing).");
   const { project } = tree;
   const lang = project.language;
@@ -450,11 +456,22 @@ export async function draftSection(tree: ProjectTree, sectionId: string, mode: "
   if (!slots.length) return { slots: [] as DraftSlot[], remaining: 0 };
   const g = Math.max(1, section.group_size);
   const slotSet = new Set(slots);
-  const later = new Set(open.filter((k) => !slotSet.has(k)));
+  const polish = mode === "polish";
+  // polish: lines improved in another call are context like any other written line
+  const later = polish ? new Set<number>() : new Set(open.filter((k) => !slotSet.has(k)));
 
-  const partners = rhymePartners(texts.map((t, k) => (slotSet.has(k) || later.has(k) ? "x" : t)), g, section.rhyme_scheme);
+  const partners = rhymePartners(texts.map((t, k) => (!polish && (slotSet.has(k) || later.has(k)) ? "x" : t)), g, section.rhyme_scheme);
   const rhymeRules = slots
     .map((k) => {
+      if (polish) {
+        const p = partners[k].partner;
+        if (p === null || !texts[p].trim()) return null;
+        return slotSet.has(p)
+          ? k < p
+            ? `Lines ${k + 1} and ${p + 1} rhyme: option i of both must still rhyme with each other.`
+            : null
+          : `Line ${k + 1} must keep rhyming with line ${p + 1} “${texts[p]}” (-${analyzeLine(texts[p], lang).rhymeKey}).`;
+      }
       const p = partners[k].partner;
       if (p === null || later.has(p)) return null;
       if (slotSet.has(p)) return k < p ? `Lines ${k + 1} and ${p + 1} are both open: they must rhyme exactly with each other (option i of line ${k + 1} pairs with option i of line ${p + 1}).` : null;
@@ -467,7 +484,7 @@ export async function draftSection(tree: ProjectTree, sectionId: string, mode: "
   const rejected = new Set<string>();
   for (const k of slots) {
     const l = lyrics[k];
-    if (l?.text.trim()) rejected.add(l.text.trim());
+    if (l?.text.trim() && !polish) rejected.add(l.text.trim());
     for (const a of l?.alternatives ?? []) rejected.add(a.text.trim());
   }
   for (const k of slots) {
@@ -476,7 +493,11 @@ export async function draftSection(tree: ProjectTree, sectionId: string, mode: "
   }
 
   const listing = texts
-    .map((t, k) => `${k > 0 && k % g === 0 ? "\n" : ""}${k + 1}. ${slotSet.has(k) ? "[OPEN]" : later.has(k) ? "[LATER]" : "[KEEP]"} ${slotSet.has(k) || later.has(k) ? "" : t}`)
+    .map((t, k) =>
+      polish
+        ? `${k > 0 && k % g === 0 ? "\n" : ""}${k + 1}. ${slotSet.has(k) ? "[IMPROVE]" : "[KEEP]"} ${t}`
+        : `${k > 0 && k % g === 0 ? "\n" : ""}${k + 1}. ${slotSet.has(k) ? "[OPEN]" : later.has(k) ? "[LATER]" : "[KEEP]"} ${slotSet.has(k) || later.has(k) ? "" : t}`,
+    )
     .join("\n");
   const others = tree.sections
     .filter((s) => s.id !== sectionId && s.lines.some((l) => l.kind === "lyric" && l.text.trim()))
@@ -490,19 +511,27 @@ Title: ${project.title}
 Language: ${langName(lang)}${st.secondaryLanguage ? ` (occasional ${st.secondaryLanguage} words are welcome)` : ""}
 ${st.genre ? `Genre: ${st.genre}\n` : ""}${st.style ? `Style / references: ${st.style}\n` : ""}${st.mood ? `Mood: ${st.mood}\n` : ""}${st.simpleLanguage ? "Vocabulary: simple, modern, direct — avoid overly poetic words\n" : ""}${st.explicitness ? `Explicit content: ${st.explicitness}\n` : ""}${project.concept ? `Story / concept: ${project.concept}\n` : ""}
 ${others ? `REST OF THE SONG (context — stay consistent with it)\n${others}\n\n` : ""}SECTION: ${section.name}${section.story_beat ? `\nStory beat: ${section.story_beat}` : ""}${section.intensity ? `\nIntensity: ${section.intensity}/10` : ""}${section.notes ? `\nNotes: ${section.notes}` : ""}
-Lines grouped in ${g === 2 ? "couplets" : g === 1 ? "single lines" : `groups of ${g}`}. [KEEP] lines are fixed — never change them; write only the [OPEN] lines. [LATER] lines are written separately — skip them, but leave room for the text to continue there.
+Lines grouped in ${g === 2 ? "couplets" : g === 1 ? "single lines" : `groups of ${g}`}. ${
+    polish
+      ? "The writer's own text. [KEEP] lines stay as they are; write improved versions of the [IMPROVE] lines."
+      : "[KEEP] lines are fixed — never change them; write only the [OPEN] lines. [LATER] lines are written separately — skip them, but leave room for the text to continue there."
+  }
 ${listing}
 
 ${template || "Keep lines a natural, performable length."}
 ${rhymeRules ? `RHYMES\n${rhymeRules}` : ""}
 
 TASK
-For every [OPEN] line write 3 different options. Each option must follow the rhythm template, respect its rhyme rule, and connect naturally with the lines before and after it (the section must read as one coherent text that fits the rest of the song). Vary images and wording between options.
+${
+  polish
+    ? `For every [IMPROVE] line write 3 improved versions of it. Keep what the line says and its place in the story, keep its rhyme and roughly its length (±2 syllables, unless the writer's direction asks otherwise), but make it stronger: more vivid images, fresher and more natural wording, smoother flow, no filler. The 3 versions should differ: one close to the original, one bolder, one in between.`
+    : "For every [OPEN] line write 3 different options. Each option must follow the rhythm template, respect its rhyme rule, and connect naturally with the lines before and after it (the section must read as one coherent text that fits the rest of the song). Vary images and wording between options."
+}
 ${instruction ? `Writer's direction: ${instruction}` : ""}
 ${rejected.size ? `Rejected before — do not repeat or closely paraphrase:\n${[...rejected].slice(0, 40).map((t) => `- ${t}`).join("\n")}` : ""}
-Return one entry per [OPEN] line, "line" = its number.`;
+Return one entry per ${polish ? "[IMPROVE]" : "[OPEN]"} line, "line" = its number.`;
 
-  const parsed = await callJson<{ slots: { line: number; options: string[] }[] }>(project.id, mode === "fill" ? "section_fill" : "section_replace", prompt, DRAFT_SCHEMA, SYSTEM, DRAFT_EFFORT);
+  const parsed = await callJson<{ slots: { line: number; options: string[] }[] }>(project.id, `section_${mode}`, prompt, DRAFT_SCHEMA, SYSTEM, DRAFT_EFFORT);
   const drafted = parsed.slots
     .map((x) => ({ index: x.line - 1, options: x.options.map((o) => o.trim()).filter(Boolean).slice(0, 3) }))
     .filter((x) => slotSet.has(x.index) && x.options.length);

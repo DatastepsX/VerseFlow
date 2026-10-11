@@ -28,7 +28,7 @@ export function SectionWorkflow({ section }: { section: SectionT }) {
   const pattern = sectionPattern(section);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
-  const [busy, setBusy] = useState<null | "fill" | "replace" | "keep">(null);
+  const [busy, setBusy] = useState<null | "fill" | "replace" | "polish" | "keep">(null);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
 
   const lyric = section.lines.filter((l) => l.kind === "lyric");
@@ -37,9 +37,13 @@ export function SectionWorkflow({ section }: { section: SectionT }) {
   const review = lyric.filter((l) => l.status === "SUGGESTED" && l.text.trim()).length;
   const replace = lyric.filter((l) => l.status === "DECLINED" || l.status === "NEEDS_NEW_OPTIONS").length;
   const open = Math.max(0, target - lyric.filter((l) => l.text.trim()).length);
+  // the writer's (or imported) lines that can still be improved
+  const polishable = lyric.filter(
+    (l) => l.text.trim() && l.status !== "APPROVED" && l.status !== "APPROVED_EDITED" && l.status !== "DECLINED",
+  ).length;
   const others = w.tree.sections.filter((s) => s.id !== section.id && sectionPattern(s).length);
 
-  const run = async (action: "fill" | "replace" | "keepAll") => {
+  const run = async (action: "fill" | "replace" | "polish" | "keepAll") => {
     setBusy(action === "keepAll" ? "keep" : action);
     if (action === "keepAll") await w.mutate(`/api/sections/${section.id}`, { action });
     else {
@@ -50,7 +54,7 @@ export function SectionWorkflow({ section }: { section: SectionT }) {
       try {
         parts = JSON.parse(plan?.headers.get("x-parts") ?? "[]");
       } catch {}
-      const total = parts.reduce((n, p) => n + p.length, 0);
+      const total = parts.reduce((n, p) => n + p.length, 0) || (action === "polish" ? polishable : 0);
       let done = 0;
       setProgress({ done, total });
       await Promise.all(
@@ -182,6 +186,16 @@ export function SectionWorkflow({ section }: { section: SectionT }) {
           {w.aiEnabled && replace > 0 && (
             <button className="btn-primary px-2 py-1 text-xs" disabled={!!busy} onClick={() => void run("replace")} title="New options only for the bars marked ✕, fitting the bars you keep">
               {busy === "replace" ? `Rewriting${working}` : `↻ Replace ${replace} marked · ${callLabel(replace)}`}
+            </button>
+          )}
+          {w.aiEnabled && polishable > 0 && (
+            <button
+              className="btn px-2 py-1 text-xs"
+              disabled={!!busy}
+              onClick={() => void run("polish")}
+              title="3 improved versions of every line you haven't approved yet — your text stays, the versions appear under ↻ on each line"
+            >
+              {busy === "polish" ? `Polishing${working}` : `✨ Polish ${polishable} lines · ${callLabel(polishable)}`}
             </button>
           )}
           {review > 0 && (

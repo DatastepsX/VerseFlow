@@ -891,3 +891,44 @@ export async function mergeIntoPrevious(sectionId: string) {
   await deleteSection(sectionId);
   return s.project_id;
 }
+
+/**
+ * Pasted text → sections + lines (marked as drafts, so the review / polish tools apply).
+ * replace = the project's empty default sections make way for the imported ones.
+ */
+export async function importSections(
+  projectId: string,
+  sections: { name: string; lines: string[] }[],
+  groupSize: number,
+  replace: boolean,
+) {
+  if (replace) {
+    const tree = await getTree(projectId);
+    for (const s of tree.sections) if (!s.lines.some((l) => l.text.trim())) await deleteSection(s.id);
+  }
+  for (const s of sections) {
+    const id = await addSection(projectId, { name: s.name, group_size: groupSize });
+    await appendLines(
+      id,
+      s.lines.map((text) => ({ text, status: "SUGGESTED" as LineStatus })),
+    );
+  }
+  await touch(projectId);
+}
+
+/** Improved versions of the writer's lines: stored as options (↻), the text itself stays. */
+export async function applyPolish(sectionId: string, slots: { index: number; options: string[] }[]) {
+  if (!slots.length) return;
+  const section = check(await db().from("sections").select("id, project_id").eq("id", sectionId).single()) as Section;
+  const lyric = (
+    check(await db().from("lines").select("id, kind").eq("section_id", sectionId).eq("deleted", false).order("position")) as {
+      id: string;
+      kind: string;
+    }[]
+  ).filter((l) => l.kind === "lyric");
+  const rows = slots.flatMap((x) =>
+    lyric[x.index] ? x.options.map((text) => ({ line_id: lyric[x.index].id, project_id: section.project_id, text, source: "ai", state: "pending" })) : [],
+  );
+  if (rows.length) check(await db().from("alternatives").insert(rows));
+  await touch(section.project_id);
+}
