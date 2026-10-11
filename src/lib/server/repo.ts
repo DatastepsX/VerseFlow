@@ -173,7 +173,7 @@ export async function addSection(projectId: string, input: { name: string; group
   const last = check(
     await db().from("sections").select("position").eq("project_id", projectId).order("position", { ascending: false }).limit(1),
   ) as { position: number }[];
-  check(
+  const row = check(
     await db()
       .from("sections")
       .insert({
@@ -182,9 +182,12 @@ export async function addSection(projectId: string, input: { name: string; group
         group_size: input.group_size ?? 2,
         audio_start: input.audio_start ?? null,
         position: (last[0]?.position ?? 0) + 1,
-      }),
-  );
+      })
+      .select("id")
+      .single(),
+  ) as { id: string };
   await touch(projectId);
+  return row.id;
 }
 
 export async function updateSection(
@@ -275,6 +278,47 @@ export async function addLine(
   await recordEvent(section.project_id, line.id, "create", { deleted: true }, snap({ ...line, deleted: false }));
   await touch(section.project_id);
   return line;
+}
+
+/** Append many lines at once (e.g. imported lyrics), with one "create" history event per line. */
+export async function appendLines(sectionId: string, items: { text: string; status: LineStatus }[]) {
+  if (!items.length) return;
+  const section = check(await db().from("sections").select("id, project_id").eq("id", sectionId).single()) as Section;
+  const last = check(
+    await db().from("lines").select("position").eq("section_id", sectionId).eq("deleted", false).order("position", { ascending: false }).limit(1),
+  ) as { position: number }[];
+  const base = last[0]?.position ?? 0;
+  const rows = check(
+    await db()
+      .from("lines")
+      .insert(
+        items.map((it, i) => ({
+          project_id: section.project_id,
+          section_id: sectionId,
+          position: base + i + 1,
+          text: it.text,
+          status: it.status,
+          kind: "lyric",
+        })),
+      )
+      .select(LINE_COLS),
+  ) as Line[];
+  await db().from("line_events").delete().eq("project_id", section.project_id).eq("undone", true);
+  check(
+    await db()
+      .from("line_events")
+      .insert(
+        rows
+          .sort((a, b) => a.position - b.position)
+          .map((line) => ({
+            project_id: section.project_id,
+            line_id: line.id,
+            action: "create",
+            before: { deleted: true },
+            after: snap({ ...line, deleted: false }),
+          })),
+      ),
+  );
 }
 
 export async function updateLine(
@@ -646,4 +690,35 @@ export async function audioPlaybackUrl(projectId: string) {
   const { data, error } = await db().storage.from(BUCKET).createSignedUrl(row.path, 60 * 60 * 6);
   if (error || !data) throw new Error(error?.message ?? "Could not create playback URL");
   return data.signedUrl;
+}
+
+// ---------- lyrics from the beat ----------
+
+/**
+ * Apply a lyrics plan: create detected sections, then fill empty / missing
+ * lines through addLine / updateLine so every change is in the history.
+ * Lines that already have text are never touched.
+ */
+export async function applyLyricsPlan(
+  projectId: string,
+  plan: import("@/lib/audio/lyrics").LyricsPlan,
+  groupSize: number,
+) {
+  for (const id of plan.removeSectionIds) await deleteSection(id);
+  for (const ps of plan.sections) {
+    const sectionId = ps.id ?? (await addSection(projectId, { name: ps.name, group_size: groupSize, audio_start: ps.start }));
+    const current = check(
+      await db().from("lines").select("id, text").eq("section_id", sectionId).eq("deleted", false).order("position"),
+    ) as { id: string; text: string }[];
+    for (const l of ps.lines) {
+      const target = current[l.index];
+      if (l.action === "fill" && target && !target.text.trim())
+        await updateLine(target.id, { text: l.text, status: "SUGGESTED" }, "transcribe");
+    }
+    await appendLines(
+      sectionId,
+      ps.lines.filter((l) => l.action === "add").map((l) => ({ text: l.text, status: l.text ? "SUGGESTED" : "OPEN" })),
+    );
+  }
+  await touch(projectId);
 }

@@ -5,6 +5,7 @@ import { analyzeAudio, decodeAudio } from "@/lib/audio/analyze-file";
 import { barLength, fmtTime, positionAt, sectionRanges } from "@/lib/audio/song-map";
 import { barAt, snapToBar, waveformPeaks } from "@/lib/audio/tempo";
 import { useWriter } from "./context";
+import { LyricsDialog } from "./LyricsDialog";
 
 interface PlayerApi {
   hasAudio: boolean;
@@ -222,6 +223,7 @@ function PlayerBar({ peaks, audioRef }: { peaks: number[]; audioRef: React.RefOb
   const [time, setTime] = useState(0);
   const [expanded, setExpanded] = useState(true);
   const [bpmEdit, setBpmEdit] = useState<string | null>(null);
+  const [lyricsOpen, setLyricsOpen] = useState(false);
   const waveRef = useRef<HTMLDivElement>(null);
 
   // fine-grained clock for this bar only
@@ -391,6 +393,9 @@ function PlayerBar({ peaks, audioRef }: { peaks: number[]; audioRef: React.RefOb
             >
               + New section here
             </button>
+            <button className="btn px-2 py-0.5 text-xs" onClick={() => setLyricsOpen(true)} title="Read the vocals of this song and fill the free bars">
+              🎤 Lyrics from beat
+            </button>
             {p.loopId && (
               <button className="btn-ghost px-1 text-xs text-accent" onClick={() => p.setLoop(null)}>
                 🔁 loop on — stop
@@ -417,6 +422,7 @@ function PlayerBar({ peaks, audioRef }: { peaks: number[]; audioRef: React.RefOb
         </>
       )}
       {barLength(audio) === null && <p className="mt-1 text-xs text-warn">No tempo detected — enter the BPM to get bars.</p>}
+      {lyricsOpen && <LyricsDialog onClose={() => setLyricsOpen(false)} />}
     </div>
   );
 }

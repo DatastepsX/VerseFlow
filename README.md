@@ -37,6 +37,11 @@ Product spec: see the original `verseflow_product_spec.md` (Phase 1 + core of Ph
 - **Song map**: waveform with section regions; while playing, anchor any section at the current position (snapped to
   the bar) or create “+ New section here”. Each section shows ▶ start time, length in bars, and 🔁 loop. During
   playback the line for the current bar is highlighted (setting “one line = ½ / 1 / 2 / 4 bars”).
+- **Lyrics from the beat** (🎤 in the player): one ElevenLabs Scribe call (`src/lib/server/transcribe.ts`; the service
+  fetches the beat itself from a signed storage URL) returns timed words, stored in `transcripts`.
+  `src/lib/audio/lyrics.ts` turns them into one line per bar (pickups belong to the next bar), detects sections
+  (Intro / verses / repeated chorus-hook / Break / Outro) or uses your anchored sections, and fills **only empty or
+  missing lines** as *Suggested*. Preview and re-applying the stored transcript are free; “Re-read” is a new call.
 - **Recording mode** (`/p/:id/record`) — plays the beat and follows the current line: dark, large type, A−/A+, line numbers, auto-scroll, jump to section
 - Mobile layout with bottom tabs (works as a home-screen web app; native iOS app later via the same JSON API)
 
@@ -53,7 +58,7 @@ Next.js 16 (App Router, React 19, Tailwind 4)  — deployed on Vercel
 ```
 
 Database: Supabase project `verseflow` (tables `projects`, `sections`, `lines`, `alternatives`, `line_events`,
-`project_versions`, `bank_lines`, `ai_calls`, `audio_tracks`; storage bucket `beats`). The DB key is used **server-side only**. Until user accounts exist, access is protected by a
+`project_versions`, `bank_lines`, `ai_calls`, `audio_tracks`, `transcripts`; storage bucket `beats`). The DB key is used **server-side only**. Until user accounts exist, access is protected by a
 single shared password (`APP_PASSWORD`).
 
 ## Environment variables
@@ -64,6 +69,7 @@ single shared password (`APP_PASSWORD`).
 | `SUPABASE_KEY` | Supabase API key (server only) |
 | `ANTHROPIC_API_KEY` | enables AI suggestions (optional — the app works without it) |
 | `APP_PASSWORD` | shared access password (if unset, the app is open) |
+| `ELEVENLABS_API_KEY` | enables “Lyrics from beat” (speech-to-text with ElevenLabs Scribe) |
 | `AI_MODEL` | Claude model (default `claude-opus-5-5`; e.g. `claude-sonnet-5-5` / `claude-haiku-5-5` cost less) |
 | `AI_EFFORT` | `low` / `medium` (default) / `high` — lower = fewer thinking tokens |
 

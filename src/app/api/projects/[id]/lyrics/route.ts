@@ -1,0 +1,62 @@
+import { planLyrics, type LyricsPlan } from "@/lib/audio/lyrics";
+import { applyLyricsPlan, getTree } from "@/lib/server/repo";
+import { storedTranscript, transcribeBeat, transcriptionConfigured } from "@/lib/server/transcribe";
+import { body, handle, treeResponse } from "@/lib/server/http";
+import type { ProjectTree } from "@/lib/types";
+
+export const maxDuration = 300;
+
+function plan(tree: ProjectTree, words: Parameters<typeof planLyrics>[0]["words"], autoSections: boolean): LyricsPlan {
+  const a = tree.audio!;
+  return planLyrics({
+    words,
+    grid: { bpm: a.bpm, beat_offset: a.beat_offset, beats_per_bar: a.beats_per_bar, duration: a.duration },
+    sections: tree.sections.map((s) => ({
+      id: s.id,
+      name: s.name,
+      audio_start: s.audio_start,
+      bars_per_line: s.bars_per_line,
+      lines: s.lines.map((l) => ({ text: l.text })),
+    })),
+    projectType: tree.project.type,
+    autoSections,
+  });
+}
+
+/** Whether lyrics reading is set up, and the stored transcript's date (if any). */
+export async function GET(_req: Request, ctx: RouteContext<"/api/projects/[id]/lyrics">) {
+  return handle(async () => {
+    const t = await storedTranscript((await ctx.params).id);
+    return Response.json({ configured: transcriptionConfigured(), transcript: t ? { created_at: t.created_at, words: t.words.length } : null });
+  });
+}
+
+/**
+ * actions:
+ *  transcribe {autoSections}  — 1 ElevenLabs call, stores the words, returns a preview plan
+ *  plan {autoSections}        — preview from the stored transcript (free)
+ *  apply {autoSections}       — writes the plan into the project (free), returns the tree
+ */
+export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]/lyrics">) {
+  return handle(async () => {
+    const { id } = await ctx.params;
+    const b = await body<{ action: string; autoSections?: boolean }>(req);
+    const tree = await getTree(id);
+    if (!tree.audio) return Response.json({ error: "Upload a beat first." }, { status: 400 });
+    const auto = b.autoSections ?? true;
+    if (b.action === "transcribe") {
+      const words = await transcribeBeat(id, tree.project.language);
+      return Response.json({ plan: plan(await getTree(id), words, auto), words: words.length });
+    }
+    const stored = await storedTranscript(id);
+    if (!stored) return Response.json({ error: "Read the lyrics first." }, { status: 400 });
+    if (b.action === "plan") return Response.json({ plan: plan(tree, stored.words, auto), words: stored.words.length });
+    if (b.action === "apply") {
+      const p = plan(tree, stored.words, auto);
+      const group = tree.project.type === "song" || tree.project.type === "rap" ? 2 : 1;
+      await applyLyricsPlan(id, p, group);
+      return treeResponse(id);
+    }
+    return Response.json({ error: "Unknown action" }, { status: 400 });
+  });
+}
