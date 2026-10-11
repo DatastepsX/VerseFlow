@@ -20,10 +20,10 @@ Product spec: see the original `verseflow_product_spec.md` (Phase 1 + core of Ph
   - English: heuristic analysis (Datamuse for the rhyme dictionary)
 - **Rhyme dictionary** (`/api/rhymes`): Italian index of ~120k words ranked by frequency; English via Datamuse
 - **Section pattern & draft workflow**: each section has its own *pattern* (⚙/♩ “Set pattern”: 1–2 lines that only
-  define rhythm, length and stresses — not lyrics; copyable between sections). “✨ Fill N bars · 1 call” drafts every
+  define rhythm, length and stresses — not lyrics; copyable between sections). “✨ Fill N bars · K calls” (one call per ~8 bars, drafts appear after each) drafts every
   open bar of the section (count from its length on the beat) with 3 options each, following the pattern, the rhyme
   scheme and the surrounding text (`draftSection` in `src/lib/server/ai.ts`). Review pass: ✓ keep / ✕ to replace /
-  ↻ next option (free) on each row; “↻ Replace N marked · 1 call” rewrites only the ✕ bars to fit the kept ones.
+  ↻ next option (free) on each row; “↻ Replace N marked” (one call per ~8 bars) rewrites only the ✕ bars to fit the kept ones.
 - **Selecting a bar moves the beat** to that bar (anchored sections).
 - **Suggestion bank (low API usage)**: one AI call writes ~30–40 bars for a section, organised as *rhyme families*
   (lines sharing an end rhyme, written so consecutive pairs form couplets). Next-bar suggestions are then served

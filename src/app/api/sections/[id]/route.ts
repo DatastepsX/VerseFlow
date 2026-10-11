@@ -5,7 +5,7 @@ import { db } from "@/lib/server/db";
 import { body, handle, pick, treeResponse } from "@/lib/server/http";
 import type { LineKind, LineStatus, Section } from "@/lib/types";
 
-export const maxDuration = 120;
+export const maxDuration = 300;
 
 export async function PATCH(req: Request, ctx: RouteContext<"/api/sections/[id]">) {
   return handle(async () => {
@@ -48,11 +48,14 @@ export async function POST(req: Request, ctx: RouteContext<"/api/sections/[id]">
       return res;
     }
     if (b.action === "fill" || b.action === "replace") {
-      // one AI call: draft every open bar (fill) or only the bars marked ✕ (replace), from the section's pattern
+      // one AI call per chunk of ~8 bars: open bars (fill) or the bars marked ✕ (replace), from the section's pattern.
+      // x-remaining tells the client how many bars are left for the next call.
       const s = await sectionProject(id);
-      const slots = await draftSection(await getTree(s), id, b.action, b.instruction?.slice(0, 500));
+      const { slots, remaining } = await draftSection(await getTree(s), id, b.action, b.instruction?.slice(0, 500));
       await applyDraft(id, slots);
-      return treeResponse(s);
+      const res = await treeResponse(s);
+      res.headers.set("x-remaining", String(slots.length ? remaining : 0));
+      return res;
     }
     if (b.action === "keepAll") {
       // ✓ every remaining draft bar of the section

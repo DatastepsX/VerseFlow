@@ -399,6 +399,13 @@ const NEEDS = new Set(["DECLINED", "NEEDS_NEW_OPTIONS"]);
  * Each slot gets 3 options that follow the section's pattern, the rhyme
  * scheme and the context of the bars that are kept.
  */
+/** bars written per call — keeps each call well inside the function time limit */
+export const DRAFT_CHUNK = 8;
+
+/**
+ * Drafts the next chunk of a section's open bars (whole line groups, about
+ * DRAFT_CHUNK bars). `remaining` = open bars left for the next call.
+ */
 export async function draftSection(tree: ProjectTree, sectionId: string, mode: "fill" | "replace", instruction?: string) {
   if (!aiConfigured()) throw new AiUnavailable("AI is not configured yet (ANTHROPIC_API_KEY missing).");
   const { project } = tree;
@@ -414,16 +421,23 @@ export async function draftSection(tree: ProjectTree, sectionId: string, mode: "
     if (!l || !l.text.trim()) return mode === "fill" || !!l;
     return NEEDS.has(l.status);
   };
-  const slots = Array.from({ length: n }, (_, k) => k).filter(isSlot);
-  if (!slots.length) return [] as DraftSlot[];
-  const slotSet = new Set(slots);
-
+  const open = Array.from({ length: n }, (_, k) => k).filter(isSlot);
+  if (!open.length) return { slots: [] as DraftSlot[], remaining: 0 };
   const g = Math.max(1, section.group_size);
-  const partners = rhymePartners(texts.map((t, k) => (slotSet.has(k) ? "x" : t)), g, section.rhyme_scheme);
+  // take whole groups (couplets stay together) until the chunk is full
+  const slots: number[] = [];
+  for (const k of open) {
+    if (slots.length >= DRAFT_CHUNK && Math.floor(k / g) !== Math.floor(slots[slots.length - 1] / g)) break;
+    slots.push(k);
+  }
+  const slotSet = new Set(slots);
+  const later = new Set(open.filter((k) => !slotSet.has(k)));
+
+  const partners = rhymePartners(texts.map((t, k) => (slotSet.has(k) || later.has(k) ? "x" : t)), g, section.rhyme_scheme);
   const rhymeRules = slots
     .map((k) => {
       const p = partners[k].partner;
-      if (p === null) return null;
+      if (p === null || later.has(p)) return null;
       if (slotSet.has(p)) return k < p ? `Lines ${k + 1} and ${p + 1} are both open: they must rhyme exactly with each other (option i of line ${k + 1} pairs with option i of line ${p + 1}).` : null;
       const other = texts[p];
       return other.trim() ? `Line ${k + 1} must rhyme exactly with line ${p + 1} “${other}” (-${analyzeLine(other, lang).rhymeKey}).` : null;
@@ -443,7 +457,7 @@ export async function draftSection(tree: ProjectTree, sectionId: string, mode: "
   }
 
   const listing = texts
-    .map((t, k) => `${k > 0 && k % g === 0 ? "\n" : ""}${k + 1}. ${slotSet.has(k) ? "[OPEN]" : "[KEEP]"} ${slotSet.has(k) ? "" : t}`)
+    .map((t, k) => `${k > 0 && k % g === 0 ? "\n" : ""}${k + 1}. ${slotSet.has(k) ? "[OPEN]" : later.has(k) ? "[LATER]" : "[KEEP]"} ${slotSet.has(k) || later.has(k) ? "" : t}`)
     .join("\n");
   const others = tree.sections
     .filter((s) => s.id !== sectionId && s.lines.some((l) => l.kind === "lyric" && l.text.trim()))
@@ -457,7 +471,7 @@ Title: ${project.title}
 Language: ${langName(lang)}${st.secondaryLanguage ? ` (occasional ${st.secondaryLanguage} words are welcome)` : ""}
 ${st.genre ? `Genre: ${st.genre}\n` : ""}${st.style ? `Style / references: ${st.style}\n` : ""}${st.mood ? `Mood: ${st.mood}\n` : ""}${st.simpleLanguage ? "Vocabulary: simple, modern, direct — avoid overly poetic words\n" : ""}${st.explicitness ? `Explicit content: ${st.explicitness}\n` : ""}${project.concept ? `Story / concept: ${project.concept}\n` : ""}
 ${others ? `REST OF THE SONG (context — stay consistent with it)\n${others}\n\n` : ""}SECTION: ${section.name}${section.story_beat ? `\nStory beat: ${section.story_beat}` : ""}${section.intensity ? `\nIntensity: ${section.intensity}/10` : ""}${section.notes ? `\nNotes: ${section.notes}` : ""}
-Lines grouped in ${g === 2 ? "couplets" : g === 1 ? "single lines" : `groups of ${g}`}. [KEEP] lines are fixed — never change them; write only the [OPEN] lines.
+Lines grouped in ${g === 2 ? "couplets" : g === 1 ? "single lines" : `groups of ${g}`}. [KEEP] lines are fixed — never change them; write only the [OPEN] lines. [LATER] lines are written in a later step — skip them, but leave room for the text to continue there.
 ${listing}
 
 ${template || "Keep lines a natural, performable length."}
@@ -470,7 +484,8 @@ ${rejected.size ? `Rejected before — do not repeat or closely paraphrase:\n${[
 Return one entry per [OPEN] line, "line" = its number.`;
 
   const parsed = await callJson<{ slots: { line: number; options: string[] }[] }>(project.id, mode === "fill" ? "section_fill" : "section_replace", prompt, DRAFT_SCHEMA);
-  return parsed.slots
+  const drafted = parsed.slots
     .map((x) => ({ index: x.line - 1, options: x.options.map((o) => o.trim()).filter(Boolean).slice(0, 3) }))
     .filter((x) => slotSet.has(x.index) && x.options.length);
+  return { slots: drafted, remaining: later.size };
 }

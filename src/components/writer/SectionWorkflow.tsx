@@ -7,6 +7,9 @@ import { prosody } from "@/lib/rhyme/prosody";
 import type { ProjectTree } from "@/lib/types";
 import { useWriter } from "./context";
 
+/** bars the server drafts per call (DRAFT_CHUNK in src/lib/server/ai.ts) */
+const DRAFT_CHUNK = 8;
+
 type SectionT = ProjectTree["sections"][number];
 
 const dots = (pattern: string) =>
@@ -26,6 +29,7 @@ export function SectionWorkflow({ section }: { section: SectionT }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState<null | "fill" | "replace" | "keep">(null);
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
 
   const lyric = section.lines.filter((l) => l.kind === "lyric");
   const target = sectionLineTarget({ ...section, lines: lyric }, w.tree.sections, w.tree.audio);
@@ -37,9 +41,27 @@ export function SectionWorkflow({ section }: { section: SectionT }) {
 
   const run = async (action: "fill" | "replace" | "keepAll") => {
     setBusy(action === "keepAll" ? "keep" : action);
-    await w.mutate(`/api/sections/${section.id}`, { action });
+    if (action === "keepAll") await w.mutate(`/api/sections/${section.id}`, { action });
+    else {
+      // the server writes ~8 bars per call; keep going until the section is done (drafts appear after each call)
+      const total = action === "fill" ? open : replace;
+      let left = total;
+      setProgress({ done: 0, total });
+      for (let i = 0; i < Math.ceil(total / DRAFT_CHUNK) + 2 && left > 0; i++) {
+        const res = await w.mutate(`/api/sections/${section.id}`, { action });
+        if (!res) break;
+        const next = Number(res.headers.get("x-remaining") ?? 0);
+        if (!(next < left)) break;
+        left = next;
+        setProgress({ done: total - left, total });
+      }
+      setProgress(null);
+    }
     setBusy(null);
   };
+  const calls = (n: number) => Math.ceil(n / DRAFT_CHUNK);
+  const callLabel = (n: number) => (calls(n) === 1 ? "1 call" : `${calls(n)} calls`);
+  const working = progress ? ` ${progress.done}/${progress.total}…` : "…";
   const savePattern = async (text: string) => {
     await w.mutate(`/api/sections/${section.id}`, { pattern: text.trim() || null }, "PATCH");
     setEditing(false);
@@ -148,12 +170,12 @@ export function SectionWorkflow({ section }: { section: SectionT }) {
               onClick={() => void run("fill")}
               title="Writes every open bar with 3 options each, following the pattern and the rhyme scheme"
             >
-              {busy === "fill" ? "Writing the section…" : `✨ Fill ${open} bars · 1 call`}
+              {busy === "fill" ? `Writing bars${working}` : `✨ Fill ${open} bars · ${callLabel(open)}`}
             </button>
           )}
           {w.aiEnabled && replace > 0 && (
             <button className="btn-primary px-2 py-1 text-xs" disabled={!!busy} onClick={() => void run("replace")} title="New options only for the bars marked ✕, fitting the bars you keep">
-              {busy === "replace" ? "Rewriting…" : `↻ Replace ${replace} marked · 1 call`}
+              {busy === "replace" ? `Rewriting${working}` : `↻ Replace ${replace} marked · ${callLabel(replace)}`}
             </button>
           )}
           {review > 0 && (
