@@ -368,12 +368,18 @@ function SectionSettings({ section, index, total }: { section: SectionT; index: 
         <input className="input py-1.5" placeholder="delivery, imagery, what must happen here…" defaultValue={section.notes ?? ""} onBlur={(e) => save({ notes: e.target.value.trim() || null })} />
       </div>
       <div className="col-span-2 flex flex-wrap gap-1.5 sm:col-span-4">
-        <button className="btn text-xs" disabled={index === 0} onClick={() => void w.mutate(`/api/sections/${section.id}`, { action: "move", dir: -1 })}>
-          ↑ Move up
-        </button>
-        <button className="btn text-xs" disabled={index === total - 1} onClick={() => void w.mutate(`/api/sections/${section.id}`, { action: "move", dir: 1 })}>
-          ↓ Move down
-        </button>
+        {section.audio_start !== null ? (
+          <span className="self-center text-xs text-muted">Order follows the beat (starts at the anchor) — clear the anchor to move it by hand.</span>
+        ) : (
+          <>
+            <button className="btn text-xs" disabled={index === 0} onClick={() => void w.mutate(`/api/sections/${section.id}`, { action: "move", dir: -1 })}>
+              ↑ Move up
+            </button>
+            <button className="btn text-xs" disabled={index === total - 1} onClick={() => void w.mutate(`/api/sections/${section.id}`, { action: "move", dir: 1 })}>
+              ↓ Move down
+            </button>
+          </>
+        )}
         <button
           className="btn ml-auto text-xs text-bad"
           onClick={() => {

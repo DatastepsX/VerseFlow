@@ -1,5 +1,6 @@
 import "server-only";
 import { check, db } from "./db";
+import { orderSections } from "@/lib/order";
 import type {
   AiUsage,
   Alternative,
@@ -107,7 +108,8 @@ export async function getTree(projectId: string): Promise<ProjectTree> {
   ]);
   const project = check(p) as Project | null;
   if (!project) throw new NotFound("Project not found");
-  const sections = check(s) as Section[];
+  // song order: anchored sections follow the beat
+  const sections = orderSections(check(s) as Section[]);
   const lines = check(l) as Line[];
   const alts = check(a) as Alternative[];
   const bank = check(b) as BankLine[];
@@ -208,17 +210,17 @@ export async function deleteSection(id: string) {
 }
 
 export async function moveSection(id: string, dir: -1 | 1) {
-  const sec = check(await db().from("sections").select("id, project_id, position").eq("id", id).single()) as Section;
-  const all = check(
-    await db().from("sections").select("id, position").eq("project_id", sec.project_id).order("position"),
-  ) as Section[];
+  const sec = check(await db().from("sections").select("id, project_id").eq("id", id).single()) as Section;
+  const all = orderSections(
+    check(await db().from("sections").select("id, position, audio_start").eq("project_id", sec.project_id).order("position")) as Section[],
+  );
   const i = all.findIndex((x) => x.id === id);
   const j = i + dir;
   if (j < 0 || j >= all.length) return sec.project_id;
-  await Promise.all([
-    db().from("sections").update({ position: all[j].position }).eq("id", all[i].id),
-    db().from("sections").update({ position: all[i].position }).eq("id", all[j].id),
-  ]);
+  [all[i], all[j]] = [all[j], all[i]];
+  // persist the shown order so positions and song order agree
+  await Promise.all(all.map((x, k) => db().from("sections").update({ position: k + 1 }).eq("id", x.id)));
+  await touch(sec.project_id);
   return sec.project_id;
 }
 
