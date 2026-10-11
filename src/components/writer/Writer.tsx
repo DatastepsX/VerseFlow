@@ -6,10 +6,8 @@ import { PROJECT_TYPES, type ProjectTree } from "@/lib/types";
 import { WriterContext, type GenerateOptions, type WriterApi } from "./context";
 import { BarsPanel, FullTextPanel, HistoryPanel, ProjectSettingsPanel, RhymePanel } from "./Panels";
 import { PlayerProvider, UploadBeatButton } from "./Player";
-import { PatternBar } from "./PatternBar";
 import { SectionBlock } from "./SectionBlock";
 import { SectionNav } from "./SectionNav";
-import { songPattern } from "@/lib/pattern";
 
 type Tab = "full" | "bars" | "rhymes" | "history" | "settings";
 type MobileView = "write" | Tab;
@@ -88,32 +86,7 @@ export function Writer({ initial, aiEnabled }: { initial: ProjectTree; aiEnabled
     [mutate],
   );
 
-  // one call for the whole song once the pattern (first two lines) exists — automatically, once
-  const [songFilling, setSongFilling] = useState(false);
-  const fillSong = useCallback(async () => {
-    setSongFilling(true);
-    await mutate(`/api/projects/${pid}`, { action: "fillSongBank" });
-    setSongFilling(false);
-  }, [mutate, pid]);
-  const pattern = songPattern(tree);
-  const songAuto = useRef(false);
-  const hasSongBank = !!tree.project.settings?.songBankAt;
-  useEffect(() => {
-    if (!aiEnabled || !pattern || hasSongBank || songAuto.current) return;
-    songAuto.current = true;
-    void fillSong();
-  }, [aiEnabled, pattern, hasSongBank, fillSong]);
 
-  // fill a section's bank automatically once its first lines set rhythm and length — at most once per section per visit
-  const autoFilled = useRef(new Set<string>());
-  const autoFillBank = useCallback(
-    (sectionId: string) => {
-      if (!aiEnabled || autoFilled.current.has(sectionId)) return;
-      autoFilled.current.add(sectionId);
-      void fillBank(sectionId);
-    },
-    [aiEnabled, fillBank],
-  );
 
   const lookupRhyme = useCallback((text: string) => {
     setRhymeQuery(text);
@@ -152,12 +125,9 @@ export function Writer({ initial, aiEnabled }: { initial: ProjectTree; aiEnabled
       lookupRhyme,
       filling,
       fillBank,
-      autoFillBank,
-      songFilling,
-      fillSong,
       aiEnabled,
     }),
-    [tree, mutate, selectedId, generating, generate, lookupRhyme, filling, fillBank, autoFillBank, songFilling, fillSong, aiEnabled, showError],
+    [tree, mutate, selectedId, generating, generate, lookupRhyme, filling, fillBank, aiEnabled, showError],
   );
 
   useEffect(() => {
@@ -272,7 +242,6 @@ export function Writer({ initial, aiEnabled }: { initial: ProjectTree; aiEnabled
                   <p className="mt-2 whitespace-pre-wrap">{tree.project.concept}</p>
                 </details>
               )}
-              <PatternBar />
               {tree.sections.map((s, i) => (
                 <SectionBlock key={s.id} section={s} index={i} total={tree.sections.length} />
               ))}

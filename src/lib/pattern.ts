@@ -1,19 +1,21 @@
-import type { ProjectTree } from "./types";
+import type { Line, Section } from "./types";
 
 /**
- * The song's pattern: the lines that define length, syllables and flow for
- * everything that follows. Lines marked as rhythm reference win; otherwise the
- * first section (in song order) with at least two written lines gives its
- * first two lines.
+ * A section's pattern: 1–2 lines that only define rhythm, length and stresses
+ * (not part of the lyrics). Set in the section's settings; lines marked as
+ * rhythm reference in older projects count as pattern too.
  */
-export function songPattern(tree: Pick<ProjectTree, "sections">): { sectionId: string; lines: string[] } | null {
-  for (const s of tree.sections) {
-    const refs = s.lines.filter((l) => l.kind === "rhythm_ref" && l.text.trim()).map((l) => l.text);
-    if (refs.length) return { sectionId: s.id, lines: refs.slice(0, 2) };
-  }
-  for (const s of tree.sections) {
-    const written = s.lines.filter((l) => l.kind === "lyric" && l.text.trim() && l.status !== "DECLINED").map((l) => l.text);
-    if (written.length >= 2) return { sectionId: s.id, lines: written.slice(0, 2) };
-  }
-  return null;
+export function sectionPattern(section: Pick<Section, "pattern"> & { lines: Pick<Line, "kind" | "text">[] }): string[] {
+  const own = (section.pattern ?? "")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+  if (own.length) return own.slice(0, 4);
+  return section.lines.filter((l) => l.kind === "rhythm_ref" && l.text.trim()).map((l) => l.text);
+}
+
+/** The line new bars of this section should flow like (last pattern line), if any. */
+export function patternReference(section: Parameters<typeof sectionPattern>[0]): string | null {
+  const p = sectionPattern(section);
+  return p.length ? p[p.length - 1] : null;
 }

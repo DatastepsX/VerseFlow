@@ -19,10 +19,12 @@ Product spec: see the original `verseflow_product_spec.md` (Phase 1 + core of Ph
   - automatic rhyme-scheme letters (A, B, …) per section, partner check (“should rhyme with line 3”), syllable target per section
   - English: heuristic analysis (Datamuse for the rhyme dictionary)
 - **Rhyme dictionary** (`/api/rhymes`): Italian index of ~120k words ranked by frequency; English via Datamuse
-- **Pattern → whole song in one call**: the first two written lines (or lines marked as rhythm reference) are the
-  song's *pattern* (`src/lib/pattern.ts`). Once it exists, one AI call (`fillSongBank`) prepares couplets for every
-  unfinished section (sized from the section's bars, repeated sections share one set), all following the pattern.
-  At the start of each couplet the writer picks a whole couplet (“Use both”) or single lines; free afterwards.
+- **Section pattern & draft workflow**: each section has its own *pattern* (⚙/♩ “Set pattern”: 1–2 lines that only
+  define rhythm, length and stresses — not lyrics; copyable between sections). “✨ Fill N bars · 1 call” drafts every
+  open bar of the section (count from its length on the beat) with 3 options each, following the pattern, the rhyme
+  scheme and the surrounding text (`draftSection` in `src/lib/server/ai.ts`). Review pass: ✓ keep / ✕ to replace /
+  ↻ next option (free) on each row; “↻ Replace N marked · 1 call” rewrites only the ✕ bars to fit the kept ones.
+- **Selecting a bar moves the beat** to that bar (anchored sections).
 - **Suggestion bank (low API usage)**: one AI call writes ~30–40 bars for a section, organised as *rhyme families*
   (lines sharing an end rhyme, written so consecutive pairs form couplets). Next-bar suggestions are then served
   **locally** from the bank (`src/lib/suggest.ts`): a slot that must rhyme only gets bars that the rhyme engine

@@ -3,7 +3,8 @@ import Anthropic from "@anthropic-ai/sdk";
 import { analyzeLine, lastWord } from "@/lib/rhyme/analyze";
 import { describeRhythm, prosody } from "@/lib/rhyme/prosody";
 import { rhymePartners } from "@/lib/scheme";
-import { sectionRanges } from "@/lib/audio/song-map";
+import { sectionPattern } from "@/lib/pattern";
+import { sectionLineTarget } from "@/lib/audio/song-map";
 import { LANGUAGES, PROJECT_TYPES, type ProjectTree } from "@/lib/types";
 import { bankTexts, rejectedAlternatives, recordAiCall } from "./repo";
 
@@ -17,8 +18,13 @@ const FALLBACKS = /^claude-(opus-5|fable-5|sonnet-5-5)/.test(MODEL);
  * The rhythm the new lines must follow: lines marked as rhythm reference, or
  * else the last written lines before `before` (the line before sets the flow).
  */
-function rhythmTemplate(lines: { text: string; kind: string; status: string }[], lang: string, before = lines.length) {
-  const refs = lines.filter((l) => l.kind === "rhythm_ref" && l.text.trim());
+function rhythmTemplate(
+  lines: { text: string; kind: string; status: string }[],
+  lang: string,
+  before = lines.length,
+  pattern: string[] = [],
+) {
+  const refs = pattern.length ? pattern.map((text) => ({ text })) : lines.filter((l) => l.kind === "rhythm_ref" && l.text.trim());
   const pick = refs.length
     ? refs.slice(-2)
     : lines
@@ -26,7 +32,7 @@ function rhythmTemplate(lines: { text: string; kind: string; status: string }[],
         .filter((l) => l.kind === "lyric" && l.text.trim() && l.status !== "DECLINED")
         .slice(-2);
   if (!pick.length) return "";
-  return `RHYTHM TEMPLATE${refs.length ? " (rhythm reference lines)" : " (the lines just before)"} — every new line must match it:
+  return `RHYTHM TEMPLATE${refs.length ? " (the section's pattern — rhythm only, its words are not lyrics)" : " (the lines just before)"} — every new line must match it:
 ${pick.map((l) => `  “${l.text}” → ${describeRhythm(prosody(l.text, lang), lang)}`).join("\n")}
 Match the syllable count of the last template line (±1 sung syllable, counting vowel merges between words), put the stresses in the same places so it flows on the same beat, and use the same ending type.`;
 }
@@ -179,7 +185,7 @@ ${sectionText}
 TASK
 Write ${count} options for ${targetIdx.length === 1 ? `line ${targetIdx[0] + 1}` : `lines ${targetIdx.map((k) => k + 1).join(" and ")} (each option contains all ${targetIdx.length} lines, in order)`}.
 ${requirements.join("\n")}
-${rhythmTemplate(lines, lang, targetIdx[0]) || (avgSyl ? `Target length: about ${avgSyl} syllables per line.` : "")}
+${rhythmTemplate(lines, lang, targetIdx[0], sectionPattern(section)) || (avgSyl ? `Target length: about ${avgSyl} syllables per line.` : "")}
 ${req.instruction ? `Writer's direction: ${req.instruction}` : ""}
 ${current.length ? `Current text of the target (offer alternatives to it): ${current.join(" / ")}` : ""}
 ${rejected.length ? `Already rejected — do not repeat or closely paraphrase:\n${rejected.map((r) => `- ${r.text.replace(/\n/g, " / ")}`).join("\n")}` : ""}
@@ -304,7 +310,7 @@ TASK — build a bank of candidate bars the writer can pick from while continuin
 Organise them as rhyme families: every line in a family ends with the same rhyme sound (exact rhyme).
 Inside each family, write the lines so that lines 1+2, 3+4, 5+6 … each form a coherent ${g === 1 ? "pair" : "couplet"}, and every line also works on its own as a next bar.
 ${targetSpec ? `Families that answer existing lines (write these first):\n${targetSpec}\n` : ""}Then ${req.newFamilies} new families on ${req.newFamilies} different rhyme sounds, ${n} lines each, that continue the story from the last lines and move it forward (vary the images and angles; no filler).
-${rhythmTemplate(lines, lang) || (avgSyl ? `Every line about ${avgSyl} syllables (±1).` : "Keep lines a natural, performable length.")}
+${rhythmTemplate(lines, lang, lines.length, sectionPattern(section)) || (avgSyl ? `Every line about ${avgSyl} syllables (±1).` : "Keep lines a natural, performable length.")}
 ${req.instruction ? `Writer's direction: ${req.instruction}` : ""}
 ${available.length ? `Already in the bank — do not repeat:\n${available.map((t) => `- ${t}`).join("\n")}` : ""}
 ${rejected.length ? `Rejected by the writer — avoid similar lines:\n${rejected.map((t) => `- ${t}`).join("\n")}` : ""}
@@ -352,135 +358,119 @@ Return ${opts.count ?? 3} different versions.`;
     .slice(0, opts.count ?? 3);
 }
 
-// ---------- one call for the whole song ----------
 
-const SONG_SCHEMA = {
+// ---------- draft a whole section from its pattern ----------
+
+const DRAFT_SCHEMA = {
   type: "object",
   properties: {
-    sections: {
+    slots: {
       type: "array",
       items: {
         type: "object",
-        properties: {
-          index: { type: "integer" },
-          couplets: {
-            type: "array",
-            items: {
-              type: "object",
-              properties: { lines: { type: "array", items: { type: "string" } } },
-              required: ["lines"],
-              additionalProperties: false,
-            },
-          },
-          partners: { type: "array", items: { type: "string" } },
-        },
-        required: ["index", "couplets", "partners"],
+        properties: { line: { type: "integer" }, options: { type: "array", items: { type: "string" } } },
+        required: ["line", "options"],
         additionalProperties: false,
       },
     },
   },
-  required: ["sections"],
+  required: ["slots"],
   additionalProperties: false,
 };
 
-export interface SongBankResult {
-  sectionId: string;
-  families: { rhyme: string; lines: string[] }[];
+export interface DraftSlot {
+  /** 0-based line index in the section */
+  index: number;
+  options: string[];
 }
 
+/** How many lines a section should have: from its length on the beat, else what is written or 8. */
+export function sectionLineCount(tree: ProjectTree, sectionId: string) {
+  const s = tree.sections.find((x) => x.id === sectionId)!;
+  return sectionLineTarget({ ...s, lines: s.lines.filter((l) => l.kind === "lyric") }, tree.sections, tree.audio);
+}
+
+const NEEDS = new Set(["DECLINED", "NEEDS_NEW_OPTIONS"]);
+
 /**
- * After the writer has set the pattern (their first lines), one call prepares
- * candidate couplets for every unfinished section of the song, all following
- * that pattern. Sections with the same name (a repeated chorus) share one set.
+ * One call for a section:
+ * - "fill": write every empty bar slot (up to the section's length)
+ * - "replace": write only the bars the writer marked to replace (✕)
+ * Each slot gets 3 options that follow the section's pattern, the rhyme
+ * scheme and the context of the bars that are kept.
  */
-export async function fillSongBank(tree: ProjectTree, pattern: string[]): Promise<SongBankResult[]> {
+export async function draftSection(tree: ProjectTree, sectionId: string, mode: "fill" | "replace", instruction?: string) {
   if (!aiConfigured()) throw new AiUnavailable("AI is not configured yet (ANTHROPIC_API_KEY missing).");
   const { project } = tree;
   const lang = project.language;
-  const st = project.settings ?? {};
-  const ranges = sectionRanges(tree.sections, tree.audio);
-  const barLen = tree.audio?.bpm ? (tree.audio.beats_per_bar * 60) / tree.audio.bpm : null;
+  const section = tree.sections.find((s) => s.id === sectionId);
+  if (!section) throw new Error("Section not found");
+  const pattern = sectionPattern(section);
+  const lyrics = section.lines.filter((l) => l.kind === "lyric");
+  const n = mode === "fill" ? Math.max(sectionLineCount(tree, sectionId), lyrics.length) : lyrics.length;
+  const texts = Array.from({ length: n }, (_, k) => lyrics[k]?.text ?? "");
+  const isSlot = (k: number) => {
+    const l = lyrics[k];
+    if (!l || !l.text.trim()) return mode === "fill" || !!l;
+    return NEEDS.has(l.status);
+  };
+  const slots = Array.from({ length: n }, (_, k) => k).filter(isSlot);
+  if (!slots.length) return [] as DraftSlot[];
+  const slotSet = new Set(slots);
 
-  // unique sections (by name) that still need lines
-  const groups = new Map<string, typeof tree.sections>();
-  for (const s of tree.sections) {
-    const key = s.name.trim().toLowerCase();
-    (groups.get(key) ?? groups.set(key, []).get(key)!).push(s);
+  const g = Math.max(1, section.group_size);
+  const partners = rhymePartners(texts.map((t, k) => (slotSet.has(k) ? "x" : t)), g, section.rhyme_scheme);
+  const rhymeRules = slots
+    .map((k) => {
+      const p = partners[k].partner;
+      if (p === null) return null;
+      if (slotSet.has(p)) return k < p ? `Lines ${k + 1} and ${p + 1} are both open: they must rhyme exactly with each other (option i of line ${k + 1} pairs with option i of line ${p + 1}).` : null;
+      const other = texts[p];
+      return other.trim() ? `Line ${k + 1} must rhyme exactly with line ${p + 1} “${other}” (-${analyzeLine(other, lang).rhymeKey}).` : null;
+    })
+    .filter(Boolean)
+    .join("\n");
+
+  const rejected = new Set<string>();
+  for (const k of slots) {
+    const l = lyrics[k];
+    if (l?.text.trim()) rejected.add(l.text.trim());
+    for (const a of l?.alternatives ?? []) rejected.add(a.text.trim());
   }
-  const plan = [...groups.values()]
-    .map((secs) => {
-      const s = secs[0];
-      const written = s.lines.filter((l) => l.kind === "lyric" && l.text.trim() && l.status !== "DECLINED");
-      const r = ranges.get(s.id);
-      const target = r?.bars && barLen ? Math.max(2, Math.ceil(r.bars / (s.bars_per_line || 1))) : 8;
-      const remaining = target - written.length;
-      const texts = s.lines.map((l) => (l.kind === "lyric" && l.status !== "DECLINED" ? l.text : ""));
-      const next = rhymePartners([...texts, ""], s.group_size, s.rhyme_scheme)[texts.length];
-      const unpaired = next.partner !== null && texts[next.partner]?.trim() ? texts[next.partner] : null;
-      return { secs, s, written, target, remaining, unpaired };
-    })
-    .filter((x) => x.remaining > 0);
-  if (!plan.length) return [];
-  // offer a few more couplets than needed so there is a choice; keep the call bounded
-  let budget = 72;
-  const counts = plan.map((p) => {
-    const n = Math.min(8, Math.max(3, Math.ceil(p.remaining / 2) + 2), budget);
-    budget -= n;
-    return Math.max(0, n);
-  });
+  for (const k of slots) {
+    const l = lyrics[k];
+    if (l) for (const r of await rejectedAlternatives(l.id)) rejected.add(r.text.trim());
+  }
 
-  const patternText = pattern.map((l) => `  “${l}” → ${describeRhythm(prosody(l, lang), lang)}`).join("\n");
-  const sectionsText = plan
-    .map((p, i) => {
-      const s = p.s;
-      const lines = p.written.map((l) => `      ${l.text}`).join("\n");
-      return `S${i}. ${s.name}${p.secs.length > 1 ? ` (appears ${p.secs.length}×)` : ""} — ${p.target} lines in total, ${p.written.length} written${
-        s.story_beat ? `, story beat: ${s.story_beat}` : ""
-      }${s.intensity ? `, intensity ${s.intensity}/10` : ""}${s.notes ? `, notes: ${s.notes}` : ""}
-    ${lines ? `written so far:\n${lines}` : "nothing written yet"}
-    → write ${counts[i]} couplets${p.unpaired ? `, plus 4 single lines that rhyme exactly with “${p.unpaired}” (-${analyzeLine(p.unpaired, lang).rhymeKey})` : ""}`;
-    })
+  const listing = texts
+    .map((t, k) => `${k > 0 && k % g === 0 ? "\n" : ""}${k + 1}. ${slotSet.has(k) ? "[OPEN]" : "[KEEP]"} ${slotSet.has(k) ? "" : t}`)
+    .join("\n");
+  const others = tree.sections
+    .filter((s) => s.id !== sectionId && s.lines.some((l) => l.kind === "lyric" && l.text.trim()))
+    .map((s) => `${s.name}:\n` + s.lines.filter((l) => l.kind === "lyric" && l.text.trim() && l.status !== "DECLINED").map((l) => `  ${l.text}`).join("\n"))
     .join("\n\n");
+  const st = project.settings ?? {};
+  const template = rhythmTemplate(section.lines, lang, section.lines.length, pattern);
 
   const prompt = `PROJECT
 Title: ${project.title}
 Language: ${langName(lang)}${st.secondaryLanguage ? ` (occasional ${st.secondaryLanguage} words are welcome)` : ""}
 ${st.genre ? `Genre: ${st.genre}\n` : ""}${st.style ? `Style / references: ${st.style}\n` : ""}${st.mood ? `Mood: ${st.mood}\n` : ""}${st.simpleLanguage ? "Vocabulary: simple, modern, direct — avoid overly poetic words\n" : ""}${st.explicitness ? `Explicit content: ${st.explicitness}\n` : ""}${project.concept ? `Story / concept: ${project.concept}\n` : ""}
-PATTERN — the writer's first lines define the flow of the whole song:
-${patternText}
-Every line you write must follow this pattern: the same number of sung syllables (±1, counting vowel merges between words), stresses in the same places, the same ending type. It must be performable on the same beat.
+${others ? `REST OF THE SONG (context — stay consistent with it)\n${others}\n\n` : ""}SECTION: ${section.name}${section.story_beat ? `\nStory beat: ${section.story_beat}` : ""}${section.intensity ? `\nIntensity: ${section.intensity}/10` : ""}${section.notes ? `\nNotes: ${section.notes}` : ""}
+Lines grouped in ${g === 2 ? "couplets" : g === 1 ? "single lines" : `groups of ${g}`}. [KEEP] lines are fixed — never change them; write only the [OPEN] lines.
+${listing}
 
-SECTIONS TO PREPARE (in song order)
-${sectionsText}
+${template || "Keep lines a natural, performable length."}
+${rhymeRules ? `RHYMES\n${rhymeRules}` : ""}
 
 TASK
-For each section above, write the requested couplets: two lines that rhyme exactly with each other and form one idea.
-- Follow the pattern strictly (length, stresses, ending).
-- Fit the section's role in the story and continue from what is written; a chorus/hook should be catchy and repeatable.
-- Use different rhyme sounds across couplets (no two couplets in a section on the same rhyme), and don't reuse lines that already exist.
-Return "index" = the S-number of the section.`;
+For every [OPEN] line write 3 different options. Each option must follow the rhythm template, respect its rhyme rule, and connect naturally with the lines before and after it (the section must read as one coherent text that fits the rest of the song). Vary images and wording between options.
+${instruction ? `Writer's direction: ${instruction}` : ""}
+${rejected.size ? `Rejected before — do not repeat or closely paraphrase:\n${[...rejected].slice(0, 40).map((t) => `- ${t}`).join("\n")}` : ""}
+Return one entry per [OPEN] line, "line" = its number.`;
 
-  const parsed = await callJson<{ sections: { index: number; couplets: { lines: string[] }[]; partners: string[] }[] }>(
-    project.id,
-    "song_bank",
-    prompt,
-    SONG_SCHEMA,
-  );
-  const out: SongBankResult[] = [];
-  for (const r of parsed.sections) {
-    const p = plan[r.index];
-    if (!p) continue;
-    const families = [
-      ...r.couplets
-        .map((c) => c.lines.map((l) => l.trim()).filter(Boolean).slice(0, 2))
-        .filter((ls) => ls.length === 2)
-        .map((ls) => ({ rhyme: `-${analyzeLine(ls[1], lang).rhymeKey}`, lines: ls })),
-      ...(r.partners.length && p.unpaired
-        ? [{ rhyme: `-${analyzeLine(p.unpaired, lang).rhymeKey}`, lines: r.partners.map((l) => l.trim()).filter(Boolean) }]
-        : []),
-    ];
-    // a repeated section (e.g. every Chorus) gets the same candidates
-    for (const s of p.secs) out.push({ sectionId: s.id, families });
-  }
-  return out;
+  const parsed = await callJson<{ slots: { line: number; options: string[] }[] }>(project.id, mode === "fill" ? "section_fill" : "section_replace", prompt, DRAFT_SCHEMA);
+  return parsed.slots
+    .map((x) => ({ index: x.line - 1, options: x.options.map((o) => o.trim()).filter(Boolean).slice(0, 3) }))
+    .filter((x) => slotSet.has(x.index) && x.options.length);
 }

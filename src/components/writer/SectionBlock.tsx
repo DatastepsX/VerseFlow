@@ -4,11 +4,13 @@ import { useState } from "react";
 import { analyzeLine, compareLines, lastWord, rhymeScheme } from "@/lib/rhyme/analyze";
 import { rhymePartners } from "@/lib/scheme";
 import { prosody } from "@/lib/rhyme/prosody";
+import { patternReference } from "@/lib/pattern";
 import { rhythmReference } from "@/lib/suggest";
 import type { ProjectTree } from "@/lib/types";
 import { useWriter } from "./context";
 import { sectionRanges, fmtTime } from "@/lib/audio/song-map";
 import { BankPicker } from "./Bank";
+import { SectionWorkflow } from "./SectionWorkflow";
 import { LengthControls } from "./LengthControls";
 import { usePlayer } from "./Player";
 import { LineRow, RhymeBadge } from "./LineRow";
@@ -96,6 +98,8 @@ export function SectionBlock({ section, index, total }: { section: SectionT; ind
 
       {settings && <SectionSettings section={section} index={index} total={total} />}
 
+      <SectionWorkflow section={section} />
+
       <div className="space-y-3">
         {groups.map((idxs, gi) => (
           <div key={gi} className={g > 1 ? "space-y-0.5" : ""}>
@@ -157,7 +161,7 @@ function Composer({
   const match = a && pa ? compareLines(a, pa) : null;
   const startsGroup = nextIdx % g === 0 && g > 1;
   const written = texts.filter((t) => t.trim()).length;
-  const rhythmRefLine = section.lines.find((l) => l.kind === "rhythm_ref" && l.text.trim())?.text;
+  const rhythmRefLine = patternReference(section);
   const refText = rhythmReference(texts, nextIdx, rhythmRefLine);
   const refProsody = refText ? prosody(refText, w.lang) : null;
   const fitted = fitBefore
@@ -171,7 +175,6 @@ function Composer({
     await w.mutate(`/api/sections/${section.id}`, { action: "fitText", text: text.trim(), reference: refText });
     setFitting(false);
   };
-  // suggestions for the whole song are prepared in one call once the pattern exists (see PatternBar)
 
   const addCouplet = async (first: { text: string; id: string }, second: { text: string; id: string }) => {
     if (busy) return;

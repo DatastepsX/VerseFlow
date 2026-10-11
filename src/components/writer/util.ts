@@ -2,10 +2,10 @@ import type { Line, LineStatus, ProjectTree } from "@/lib/types";
 
 export const STATUS_META: Record<LineStatus, { label: string; bar: string; chip: string }> = {
   OPEN: { label: "Draft", bar: "border-l-line", chip: "bg-panel-2 text-muted" },
-  SUGGESTED: { label: "Suggested", bar: "border-l-accent", chip: "bg-accent-soft text-accent" },
+  SUGGESTED: { label: "Draft — keep ✓ or replace ✕", bar: "border-l-accent", chip: "bg-accent-soft text-accent" },
   APPROVED: { label: "Approved", bar: "border-l-ok", chip: "bg-ok-soft text-ok" },
   APPROVED_EDITED: { label: "Approved (edited)", bar: "border-l-ok", chip: "bg-ok-soft text-ok" },
-  DECLINED: { label: "Declined", bar: "border-l-bad", chip: "bg-bad-soft text-bad" },
+  DECLINED: { label: "To replace", bar: "border-l-bad", chip: "bg-bad-soft text-bad" },
   NEEDS_NEW_OPTIONS: { label: "Needs options", bar: "border-l-warn", chip: "bg-warn-soft text-warn" },
 };
 

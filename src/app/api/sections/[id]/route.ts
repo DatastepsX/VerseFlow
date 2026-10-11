@@ -1,5 +1,5 @@
-import { fillBank, fitLine } from "@/lib/server/ai";
-import { addLine, appendLines, clearBank, deleteSection, getTree, insertBank, moveSection, setBankState, updateSection } from "@/lib/server/repo";
+import { draftSection, fillBank, fitLine } from "@/lib/server/ai";
+import { addLine, appendLines, applyDraft, clearBank, deleteSection, getTree, insertBank, moveSection, setBankState, updateLine, updateSection } from "@/lib/server/repo";
 import { rhymePartners } from "@/lib/scheme";
 import { db } from "@/lib/server/db";
 import { body, handle, pick, treeResponse } from "@/lib/server/http";
@@ -12,7 +12,7 @@ export async function PATCH(req: Request, ctx: RouteContext<"/api/sections/[id]"
     const b = await body(req);
     const projectId = await updateSection(
       (await ctx.params).id,
-      pick<Section>(b, ["name", "group_size", "story_beat", "intensity", "rhyme_scheme", "notes", "audio_start", "bars_per_line"]),
+      pick<Section>(b, ["name", "group_size", "story_beat", "intensity", "rhyme_scheme", "notes", "audio_start", "bars_per_line", "pattern"]),
     );
     return treeResponse(projectId);
   });
@@ -46,6 +46,21 @@ export async function POST(req: Request, ctx: RouteContext<"/api/sections/[id]">
       const res = await treeResponse(line.project_id);
       res.headers.set("x-line-id", line.id);
       return res;
+    }
+    if (b.action === "fill" || b.action === "replace") {
+      // one AI call: draft every open bar (fill) or only the bars marked ✕ (replace), from the section's pattern
+      const s = await sectionProject(id);
+      const slots = await draftSection(await getTree(s), id, b.action, b.instruction?.slice(0, 500));
+      await applyDraft(id, slots);
+      return treeResponse(s);
+    }
+    if (b.action === "keepAll") {
+      // ✓ every remaining draft bar of the section
+      const s = await sectionProject(id);
+      const tree = await getTree(s);
+      const sec = tree.sections.find((x) => x.id === id)!;
+      for (const l of sec.lines) if (l.status === "SUGGESTED" && l.text.trim()) await updateLine(l.id, { status: "APPROVED" }, "approve");
+      return treeResponse(s);
     }
     if (b.action === "addLines") {
       // several lines at once (e.g. a whole couplet from the bank), appended in order

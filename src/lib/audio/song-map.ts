@@ -51,3 +51,14 @@ export function fmtTime(t: number) {
   const s = Math.floor(t % 60);
   return `${m}:${String(s).padStart(2, "0")}`;
 }
+
+/** How many lines a section should have: from its length on the beat, else what is written or 8. */
+export function sectionLineTarget(
+  section: Pick<Section, "id" | "bars_per_line"> & { lines: unknown[] },
+  sections: Pick<Section, "id" | "audio_start">[],
+  audio: AudioTrack | null,
+) {
+  const r = sectionRanges(sections, audio).get(section.id);
+  if (r?.bars) return Math.max(2, Math.min(48, Math.ceil(r.bars / (section.bars_per_line || 1))));
+  return Math.max(section.lines.length, 8);
+}

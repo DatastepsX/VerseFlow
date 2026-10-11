@@ -4,8 +4,11 @@ import { useEffect, useRef, useState } from "react";
 import { analyzeLine, compareLines, type RhymeMatch } from "@/lib/rhyme/analyze";
 import type { Alternative, Line } from "@/lib/types";
 import { prosody } from "@/lib/rhyme/prosody";
+import { patternReference } from "@/lib/pattern";
 import { rhythmReference } from "@/lib/suggest";
+import { barLength, sectionRanges } from "@/lib/audio/song-map";
 import { BankPicker } from "./Bank";
+import { usePlayer } from "./Player";
 import { LengthControls } from "./LengthControls";
 import { useWriter } from "./context";
 import { AI_ACTIONS, isLocked, letterColor, STATUS_META } from "./util";
@@ -76,7 +79,21 @@ export function LineRow({ line, number, letter, partnerText, partnerNumber, targ
   const match = a && partnerText?.trim() ? compareLines(a, analyzeLine(partnerText, w.lang)) : null;
   const meta = STATUS_META[line.status];
   const rhythm = line.kind === "rhythm_ref";
-  const sectionRhythmRef = w.tree.sections.find((x) => x.id === line.section_id)?.lines.find((l) => l.kind === "rhythm_ref" && l.text.trim())?.text;
+  // draft bars get quick ✓ / ✕ / ↻ right on the row (first review pass)
+  const reviewable = !rhythm && !!line.text.trim() && (line.status === "SUGGESTED" || line.status === "DECLINED" || line.status === "NEEDS_NEW_OPTIONS");
+  const player = usePlayer();
+  // selecting a bar moves the beat to that bar
+  const jumpToBar = () => {
+    const audio = w.tree.audio;
+    const sec = w.tree.sections.find((x) => x.id === line.section_id);
+    const r = sec ? sectionRanges(w.tree.sections, audio).get(sec.id) : null;
+    const bl = audio ? barLength(audio) : null;
+    if (!sec || !r || !bl || !player.ready) return;
+    const k = sec.lines.findIndex((l) => l.id === line.id);
+    player.seek(r.start + k * bl * (sec.bars_per_line || 1));
+  };
+  const ownSection = w.tree.sections.find((x) => x.id === line.section_id);
+  const sectionRhythmRef = ownSection ? patternReference(ownSection) : null;
   const refText = selected && !rhythm ? rhythmReference(sectionTexts, index, sectionRhythmRef) : null;
   const refProsody = refText ? prosody(refText, w.lang) : null;
   const sylOff = a && targetSyllables && !rhythm ? Math.abs(a.syllables - targetSyllables) : 0;
@@ -107,6 +124,7 @@ export function LineRow({ line, number, letter, partnerText, partnerNumber, targ
           setEditingRaw(false);
           setMenu(false);
           w.select(line.id);
+          jumpToBar();
         }}
       >
         <span className="w-6 shrink-0 text-right font-mono text-xs text-muted">{number}</span>
@@ -149,6 +167,39 @@ export function LineRow({ line, number, letter, partnerText, partnerNumber, targ
           </span>
         )}
         <span className="flex shrink-0 items-center gap-1.5">
+          {reviewable && !editing && (
+            <span className="flex items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
+              {line.status !== "SUGGESTED" || line.alternatives.length === 0 ? null : (
+                <button
+                  className="rounded px-1.5 py-0.5 text-xs text-accent hover:bg-accent-soft"
+                  title={`Next option (${line.alternatives.length} more) — free`}
+                  onClick={() => void w.mutate(`/api/alternatives/${line.alternatives[0].id}`, { action: "swap" })}
+                >
+                  ↻{line.alternatives.length}
+                </button>
+              )}
+              <button
+                className={`rounded px-1.5 py-0.5 text-xs ${line.status === "DECLINED" ? "bg-bad text-white" : "text-bad hover:bg-bad-soft"}`}
+                title={line.status === "DECLINED" ? "Marked to replace — tap to undo" : "Mark to replace"}
+                onClick={() =>
+                  void w.mutate(
+                    `/api/lines/${line.id}`,
+                    line.status === "DECLINED" ? { status: "SUGGESTED", action: "unmark" } : { status: "DECLINED", action: "mark_replace" },
+                    "PATCH",
+                  )
+                }
+              >
+                ✕
+              </button>
+              <button
+                className="rounded px-1.5 py-0.5 text-xs text-ok hover:bg-ok-soft"
+                title="Keep this bar"
+                onClick={() => void w.mutate(`/api/lines/${line.id}`, { status: "APPROVED", action: "approve" }, "PATCH")}
+              >
+                ✓
+              </button>
+            </span>
+          )}
           {rhythm && <span className="rounded bg-panel-2 px-1 text-[10px] uppercase text-muted">rhythm</span>}
           {partnerNumber !== null && <RhymeBadge match={match} />}
           {a && (
@@ -217,7 +268,7 @@ export function LineRow({ line, number, letter, partnerText, partnerNumber, targ
               </button>
               {line.status !== "DECLINED" && !rhythm && line.text.trim() && (
                 <button className="btn text-bad" onClick={() => void setStatus("DECLINED", "decline")}>
-                  ✕ Decline
+                  ✕ To replace
                 </button>
               )}
               {isLocked(line) && (
@@ -342,7 +393,7 @@ export function LineRow({ line, number, letter, partnerText, partnerNumber, targ
         </div>
       )}
 
-      {line.alternatives.length > 0 && (
+      {line.alternatives.length > 0 && selected && (
         <Alternatives line={line} partnerText={partnerText} onMore={() => gen(line.alternatives[0]?.instruction ?? undefined, line.alternatives[0]?.text.includes("\n") ? "group" : "line")} />
       )}
     </div>

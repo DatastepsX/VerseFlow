@@ -77,6 +77,8 @@ export interface Section {
   audio_start: number | null;
   /** how many musical bars one written line spans (1 = one line per bar) */
   bars_per_line: number;
+  /** rhythm template for this section (1–2 lines, not part of the lyrics) */
+  pattern: string | null;
 }
 
 export interface AudioTrack {

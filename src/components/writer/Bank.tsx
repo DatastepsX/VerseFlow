@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { lastWord } from "@/lib/rhyme/analyze";
+import { patternReference } from "@/lib/pattern";
 import { coupletsForSlot, suggestForSlot } from "@/lib/suggest";
 import type { BankLine } from "@/lib/types";
 import { useWriter } from "./context";
@@ -40,7 +41,8 @@ export function BankPicker({
   const sectionName = (id: string) => w.tree.sections.find((x) => x.id === id)?.name ?? "another section";
   const available = bank.filter((b) => b.state === "available").length;
   const sectionAvailable = bank.filter((b) => b.state === "available" && b.section_id === sectionId).length;
-  const rhythmRef = w.tree.sections.find((x) => x.id === sectionId)?.lines.find((l) => l.kind === "rhythm_ref" && l.text.trim())?.text;
+  const ownSection = w.tree.sections.find((x) => x.id === sectionId);
+  const rhythmRef = ownSection ? patternReference(ownSection) : null;
   const { suggestions, partnerText, matches, reference } = suggestForSlot({
     bank,
     texts,
@@ -53,7 +55,7 @@ export function BankPicker({
     rhythmRef,
     sectionId,
   });
-  const filling = w.filling.has(sectionId) || w.songFilling;
+  const filling = w.filling.has(sectionId);
   const opensCouplet = !!onUseCouplet && groupSize >= 2 && index % groupSize === 0;
   const [cSkip, setCSkip] = useState(0);
   const { couplets, total: coupletTotal } = opensCouplet
@@ -198,7 +200,7 @@ export function BankPicker({
 
       {filling && (
         <p className="animate-pulse rounded-md bg-accent-soft px-2.5 py-2 text-sm text-accent">
-          {w.songFilling ? "✨ Preparing couplets for the whole song (1 AI call)…" : "✨ Writing ~40 bars that fit your lines (1 AI call)…"}
+          ✨ Writing ~40 bars that fit your lines (1 AI call)…
         </p>
       )}
 

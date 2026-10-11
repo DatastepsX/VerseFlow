@@ -195,7 +195,7 @@ export async function addSection(projectId: string, input: { name: string; group
 export async function updateSection(
   id: string,
   patch: Partial<
-    Pick<Section, "name" | "group_size" | "story_beat" | "intensity" | "rhyme_scheme" | "notes" | "audio_start" | "bars_per_line">
+    Pick<Section, "name" | "group_size" | "story_beat" | "intensity" | "rhyme_scheme" | "notes" | "audio_start" | "bars_per_line" | "pattern">
   >,
 ) {
   const s = check(await db().from("sections").update(patch).eq("id", id).select("project_id").single()) as { project_id: string };
@@ -283,8 +283,8 @@ export async function addLine(
 }
 
 /** Append many lines at once (e.g. imported lyrics), with one "create" history event per line. */
-export async function appendLines(sectionId: string, items: { text: string; status: LineStatus }[]) {
-  if (!items.length) return;
+export async function appendLines(sectionId: string, items: { text: string; status: LineStatus }[]): Promise<Line[]> {
+  if (!items.length) return [];
   const section = check(await db().from("sections").select("id, project_id").eq("id", sectionId).single()) as Section;
   const last = check(
     await db().from("lines").select("position").eq("section_id", sectionId).eq("deleted", false).order("position", { ascending: false }).limit(1),
@@ -321,6 +321,7 @@ export async function appendLines(sectionId: string, items: { text: string; stat
           })),
       ),
   );
+  return rows;
 }
 
 export async function updateLine(
@@ -541,6 +542,7 @@ async function insertSnapshot(projectId: string, tree: { sections: (Section & { 
           notes: s.notes,
           audio_start: s.audio_start ?? null,
           bars_per_line: s.bars_per_line ?? 1,
+          pattern: s.pattern ?? null,
         })
         .select("id")
         .single(),
@@ -723,4 +725,55 @@ export async function applyLyricsPlan(
     );
   }
   await touch(projectId);
+}
+
+// ---------- section drafts (fill / replace from the pattern) ----------
+
+/**
+ * Write a section draft: each slot's first option becomes the line (status
+ * SUGGESTED), the other options become pending alternatives to cycle through.
+ * Text that is replaced is kept as a rejected alternative so it isn't
+ * suggested again. Missing lines up to the highest slot are created in order.
+ */
+export async function applyDraft(sectionId: string, slots: { index: number; options: string[] }[]) {
+  if (!slots.length) return;
+  const section = check(await db().from("sections").select("id, project_id").eq("id", sectionId).single()) as Section;
+  const current = check(
+    await db().from("lines").select("id, text, kind").eq("section_id", sectionId).eq("deleted", false).order("position"),
+  ) as { id: string; text: string; kind: string }[];
+  const lyric = current.filter((l) => l.kind === "lyric");
+  const bySlot = new Map(slots.map((x) => [x.index, x.options]));
+  const maxIdx = Math.max(...slots.map((x) => x.index));
+  // create the missing lines first (empty ones where no slot text exists keep the bar positions)
+  const missing = Array.from({ length: Math.max(0, maxIdx + 1 - lyric.length) }, (_, k) => lyric.length + k);
+  const created = await appendLines(
+    sectionId,
+    missing.map((k) => ({ text: bySlot.get(k)?.[0] ?? "", status: bySlot.has(k) ? ("SUGGESTED" as LineStatus) : ("OPEN" as LineStatus) })),
+  );
+  const ids = [...lyric.map((l) => l.id), ...created.map((l) => l.id)];
+  const altRows: Record<string, unknown>[] = [];
+  for (const [k, options] of bySlot) {
+    const id = ids[k];
+    if (!id) continue;
+    const existing = lyric[k];
+    if (existing) {
+      // old pending options are dropped, the old text is remembered as rejected
+      await db().from("alternatives").update({ state: "rejected" }).eq("line_id", id).eq("state", "pending");
+      if (existing.text.trim())
+        altRows.push({ line_id: id, project_id: section.project_id, text: existing.text, source: "user", state: "rejected" });
+      await updateLine(id, { text: options[0], status: "SUGGESTED" }, "draft");
+    }
+    for (const text of options.slice(1)) altRows.push({ line_id: id, project_id: section.project_id, text, source: "ai", state: "pending" });
+  }
+  if (altRows.length) check(await db().from("alternatives").insert(altRows));
+  await touch(section.project_id);
+}
+
+/** Free "next option": the line takes the alternative's text, the old text becomes that alternative. */
+export async function swapAlternative(altId: string) {
+  const alt = check(await db().from("alternatives").select("id, line_id, text").eq("id", altId).single()) as Alternative;
+  const line = await getLine(alt.line_id);
+  // the swapped-out text goes to the back of the queue, so repeated ↻ cycles through all options
+  check(await db().from("alternatives").update({ text: line.text, created_at: new Date().toISOString() }).eq("id", altId));
+  return updateLine(alt.line_id, { text: alt.text, status: "SUGGESTED" }, "swap");
 }
