@@ -1,7 +1,8 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { analyzeAudio, decodeAudio } from "@/lib/audio/analyze-file";
+import { decodeAudio } from "@/lib/audio/analyze-file";
+import { uploadBeat } from "@/lib/client/beat";
 import { barLength, fmtTime, sectionRanges } from "@/lib/audio/song-map";
 import { buildTimeline, lineStart as timelineLineStart, positionIn, type Timeline } from "@/lib/audio/timeline";
 import { analyseBeat } from "@/lib/audio/structure";
@@ -169,34 +170,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const { mutate } = w;
   const upload = useCallback(
     async (file: File) => {
-      if (file.size > 50 * 1024 * 1024) {
-        setStatus("The file is larger than 50 MB.");
-        return;
-      }
       try {
-        setStatus("Analysing tempo…");
-        const analysis = await analyzeAudio(file);
-        setStatus("Uploading…");
-        const up = (await fetch(`/api/projects/${pid}/audio`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ action: "uploadUrl", filename: file.name }),
-        }).then((r) => r.json())) as { path: string; signedUrl: string; error?: string };
-        if (!up.signedUrl) throw new Error(up.error ?? "Upload not possible");
-        const fd = new FormData();
-        fd.append("cacheControl", "3600");
-        fd.append("", file);
-        const put = await fetch(up.signedUrl, { method: "PUT", body: fd, headers: { "x-upsert": "false" } });
-        if (!put.ok) throw new Error(`Upload failed (${put.status})`);
-        await mutate(`/api/projects/${pid}/audio`, {
-          action: "save",
-          path: up.path,
-          filename: file.name,
-          duration: analysis.duration,
-          bpm: analysis.tempo.bpm || null,
-          beat_offset: analysis.tempo.offset,
-          changes: analysis.changes,
-        });
+        await mutate(`/api/projects/${pid}/audio`, await uploadBeat(pid, file, setStatus));
         setStatus(null);
       } catch (e) {
         setStatus(e instanceof Error ? e.message : "Upload failed");

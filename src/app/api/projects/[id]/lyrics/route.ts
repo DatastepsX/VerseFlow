@@ -70,7 +70,10 @@ export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]/l
     if (b.action === "rebuildPlan") return Response.json({ song: rebuild(tree, stored.words) });
     if (b.action === "rebuild") {
       const group = tree.project.type === "song" || tree.project.type === "rap" ? 2 : 1;
-      await rebuildSong(id, rebuild(tree, stored.words), group);
+      const song = rebuild(tree, stored.words);
+      if (!song.some((x) => x.lines.length))
+        return Response.json({ error: "No vocals were found in this song — the sections stay as they are." }, { status: 400 });
+      await rebuildSong(id, song, group);
       return treeResponse(id);
     }
     if (b.action === "apply") {

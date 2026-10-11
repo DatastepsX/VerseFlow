@@ -29,6 +29,8 @@ Product spec: see the original `verseflow_product_spec.md` (Phase 1 + core of Ph
   (bar-synchronous timbre/harmony self-similarity). Typing the BPM or ÷2/×2 refits the grid; “🧲 Snap sections to
   the beat” also moves every section start onto the nearest beat change (≤ ~1 bar / 2.5 s) or bar line. Sections
   created from the lyrics start on beat changes too.
+- **New project with its song**: the new-project form takes the MP3 (title from the file name); optionally it reads
+  the lyrics right away (1 ElevenLabs call) and rebuilds the song from them. Upload logic: `src/lib/client/beat.ts`.
 - **Rebuild the song from the vocals** (`src/lib/audio/song-lines.ts`, Lyrics dialog, free): lines as they are sung
   (every sentence starts a new line, pauses end lines, double-length lines split at their comma, lone words join the
   next line) and sections as they are performed — fast delivery (≥ ~6 syllables/s) is **Rap**, repeated blocks are
