@@ -33,6 +33,9 @@ Product spec: see the original `verseflow_product_spec.md` (Phase 1 + core of Ph
   “🎯 Sync to vocals” aligns the written lines with the transcribed vocals (word-level alignment, no API call; also
   runs after taking lyrics over), “👆 Tap along” lets the writer tap when lines start (stored in `lines.audio_at`);
   lines in between share the time by their syllables, so short lines get less time than long ones.
+- **Follow the song**: while the beat plays, the current line is highlighted and kept in view in Write, Full text
+  and Bars (the section's bars), with a “now playing” strip (line + next line); scrolling by hand pauses following
+  for a few seconds, and typing never moves the page (`follow.ts`, `NowPlaying.tsx`).
 - **Selecting a bar moves the beat** to that bar; tapping a section (chips / Structure list) moves it to the section start.
 - **Suggestion bank (low API usage)**: one AI call writes ~30–40 bars for a section, organised as *rhyme families*
   (lines sharing an end rhyme, written so consecutive pairs form couplets). Next-bar suggestions are then served

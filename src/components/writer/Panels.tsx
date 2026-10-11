@@ -1,12 +1,15 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, projectApi } from "@/lib/client/api";
 import type { RhymeResult } from "@/lib/rhyme/types";
 import { LANGUAGES, PROJECT_TYPES, type LineEvent, type ProjectSettings, type ProjectVersion } from "@/lib/types";
 import { useWriter } from "./context";
 import { prosody } from "@/lib/rhyme/prosody";
-import { download, fullText } from "./util";
+import { download, fullText, fullTextSections } from "./util";
+import { useFollow } from "./follow";
+import { NowPlaying } from "./NowPlaying";
+import { usePlayer } from "./Player";
 
 export function FullTextPanel() {
   const { tree } = useWriter();
@@ -37,9 +40,51 @@ export function FullTextPanel() {
           <input type="checkbox" checked={approvedOnly} onChange={(e) => setApprovedOnly(e.target.checked)} /> approved only
         </label>
       </div>
-      <pre className="flex-1 overflow-auto whitespace-pre-wrap font-sans text-[15px] leading-relaxed">
-        {text || <span className="text-muted">Nothing written yet.</span>}
-      </pre>
+      <FollowingText approvedOnly={approvedOnly} />
+    </div>
+  );
+}
+
+/** the full text with the line the song is at highlighted and kept in view */
+function FollowingText({ approvedOnly }: { approvedOnly: boolean }) {
+  const { tree } = useWriter();
+  const p = usePlayer();
+  const sections = fullTextSections(tree, { approvedOnly });
+  const pos = p.position;
+  const liveSection = pos ? tree.sections.find((s) => s.id === pos.sectionId) : undefined;
+  const liveLine = liveSection && pos?.lineIndex !== null && pos?.lineIndex !== undefined ? liveSection.lines[pos.lineIndex] : undefined;
+  const shown = new Set(sections.flatMap((x) => x.groups.flat().map((l) => l.id)));
+  // the line if it is in the text, else the section heading
+  const target = liveLine && shown.has(liveLine.id) ? `ft-line-${liveLine.id}` : pos ? `ft-sec-${pos.sectionId}` : null;
+  const box = useRef<HTMLDivElement>(null);
+  useFollow(() => (target ? (box.current?.querySelector<HTMLElement>(`#${target}`) ?? null) : null), target, p.playing);
+
+  if (!sections.length) return <p className="text-sm text-muted">Nothing written yet.</p>;
+  return (
+    <div ref={box} className="flex-1 space-y-6 text-[15px] leading-relaxed">
+      <NowPlaying />
+      {sections.map(({ section, groups }) => (
+        <div key={section.id}>
+          <div id={`ft-sec-${section.id}`} className={`mb-2 text-xs font-bold uppercase tracking-widest ${pos?.sectionId === section.id ? "text-accent" : "text-muted"}`}>
+            {section.name}
+          </div>
+          <div className="space-y-3">
+            {groups.map((g, i) => (
+              <div key={i}>
+                {g.map((l) => (
+                  <div
+                    key={l.id}
+                    id={`ft-line-${l.id}`}
+                    className={`-mx-1 rounded px-1 transition-colors ${liveLine?.id === l.id ? "bg-accent-soft font-medium text-fg ring-1 ring-accent/40" : ""}`}
+                  >
+                    {l.text}
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -339,6 +384,11 @@ export function ProjectSettingsPanel({ onClose }: { onClose: () => void }) {
  */
 export function BarsPanel() {
   const w = useWriter();
+  const p = usePlayer();
+  const liveId = p.position?.sectionId ?? null;
+  const box = useRef<HTMLDivElement>(null);
+  // the bars of the section the song is in come into view when the section changes
+  useFollow(() => (liveId ? (box.current?.querySelector<HTMLElement>(`[data-bars-section="${liveId}"]`) ?? null) : null), liveId, p.playing);
   const [q, setQ] = useState("");
   const [showUsed, setShowUsed] = useState(false);
   const needle = q.trim().toLowerCase();
@@ -354,7 +404,8 @@ export function BarsPanel() {
     .filter((x) => x.families.length);
 
   return (
-    <div className="space-y-3">
+    <div ref={box} className="space-y-3">
+      <NowPlaying />
       <p className="text-xs text-muted">
         {total} bars generated so far — free to reuse. Tap a bar to put it into the line you are writing (tap into a line first).
       </p>
@@ -370,8 +421,15 @@ export function BarsPanel() {
         </p>
       )}
       {bySection.map(({ section, families }) => (
-        <div key={section.id}>
-          <h4 className="label">{section.name}</h4>
+        <div
+          key={section.id}
+          data-bars-section={section.id}
+          className={liveId === section.id ? "-mx-2 rounded-lg bg-accent-soft/50 px-2 py-1 ring-1 ring-accent/30" : ""}
+        >
+          <h4 className={`label ${liveId === section.id ? "text-accent" : ""}`}>
+            {liveId === section.id ? "♪ " : ""}
+            {section.name}
+          </h4>
           <div className="space-y-2">
             {families.map(([fam, list]) => (
               <div key={fam} className="rounded-md border border-line p-1.5">

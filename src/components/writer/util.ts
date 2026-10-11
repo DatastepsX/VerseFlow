@@ -29,29 +29,27 @@ export function isLocked(l: Pick<Line, "status">) {
 }
 
 /** The current composition as plain text, grouped into couplets/stanzas. */
+/** the lyric lines that make up the full text, per section, in couplets/groups */
+export function fullTextSections(tree: ProjectTree, opts: { approvedOnly?: boolean } = {}) {
+  return tree.sections
+    .map((s) => {
+      const lines = s.lines.filter(
+        (l) => l.kind === "lyric" && l.text.trim() && l.status !== "DECLINED" && (!opts.approvedOnly || isLocked(l)),
+      );
+      const g = Math.max(1, s.group_size);
+      const groups: typeof lines[] = [];
+      for (let i = 0; i < lines.length; i += g) groups.push(lines.slice(i, i + g));
+      return { section: s, groups };
+    })
+    .filter((x) => x.groups.length);
+}
+
 export function fullText(tree: ProjectTree, opts: { approvedOnly?: boolean; markdown?: boolean } = {}) {
   const parts: string[] = [];
   if (opts.markdown) parts.push(`# ${tree.project.title}`);
-  for (const s of tree.sections) {
-    const lines = s.lines.filter(
-      (l) =>
-        l.kind === "lyric" &&
-        l.text.trim() &&
-        l.status !== "DECLINED" &&
-        (!opts.approvedOnly || isLocked(l)),
-    );
-    if (!lines.length) continue;
-    const g = Math.max(1, s.group_size);
-    const groups: string[] = [];
-    for (let i = 0; i < lines.length; i += g) {
-      groups.push(
-        lines
-          .slice(i, i + g)
-          .map((l) => (opts.markdown ? `${l.text}  ` : l.text))
-          .join("\n"),
-      );
-    }
-    parts.push(`${opts.markdown ? "## " + s.name : s.name.toUpperCase()}\n\n${groups.join("\n\n")}`);
+  for (const { section: s, groups } of fullTextSections(tree, opts)) {
+    const text = groups.map((g) => g.map((l) => (opts.markdown ? `${l.text}  ` : l.text)).join("\n")).join("\n\n");
+    parts.push(`${opts.markdown ? "## " + s.name : s.name.toUpperCase()}\n\n${text}`);
   }
   return parts.join("\n\n\n");
 }

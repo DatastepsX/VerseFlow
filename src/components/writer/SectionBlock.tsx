@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { analyzeLine, compareLines, lastWord, rhymeScheme } from "@/lib/rhyme/analyze";
 import { rhymePartners } from "@/lib/scheme";
 import { prosody } from "@/lib/rhyme/prosody";
@@ -13,6 +13,7 @@ import { BankPicker } from "./Bank";
 import { SectionWorkflow } from "./SectionWorkflow";
 import { LengthControls } from "./LengthControls";
 import { usePlayer } from "./Player";
+import { useFollow } from "./follow";
 import { LineRow, RhymeBadge } from "./LineRow";
 
 type SectionT = ProjectTree["sections"][number];
@@ -144,6 +145,9 @@ function Composer({
   live: boolean;
 }) {
   const w = useWriter();
+  const player = usePlayer();
+  const boxRef = useRef<HTMLDivElement>(null);
+  useFollow(() => boxRef.current, live ? `next-${section.id}` : null, player.playing);
   const [text, setText] = useState("");
   const [bankId, setBankId] = useState<string | null>(null);
   // "fit my line" results: bank lines created by the last fit call
@@ -211,7 +215,7 @@ function Composer({
   };
 
   return (
-    <div className={`mt-3 rounded-lg border bg-panel p-2 ${live ? "border-accent ring-2 ring-accent/30" : "border-line"} ${startsGroup && texts.length ? "mt-5" : ""}`}>
+    <div ref={boxRef} className={`mt-3 rounded-lg border bg-panel p-2 ${live ? "border-accent ring-2 ring-accent/30" : "border-line"} ${startsGroup && texts.length ? "mt-5" : ""}`}>
       <div className="flex items-start gap-2">
         <span className="w-6 pt-2 text-right font-mono text-xs text-muted">{offset + nextIdx + 1}</span>
         <textarea

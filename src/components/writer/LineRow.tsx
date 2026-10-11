@@ -10,6 +10,7 @@ import { BankPicker } from "./Bank";
 import { usePlayer } from "./Player";
 import { LengthControls } from "./LengthControls";
 import { useWriter } from "./context";
+import { useFollow } from "./follow";
 import { AI_ACTIONS, isLocked, letterColor, STATUS_META } from "./util";
 
 export function RhymeBadge({ match }: { match: RhymeMatch | null }) {
@@ -81,6 +82,9 @@ export function LineRow({ line, number, letter, partnerText, partnerNumber, targ
   // draft bars get quick ✓ / ✕ / ↻ right on the row (first review pass)
   const reviewable = !rhythm && !!line.text.trim() && (line.status === "SUGGESTED" || line.status === "DECLINED" || line.status === "NEEDS_NEW_OPTIONS");
   const player = usePlayer();
+  // keep the line the song is at in view
+  const rowRef = useRef<HTMLDivElement>(null);
+  useFollow(() => rowRef.current, live ? line.id : null, player.playing);
   // selecting a bar moves the beat to that bar
   const jumpToBar = () => {
     const sec = w.tree.sections.find((x) => x.id === line.section_id);
@@ -111,6 +115,7 @@ export function LineRow({ line, number, letter, partnerText, partnerNumber, targ
 
   return (
     <div
+      ref={rowRef}
       className={`group rounded-md border-l-[3px] ${meta.bar} ${selected ? "bg-panel shadow-sm ring-1 ring-line" : "hover:bg-panel/60"} ${live ? "bg-accent-soft/70 ring-2 ring-accent/40" : ""}`}
     >
       <div
