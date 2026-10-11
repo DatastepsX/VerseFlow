@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
+import { positionAt } from "@/lib/audio/song-map";
 import type { ProjectTree } from "@/lib/types";
 
 function usePref<T>(key: string, initial: T): [T, (v: T) => void] {
@@ -35,6 +36,40 @@ export function Recorder({ tree }: { tree: ProjectTree }) {
   const raf = useRef<number | null>(null);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // the project's beat: play it and follow the current line
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [beatUrl, setBeatUrl] = useState<string | null>(null);
+  const [beatPlaying, setBeatPlaying] = useState(false);
+  const [live, setLive] = useState<{ sectionId: string; lineIndex: number | null } | null>(null);
+  useEffect(() => {
+    if (!tree.audio) return;
+    fetch(`/api/projects/${tree.project.id}/audio`)
+      .then((r) => r.json())
+      .then((d: { url: string | null }) => setBeatUrl(d.url))
+      .catch(() => {});
+  }, [tree.audio, tree.project.id]);
+  useEffect(() => {
+    if (!beatPlaying) return;
+    let id = 0;
+    const tick = () => {
+      const pos = audioRef.current ? positionAt(audioRef.current.currentTime, tree.sections, tree.audio) : null;
+      setLive((prev) => (prev?.sectionId === pos?.sectionId && prev?.lineIndex === pos?.lineIndex ? prev : pos));
+      id = requestAnimationFrame(tick);
+    };
+    id = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(id);
+  }, [beatPlaying, tree.sections, tree.audio]);
+  useEffect(() => {
+    if (!live || live.lineIndex === null) return;
+    document.getElementById(`rec-line-${live.sectionId}-${live.lineIndex}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [live]);
+  const toggleBeat = () => {
+    const a = audioRef.current;
+    if (!a) return;
+    if (a.paused) void a.play();
+    else a.pause();
+  };
+
   // auto-scroll: speed is pixels per second
   useEffect(() => {
     if (!playing) return;
@@ -66,7 +101,8 @@ export function Recorder({ tree }: { tree: ProjectTree }) {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === " ") {
         e.preventDefault();
-        setPlaying((p) => !p);
+        if (audioRef.current) toggleBeat();
+        else setPlaying((p) => !p);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -112,6 +148,11 @@ export function Recorder({ tree }: { tree: ProjectTree }) {
           speed
           <input type="range" min={5} max={120} value={speed} onChange={(e) => setSpeed(Number(e.target.value))} />
         </label>
+        {beatUrl && (
+          <button className="rounded bg-[#e0730b] px-3 py-1 font-semibold" onClick={toggleBeat} title="Play the beat; the current line follows it (space)">
+            {beatPlaying ? "❚❚ Beat" : "▶ Beat"}
+          </button>
+        )}
         <button className="rounded bg-[#6d4aff] px-3 py-1 font-semibold" onClick={() => setPlaying(!playing)}>
           {playing ? "Pause" : "Auto-scroll"}
         </button>
@@ -133,8 +174,14 @@ export function Recorder({ tree }: { tree: ProjectTree }) {
               <h2 className="mb-[0.4em] text-[0.5em] font-bold uppercase tracking-[0.2em] text-[#8b7bff]">{s.name}</h2>
               {lines.map((l, i) => {
                 n++;
+                const k = s.lines.indexOf(l); // index on the beat (bar position) within the section
+                const isLive = live?.sectionId === s.id && live.lineIndex === k;
                 return (
-                  <div key={l.id} className={`flex gap-[0.5em] ${i > 0 && i % g === 0 ? "mt-[0.6em]" : ""}`}>
+                  <div
+                    key={l.id}
+                    id={`rec-line-${s.id}-${k}`}
+                    className={`flex gap-[0.5em] rounded transition-colors ${i > 0 && i % g === 0 ? "mt-[0.6em]" : ""} ${isLive ? "bg-[#6d4aff]/25 text-white" : live ? "text-[#9a9a9a]" : ""}`}
+                  >
                     {numbers && <span className="w-[1.6em] shrink-0 pt-[0.35em] text-right font-mono text-[0.45em] text-[#666]">{n}</span>}
                     <span>{l.text}</span>
                   </div>
@@ -144,6 +191,16 @@ export function Recorder({ tree }: { tree: ProjectTree }) {
           );
         })}
       </main>
+      {beatUrl && (
+        <audio
+          ref={audioRef}
+          src={beatUrl}
+          preload="auto"
+          onPlay={() => setBeatPlaying(true)}
+          onPause={() => setBeatPlaying(false)}
+          onEnded={() => setBeatPlaying(false)}
+        />
+      )}
     </div>
   );
 }

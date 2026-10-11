@@ -31,7 +31,13 @@ Product spec: see the original `verseflow_product_spec.md` (Phase 1 + core of Ph
 - **Usage tracking**: every AI call is logged (`ai_calls`: kind, model, tokens); the header shows calls/tokens per project.
 - **History**: every line change is an event → undo / redo (Ctrl/Cmd+Z), restore a previous text, named **versions** with restore
 - **Full version** panel with copy / .txt / .md export (all lines or approved only)
-- **Recording mode** (`/p/:id/record`): dark, large type, A−/A+, line numbers, auto-scroll, jump to section
+- **Beat upload & BPM** (🎵 Beat): upload an MP3/WAV/M4A (≤ 50 MB, stored in Supabase Storage bucket `beats`,
+  uploaded directly from the browser via a signed URL). Tempo and the bar grid (bar 1 position) are detected in the
+  browser (`src/lib/audio/tempo.ts`, no API cost); correct with ÷2 / ×2, edit the BPM, or “bar 1 here”.
+- **Song map**: waveform with section regions; while playing, anchor any section at the current position (snapped to
+  the bar) or create “+ New section here”. Each section shows ▶ start time, length in bars, and 🔁 loop. During
+  playback the line for the current bar is highlighted (setting “one line = ½ / 1 / 2 / 4 bars”).
+- **Recording mode** (`/p/:id/record`) — plays the beat and follows the current line: dark, large type, A−/A+, line numbers, auto-scroll, jump to section
 - Mobile layout with bottom tabs (works as a home-screen web app; native iOS app later via the same JSON API)
 
 ## Architecture
@@ -47,7 +53,7 @@ Next.js 16 (App Router, React 19, Tailwind 4)  — deployed on Vercel
 ```
 
 Database: Supabase project `verseflow` (tables `projects`, `sections`, `lines`, `alternatives`, `line_events`,
-`project_versions`, `bank_lines`, `ai_calls`). The DB key is used **server-side only**. Until user accounts exist, access is protected by a
+`project_versions`, `bank_lines`, `ai_calls`, `audio_tracks`; storage bucket `beats`). The DB key is used **server-side only**. Until user accounts exist, access is protected by a
 single shared password (`APP_PASSWORD`).
 
 ## Environment variables

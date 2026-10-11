@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PROJECT_TYPES, type ProjectTree } from "@/lib/types";
 import { WriterContext, type GenerateOptions, type WriterApi } from "./context";
 import { FullTextPanel, HistoryPanel, ProjectSettingsPanel, RhymePanel } from "./Panels";
+import { PlayerProvider, UploadBeatButton } from "./Player";
 import { SectionBlock } from "./SectionBlock";
 
 type Tab = "full" | "rhymes" | "history" | "settings";
@@ -167,6 +168,7 @@ export function Writer({ initial, aiEnabled }: { initial: ProjectTree; aiEnabled
 
   return (
     <WriterContext.Provider value={api}>
+      <PlayerProvider>
       <div className="flex min-h-dvh flex-col">
         <header className="sticky top-0 z-30 flex items-center gap-2 border-b border-line bg-bg/90 px-3 py-2 backdrop-blur sm:px-4">
           <Link href="/" className="btn-ghost" title="All projects">
@@ -189,6 +191,7 @@ export function Writer({ initial, aiEnabled }: { initial: ProjectTree; aiEnabled
           <button className="btn-ghost hidden lg:inline-flex" onClick={() => setTab("settings")}>
             Settings
           </button>
+          <UploadBeatButton />
           <Link href={`/p/${pid}/record`} className="btn">
             🎙 Record
           </Link>
@@ -214,7 +217,7 @@ export function Writer({ initial, aiEnabled }: { initial: ProjectTree; aiEnabled
 
           {/* main writing area */}
           <main
-            className={`min-w-0 flex-1 px-2 pb-28 pt-4 sm:px-6 lg:pb-12 ${mobile === "write" ? "" : "hidden lg:block"}`}
+            className={`min-w-0 flex-1 px-2 pt-4 sm:px-6 ${tree.audio ? "pb-64 lg:pb-48" : "pb-28 lg:pb-12"} ${mobile === "write" ? "" : "hidden lg:block"}`}
             onClick={(e) => e.target === e.currentTarget && setSelectedId(null)}
           >
             <div className="mx-auto max-w-2xl space-y-8">
@@ -286,6 +289,7 @@ export function Writer({ initial, aiEnabled }: { initial: ProjectTree; aiEnabled
           </div>
         )}
       </div>
+      </PlayerProvider>
     </WriterContext.Provider>
   );
 

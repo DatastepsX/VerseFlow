@@ -38,9 +38,11 @@ interface Props {
   sectionTexts: string[];
   index: number;
   scheme: string | null;
+  /** the beat is currently playing this line's bar(s) */
+  live?: boolean;
 }
 
-export function LineRow({ line, number, letter, partnerText, partnerNumber, targetSyllables, groupSize, isRap, sectionTexts, index, scheme }: Props) {
+export function LineRow({ line, number, letter, partnerText, partnerNumber, targetSyllables, groupSize, isRap, sectionTexts, index, scheme, live }: Props) {
   const w = useWriter();
   const selected = w.selectedId === line.id;
   const [draft, setDraft] = useState(line.text);
@@ -90,7 +92,7 @@ export function LineRow({ line, number, letter, partnerText, partnerNumber, targ
 
   return (
     <div
-      className={`group rounded-md border-l-[3px] ${meta.bar} ${selected ? "bg-panel shadow-sm ring-1 ring-line" : "hover:bg-panel/60"} `}
+      className={`group rounded-md border-l-[3px] ${meta.bar} ${selected ? "bg-panel shadow-sm ring-1 ring-line" : "hover:bg-panel/60"} ${live ? "bg-accent-soft/70 ring-2 ring-accent/40" : ""}`}
     >
       <div
         className="flex cursor-pointer items-baseline gap-2 px-2 py-1.5"

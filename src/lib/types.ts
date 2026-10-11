@@ -70,6 +70,19 @@ export interface Section {
   intensity: number | null;
   rhyme_scheme: string | null;
   notes: string | null;
+  /** where this section starts in the uploaded beat (seconds) */
+  audio_start: number | null;
+  /** how many musical bars one written line spans (1 = one line per bar) */
+  bars_per_line: number;
+}
+
+export interface AudioTrack {
+  filename: string;
+  duration: number | null;
+  bpm: number | null;
+  /** time of bar 1, beat 1 (seconds) */
+  beat_offset: number;
+  beats_per_bar: number;
 }
 
 export interface Line {
@@ -117,6 +130,7 @@ export interface ProjectTree {
   /** bank lines (available + used) of all sections */
   bank: BankLine[];
   usage: AiUsage;
+  audio: AudioTrack | null;
 }
 
 export interface LineEvent {

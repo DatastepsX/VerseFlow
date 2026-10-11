@@ -3,6 +3,7 @@ import { check, db } from "./db";
 import type {
   AiUsage,
   Alternative,
+  AudioTrack,
   BankLine,
   Line,
   LineEvent,
@@ -80,7 +81,7 @@ export async function createProject(input: {
 }
 
 export async function getTree(projectId: string): Promise<ProjectTree> {
-  const [p, s, l, a, b, u] = await Promise.all([
+  const [p, s, l, a, b, u, au] = await Promise.all([
     db().from("projects").select("*").eq("id", projectId).maybeSingle(),
     db().from("sections").select("*").eq("project_id", projectId).order("position"),
     db().from("lines").select(LINE_COLS).eq("project_id", projectId).eq("deleted", false).order("position"),
@@ -98,6 +99,11 @@ export async function getTree(projectId: string): Promise<ProjectTree> {
       .order("created_at")
       .order("family_pos"),
     db().from("ai_calls").select("input_tokens, output_tokens").eq("project_id", projectId),
+    db()
+      .from("audio_tracks")
+      .select("filename, duration, bpm, beat_offset, beats_per_bar")
+      .eq("project_id", projectId)
+      .maybeSingle(),
   ]);
   const project = check(p) as Project | null;
   if (!project) throw new NotFound("Project not found");
@@ -123,6 +129,7 @@ export async function getTree(projectId: string): Promise<ProjectTree> {
     })),
     bank,
     usage,
+    audio: check(au) as AudioTrack | null,
   };
 }
 
@@ -162,7 +169,7 @@ export async function duplicateProject(id: string) {
 
 // ---------- sections ----------
 
-export async function addSection(projectId: string, input: { name: string; group_size?: number }) {
+export async function addSection(projectId: string, input: { name: string; group_size?: number; audio_start?: number | null }) {
   const last = check(
     await db().from("sections").select("position").eq("project_id", projectId).order("position", { ascending: false }).limit(1),
   ) as { position: number }[];
@@ -173,6 +180,7 @@ export async function addSection(projectId: string, input: { name: string; group
         project_id: projectId,
         name: input.name.trim() || "New section",
         group_size: input.group_size ?? 2,
+        audio_start: input.audio_start ?? null,
         position: (last[0]?.position ?? 0) + 1,
       }),
   );
@@ -181,7 +189,9 @@ export async function addSection(projectId: string, input: { name: string; group
 
 export async function updateSection(
   id: string,
-  patch: Partial<Pick<Section, "name" | "group_size" | "story_beat" | "intensity" | "rhyme_scheme" | "notes">>,
+  patch: Partial<
+    Pick<Section, "name" | "group_size" | "story_beat" | "intensity" | "rhyme_scheme" | "notes" | "audio_start" | "bars_per_line">
+  >,
 ) {
   const s = check(await db().from("sections").update(patch).eq("id", id).select("project_id").single()) as { project_id: string };
   await touch(s.project_id);
@@ -483,6 +493,8 @@ async function insertSnapshot(projectId: string, tree: { sections: (Section & { 
           intensity: s.intensity,
           rhyme_scheme: s.rhyme_scheme,
           notes: s.notes,
+          audio_start: s.audio_start ?? null,
+          bars_per_line: s.bars_per_line ?? 1,
         })
         .select("id")
         .single(),
@@ -581,4 +593,57 @@ export async function recordAiCall(
       input_tokens: usage.input_tokens ?? 0,
       output_tokens: usage.output_tokens ?? 0,
     });
+}
+
+// ---------- audio (beat) ----------
+
+const BUCKET = "beats";
+
+export async function audioUploadUrl(projectId: string, filename: string) {
+  const ext = (filename.match(/\.([a-z0-9]{2,4})$/i)?.[1] ?? "mp3").toLowerCase();
+  const path = `${projectId}/${crypto.randomUUID()}.${ext}`;
+  const { data, error } = await db().storage.from(BUCKET).createSignedUploadUrl(path);
+  if (error || !data) throw new Error(error?.message ?? "Could not create upload URL");
+  return { path, signedUrl: data.signedUrl };
+}
+
+export async function saveAudio(
+  projectId: string,
+  t: { path: string; filename: string; duration: number | null; bpm: number | null; beat_offset: number },
+) {
+  if (!t.path.startsWith(`${projectId}/`)) throw new Error("Invalid audio path");
+  const old = check(await db().from("audio_tracks").select("path").eq("project_id", projectId).maybeSingle()) as {
+    path: string;
+  } | null;
+  check(
+    await db()
+      .from("audio_tracks")
+      .upsert({ project_id: projectId, path: t.path, filename: t.filename, duration: t.duration, bpm: t.bpm, beat_offset: t.beat_offset }),
+  );
+  if (old && old.path !== t.path) await db().storage.from(BUCKET).remove([old.path]);
+}
+
+export async function updateAudio(projectId: string, patch: Partial<Pick<AudioTrack, "bpm" | "beat_offset" | "beats_per_bar">>) {
+  check(await db().from("audio_tracks").update(patch).eq("project_id", projectId));
+}
+
+export async function deleteAudio(projectId: string) {
+  const old = check(await db().from("audio_tracks").select("path").eq("project_id", projectId).maybeSingle()) as {
+    path: string;
+  } | null;
+  if (!old) return;
+  await db().storage.from(BUCKET).remove([old.path]);
+  check(await db().from("audio_tracks").delete().eq("project_id", projectId));
+  check(await db().from("sections").update({ audio_start: null }).eq("project_id", projectId));
+}
+
+/** Short-lived URL the browser can stream the beat from. */
+export async function audioPlaybackUrl(projectId: string) {
+  const row = check(await db().from("audio_tracks").select("path").eq("project_id", projectId).maybeSingle()) as {
+    path: string;
+  } | null;
+  if (!row) return null;
+  const { data, error } = await db().storage.from(BUCKET).createSignedUrl(row.path, 60 * 60 * 6);
+  if (error || !data) throw new Error(error?.message ?? "Could not create playback URL");
+  return data.signedUrl;
 }

@@ -12,7 +12,7 @@ export async function PATCH(req: Request, ctx: RouteContext<"/api/sections/[id]"
     const b = await body(req);
     const projectId = await updateSection(
       (await ctx.params).id,
-      pick<Section>(b, ["name", "group_size", "story_beat", "intensity", "rhyme_scheme", "notes"]),
+      pick<Section>(b, ["name", "group_size", "story_beat", "intensity", "rhyme_scheme", "notes", "audio_start", "bars_per_line"]),
     );
     return treeResponse(projectId);
   });

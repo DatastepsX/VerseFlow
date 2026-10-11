@@ -5,15 +5,20 @@ import { analyzeLine, compareLines, lastWord, rhymeScheme } from "@/lib/rhyme/an
 import { rhymePartners } from "@/lib/scheme";
 import type { ProjectTree } from "@/lib/types";
 import { useWriter } from "./context";
+import { sectionRanges, fmtTime } from "@/lib/audio/song-map";
 import { BankPicker } from "./Bank";
+import { usePlayer } from "./Player";
 import { LineRow, RhymeBadge } from "./LineRow";
 
 type SectionT = ProjectTree["sections"][number];
 
 export function SectionBlock({ section, index, total }: { section: SectionT; index: number; total: number }) {
   const w = useWriter();
+  const player = usePlayer();
   const [settings, setSettings] = useState(false);
   const g = Math.max(1, section.group_size);
+  const range = sectionRanges(w.tree.sections, w.tree.audio).get(section.id) ?? null;
+  const liveLine = player.position?.sectionId === section.id ? player.position.lineIndex : null;
   const lines = section.lines;
   const isRap = w.tree.project.type === "rap";
 
@@ -49,6 +54,38 @@ export function SectionBlock({ section, index, total }: { section: SectionT; ind
         />
         {section.story_beat && <span className="hidden truncate text-xs text-muted sm:inline">{section.story_beat}</span>}
         {section.intensity ? <span className="text-xs text-muted">⚡{section.intensity}</span> : null}
+        {w.tree.audio && range && (
+          <span className="flex items-center gap-1 text-xs text-muted">
+            <button className="btn-ghost px-1.5 py-0.5 text-xs" disabled={!player.ready} onClick={() => player.playSection(section.id)} title="Play from this section">
+              ▶ {fmtTime(range.start)}
+            </button>
+            {range.bars !== null && (
+              <span title={`${lines.length} lines written · ${Math.ceil(range.bars / (section.bars_per_line || 1))} lines fit the beat`}>
+                {range.bars} bars
+              </span>
+            )}
+            <button
+              className={`btn-ghost px-1.5 py-0.5 text-xs ${player.loopId === section.id ? "text-accent" : ""}`}
+              onClick={() => {
+                player.setLoop(player.loopId === section.id ? null : section.id);
+                if (player.loopId !== section.id && !player.playing) player.playSection(section.id);
+              }}
+              title="Loop this section while you write"
+            >
+              🔁
+            </button>
+          </span>
+        )}
+        {w.tree.audio && !range && (
+          <button
+            className="btn-ghost text-xs"
+            disabled={!player.ready}
+            onClick={() => void w.mutate(`/api/sections/${section.id}`, { audio_start: player.snappedNow() }, "PATCH")}
+            title="Anchor this section at the current position of the beat"
+          >
+            ⚓ starts here
+          </button>
+        )}
         <button className="btn-ghost text-xs" onClick={() => setSettings((s) => !s)}>
           {settings ? "Done" : "⚙"}
         </button>
@@ -75,6 +112,7 @@ export function SectionBlock({ section, index, total }: { section: SectionT; ind
                   sectionTexts={texts}
                   index={k}
                   scheme={section.rhyme_scheme}
+                  live={liveLine === k}
                 />
               );
             })}
@@ -82,12 +120,24 @@ export function SectionBlock({ section, index, total }: { section: SectionT; ind
         ))}
       </div>
 
-      <Composer section={section} texts={texts} targetSyl={targetSyl} offset={offset} />
+      <Composer section={section} texts={texts} targetSyl={targetSyl} offset={offset} live={liveLine !== null && liveLine >= lines.length} />
     </section>
   );
 }
 
-function Composer({ section, texts, targetSyl, offset }: { section: SectionT; texts: string[]; targetSyl: number | null; offset: number }) {
+function Composer({
+  section,
+  texts,
+  targetSyl,
+  offset,
+  live,
+}: {
+  section: SectionT;
+  texts: string[];
+  targetSyl: number | null;
+  offset: number;
+  live: boolean;
+}) {
   const w = useWriter();
   const [text, setText] = useState("");
   const [bankId, setBankId] = useState<string | null>(null);
@@ -120,7 +170,7 @@ function Composer({ section, texts, targetSyl, offset }: { section: SectionT; te
   };
 
   return (
-    <div className={`mt-3 rounded-lg border border-line bg-panel p-2 ${startsGroup && texts.length ? "mt-5" : ""}`}>
+    <div className={`mt-3 rounded-lg border bg-panel p-2 ${live ? "border-accent ring-2 ring-accent/30" : "border-line"} ${startsGroup && texts.length ? "mt-5" : ""}`}>
       <div className="flex items-start gap-2">
         <span className="w-6 pt-2 text-right font-mono text-xs text-muted">{offset + nextIdx + 1}</span>
         <textarea
@@ -196,6 +246,25 @@ function SectionSettings({ section, index, total }: { section: SectionT; index: 
           <option value={4}>Quatrains</option>
         </select>
       </div>
+      {w.tree.audio && (
+        <div>
+          <label className="label">One line =</label>
+          <select className="input py-1.5" value={section.bars_per_line} onChange={(e) => save({ bars_per_line: Number(e.target.value) })}>
+            <option value={0.5}>½ bar</option>
+            <option value={1}>1 bar</option>
+            <option value={2}>2 bars</option>
+            <option value={4}>4 bars</option>
+          </select>
+        </div>
+      )}
+      {w.tree.audio && section.audio_start !== null && (
+        <div>
+          <label className="label">Beat anchor</label>
+          <button className="btn w-full justify-center py-1.5 text-xs" onClick={() => save({ audio_start: null })}>
+            Clear anchor ({fmtTime(section.audio_start)})
+          </button>
+        </div>
+      )}
       <div>
         <label className="label">Rhyme scheme</label>
         <input

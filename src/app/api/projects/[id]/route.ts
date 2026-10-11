@@ -34,7 +34,7 @@ export async function DELETE(_req: Request, ctx: RouteContext<"/api/projects/[id
 export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]">) {
   return handle(async () => {
     const { id } = await ctx.params;
-    const b = await body<{ action: string; name?: string; group_size?: number; label?: string }>(req);
+    const b = await body<{ action: string; name?: string; group_size?: number; label?: string; audio_start?: number | null }>(req);
     switch (b.action) {
       case "undo":
         await undo(id);
@@ -45,7 +45,7 @@ export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]">
       case "duplicate":
         return Response.json(await duplicateProject(id), { status: 201 });
       case "addSection":
-        await addSection(id, { name: b.name ?? "New section", group_size: b.group_size });
+        await addSection(id, { name: b.name ?? "New section", group_size: b.group_size, audio_start: b.audio_start ?? null });
         break;
       case "saveVersion":
         await saveVersion(id, b.label ?? new Date().toLocaleString());
