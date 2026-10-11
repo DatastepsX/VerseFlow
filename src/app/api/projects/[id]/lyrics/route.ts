@@ -1,6 +1,6 @@
 import { planLyrics, type LyricsPlan } from "@/lib/audio/lyrics";
-import { applyLyricsPlan, getTree } from "@/lib/server/repo";
-import { storedTranscript, transcribeBeat, transcriptionConfigured } from "@/lib/server/transcribe";
+import { applyLyricsPlan, getTree, setLineTimes } from "@/lib/server/repo";
+import { storedTranscript, transcribeBeat, transcriptionConfigured, vocalTimes } from "@/lib/server/transcribe";
 import { body, handle, treeResponse } from "@/lib/server/http";
 import type { ProjectTree } from "@/lib/types";
 
@@ -55,7 +55,17 @@ export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]/l
       const p = plan(tree, stored.words, auto);
       const group = tree.project.type === "song" || tree.project.type === "rap" ? 2 : 1;
       await applyLyricsPlan(id, p, group);
+      // the taken-over lines follow the vocals exactly from now on
+      await setLineTimes(id, vocalTimes(await getTree(id), stored.words));
       return treeResponse(id);
+    }
+    if (b.action === "sync") {
+      // no API call: aligns the written lines with the stored transcript; x-synced = lines found
+      const times = vocalTimes(tree, stored.words);
+      await setLineTimes(id, times);
+      const res = await treeResponse(id);
+      res.headers.set("x-synced", String(times.length));
+      return res;
     }
     return Response.json({ error: "Unknown action" }, { status: 400 });
   });

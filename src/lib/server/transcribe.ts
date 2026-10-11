@@ -1,5 +1,8 @@
 import "server-only";
 import { cleanWords, type TimedWord } from "@/lib/audio/lyrics";
+import { sectionRanges } from "@/lib/audio/song-map";
+import { alignLines } from "@/lib/audio/timeline";
+import type { ProjectTree } from "@/lib/types";
 import { check, db } from "./db";
 import { AiUnavailable } from "./ai";
 
@@ -74,4 +77,29 @@ export async function storedTranscript(projectId: string) {
   const track = check(a) as { path: string } | null;
   if (!row || !track || row.audio_path !== track.path) return null;
   return { words: row.words, created_at: row.created_at };
+}
+
+/**
+ * Finds every written line in the stored transcript and saves where it starts
+ * (no API call). Lines that aren't sung keep their time (tapped or estimated).
+ * Returns how many lines were synced.
+ */
+export function vocalTimes(tree: ProjectTree, words: TimedWord[]) {
+  const ranges = sectionRanges(tree.sections, tree.audio);
+  const times: { id: string; at: number }[] = [];
+  for (const s of tree.sections) {
+    const r = ranges.get(s.id);
+    if (!r) continue;
+    const lyric = s.lines.filter((l) => l.kind === "lyric");
+    const inRange = words.filter((w) => w.start >= r.start - 1.5 && w.start < r.end + 0.5);
+    const at = alignLines(
+      lyric.map((l) => l.text),
+      inRange,
+    );
+    lyric.forEach((l, k) => {
+      const t = at[k];
+      if (t !== null && t >= r.start - 1.5 && t < r.end) times.push({ id: l.id, at: Math.max(r.start, t) });
+    });
+  }
+  return times;
 }

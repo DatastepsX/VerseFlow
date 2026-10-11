@@ -18,7 +18,7 @@ import type {
   Section,
 } from "@/lib/types";
 
-const LINE_COLS = "id, project_id, section_id, position, text, status, kind, note, updated_at";
+const LINE_COLS = "id, project_id, section_id, position, text, status, kind, note, audio_at, updated_at";
 const SNAPSHOT_FIELDS = ["text", "status", "kind", "note", "deleted"] as const;
 
 export class NotFound extends Error {}
@@ -560,6 +560,7 @@ async function insertSnapshot(projectId: string, tree: { sections: (Section & { 
               status: l.status,
               kind: l.kind,
               note: l.note,
+              audio_at: l.audio_at ?? null,
             })),
           ),
       );
@@ -703,6 +704,25 @@ export async function audioPlaybackUrl(projectId: string) {
  * lines through addLine / updateLine so every change is in the history.
  * Lines that already have text are never touched.
  */
+/**
+ * Line timing on the beat (playback metadata, not lyrics: no history event,
+ * like the section anchors). at = null → estimated again.
+ */
+export async function setLineTimes(projectId: string, times: { id: string; at: number | null }[]) {
+  await Promise.all(
+    times.map(async (x) =>
+      check(
+        await db()
+          .from("lines")
+          .update({ audio_at: x.at === null ? null : Math.max(0, Math.round(x.at * 1000) / 1000) })
+          .eq("id", x.id)
+          .eq("project_id", projectId),
+      ),
+    ),
+  );
+  await touch(projectId);
+}
+
 export async function applyLyricsPlan(
   projectId: string,
   plan: import("@/lib/audio/lyrics").LyricsPlan,

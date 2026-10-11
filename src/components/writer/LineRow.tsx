@@ -6,7 +6,6 @@ import type { Alternative, Line } from "@/lib/types";
 import { prosody } from "@/lib/rhyme/prosody";
 import { patternReference } from "@/lib/pattern";
 import { rhythmReference } from "@/lib/suggest";
-import { barLength, sectionRanges } from "@/lib/audio/song-map";
 import { BankPicker } from "./Bank";
 import { usePlayer } from "./Player";
 import { LengthControls } from "./LengthControls";
@@ -84,13 +83,10 @@ export function LineRow({ line, number, letter, partnerText, partnerNumber, targ
   const player = usePlayer();
   // selecting a bar moves the beat to that bar
   const jumpToBar = () => {
-    const audio = w.tree.audio;
     const sec = w.tree.sections.find((x) => x.id === line.section_id);
-    const r = sec ? sectionRanges(w.tree.sections, audio).get(sec.id) : null;
-    const bl = audio ? barLength(audio) : null;
-    if (!sec || !r || !bl || !player.ready) return;
-    const k = sec.lines.findIndex((l) => l.id === line.id);
-    player.seek(r.start + k * bl * (sec.bars_per_line || 1));
+    if (!sec || !player.ready) return;
+    const at = player.lineStart(sec.id, sec.lines.findIndex((l) => l.id === line.id));
+    if (at !== null) player.seek(at);
   };
   const ownSection = w.tree.sections.find((x) => x.id === line.section_id);
   const sectionRhythmRef = ownSection ? patternReference(ownSection) : null;

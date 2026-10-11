@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
-import { positionAt } from "@/lib/audio/song-map";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { buildTimeline, positionIn } from "@/lib/audio/timeline";
 import type { ProjectTree } from "@/lib/types";
 
 function usePref<T>(key: string, initial: T): [T, (v: T) => void] {
@@ -48,17 +48,18 @@ export function Recorder({ tree }: { tree: ProjectTree }) {
       .then((d: { url: string | null }) => setBeatUrl(d.url))
       .catch(() => {});
   }, [tree.audio, tree.project.id]);
+  const timeline = useMemo(() => buildTimeline(tree.sections, tree.audio, tree.project.language), [tree.sections, tree.audio, tree.project.language]);
   useEffect(() => {
     if (!beatPlaying) return;
     let id = 0;
     const tick = () => {
-      const pos = audioRef.current ? positionAt(audioRef.current.currentTime, tree.sections, tree.audio) : null;
+      const pos = audioRef.current ? positionIn(timeline, audioRef.current.currentTime) : null;
       setLive((prev) => (prev?.sectionId === pos?.sectionId && prev?.lineIndex === pos?.lineIndex ? prev : pos));
       id = requestAnimationFrame(tick);
     };
     id = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(id);
-  }, [beatPlaying, tree.sections, tree.audio]);
+  }, [beatPlaying, timeline]);
   useEffect(() => {
     if (!live || live.lineIndex === null) return;
     document.getElementById(`rec-line-${live.sectionId}-${live.lineIndex}`)?.scrollIntoView({ behavior: "smooth", block: "center" });

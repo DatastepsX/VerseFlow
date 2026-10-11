@@ -99,6 +99,8 @@ export interface Line {
   status: LineStatus;
   kind: LineKind;
   note: string | null;
+  /** where the line starts in the beat (s): synced from the vocals or tapped; null = estimated */
+  audio_at: number | null;
   updated_at: string;
 }
 

@@ -4,6 +4,7 @@ import {
   duplicateProject,
   redo,
   saveVersion,
+  setLineTimes,
   undo,
   updateProject,
 } from "@/lib/server/repo";
@@ -36,7 +37,7 @@ export const maxDuration = 300;
 export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]">) {
   return handle(async () => {
     const { id } = await ctx.params;
-    const b = await body<{ action: string; name?: string; group_size?: number; label?: string; audio_start?: number | null }>(req);
+    const b = await body<{ action: string; name?: string; group_size?: number; label?: string; audio_start?: number | null; times?: { id: string; at: number | null }[] }>(req);
     switch (b.action) {
       case "undo":
         await undo(id);
@@ -48,6 +49,15 @@ export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]">
         return Response.json(await duplicateProject(id), { status: 201 });
       case "addSection":
         await addSection(id, { name: b.name ?? "New section", group_size: b.group_size, audio_start: b.audio_start ?? null });
+        break;
+      case "lineTimes":
+        // tap-sync / reset of where lines start on the beat
+        await setLineTimes(
+          id,
+          (b.times ?? [])
+            .filter((x) => typeof x?.id === "string" && (x.at === null || Number.isFinite(x.at)))
+            .slice(0, 200),
+        );
         break;
       case "saveVersion":
         await saveVersion(id, b.label ?? new Date().toLocaleString());

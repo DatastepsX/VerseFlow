@@ -24,6 +24,10 @@ Product spec: see the original `verseflow_product_spec.md` (Phase 1 + core of Ph
   open bar of the section (count from its length on the beat) with 3 options each, following the pattern, the rhyme
   scheme and the surrounding text (`draftSection` in `src/lib/server/ai.ts`). Review pass: ✓ keep / ✕ to replace /
   ↻ next option (free) on each row; “↻ Replace N marked” (one call per ~8 bars) rewrites only the ✕ bars to fit the kept ones.
+- **Line timing on the beat** (`src/lib/audio/timeline.ts`): the highlight follows each line's real start —
+  “🎯 Sync to vocals” aligns the written lines with the transcribed vocals (word-level alignment, no API call; also
+  runs after taking lyrics over), “👆 Tap along” lets the writer tap when lines start (stored in `lines.audio_at`);
+  lines in between share the time by their syllables, so short lines get less time than long ones.
 - **Selecting a bar moves the beat** to that bar; tapping a section (chips / Structure list) moves it to the section start.
 - **Suggestion bank (low API usage)**: one AI call writes ~30–40 bars for a section, organised as *rhyme families*
   (lines sharing an end rhyme, written so consecutive pairs form couplets). Next-bar suggestions are then served

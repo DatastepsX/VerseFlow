@@ -2,10 +2,12 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { analyzeAudio, decodeAudio } from "@/lib/audio/analyze-file";
-import { barLength, fmtTime, positionAt, sectionRanges } from "@/lib/audio/song-map";
+import { barLength, fmtTime, sectionRanges } from "@/lib/audio/song-map";
+import { buildTimeline, lineStart as timelineLineStart, positionIn, type Timeline } from "@/lib/audio/timeline";
 import { barAt, snapToBar, waveformPeaks } from "@/lib/audio/tempo";
 import { useWriter } from "./context";
 import { LyricsDialog } from "./LyricsDialog";
+import { TapSync } from "./TapSync";
 
 interface PlayerApi {
   hasAudio: boolean;
@@ -17,6 +19,8 @@ interface PlayerApi {
   setLoop: (sectionId: string | null) => void;
   toggle: () => void;
   seek: (t: number) => void;
+  /** where a line (index in section.lines) starts on the beat, if the section is on the beat */
+  lineStart: (sectionId: string, index: number) => number | null;
   playSection: (sectionId: string) => void;
   /** move the playhead to a section's start without changing play/pause */
   cueSection: (sectionId: string) => void;
@@ -50,10 +54,14 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const [status, setStatus] = useState<string | null>(null);
   const loopRef = useRef(loopId);
   const treeRef = useRef(tree);
+  // when each line starts on the beat: synced/tapped times, else estimated from the line lengths
+  const timeline = useMemo(() => buildTimeline(tree.sections, tree.audio, w.lang), [tree.sections, tree.audio, w.lang]);
+  const timelineRef = useRef<Timeline>(timeline);
   useEffect(() => {
     loopRef.current = loopId;
     treeRef.current = tree;
-  }, [loopId, tree]);
+    timelineRef.current = timeline;
+  }, [loopId, tree, timeline]);
 
   // load the stored beat once per file: one download feeds both playback and the waveform
   const filename = audioMeta?.filename;
@@ -96,7 +104,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
           const r = sectionRanges(t.sections, t.audio).get(loop);
           if (r && (a.currentTime >= r.end - 0.01 || a.currentTime < r.start - 0.5)) a.currentTime = r.start;
         }
-        const pos = positionAt(a.currentTime, t.sections, t.audio);
+        const pos = positionIn(timelineRef.current, a.currentTime);
         setPosition((prev) =>
           prev?.sectionId === pos?.sectionId && prev?.lineIndex === pos?.lineIndex ? prev : pos,
         );
@@ -118,9 +126,9 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     const a = audioRef.current;
     if (!a) return;
     a.currentTime = Math.max(0, t);
-    const tr = treeRef.current;
-    setPosition(positionAt(a.currentTime, tr.sections, tr.audio));
+    setPosition(positionIn(timelineRef.current, a.currentTime));
   }, []);
+  const lineStart = useCallback((sectionId: string, index: number) => timelineLineStart(timelineRef.current, sectionId, index), []);
 
   const playSection = useCallback(
     (sectionId: string) => {
@@ -197,6 +205,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       setLoop,
       toggle,
       seek,
+      lineStart,
       playSection,
       cueSection,
       now,
@@ -204,7 +213,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       upload,
       status,
     }),
-    [audioMeta, src, filename, playing, position, loopId, toggle, seek, playSection, cueSection, now, snappedNow, upload, status],
+    [audioMeta, src, filename, playing, position, loopId, toggle, seek, lineStart, playSection, cueSection, now, snappedNow, upload, status],
   );
 
   return (
@@ -282,6 +291,16 @@ function PlayerBar({ peaks, audioRef }: { peaks: number[]; audioRef: React.RefOb
   const expanded = mode === "full";
   const [bpmEdit, setBpmEdit] = useState<string | null>(null);
   const [lyricsOpen, setLyricsOpen] = useState(false);
+  const [tapOpen, setTapOpen] = useState(false);
+  const [syncNote, setSyncNote] = useState<string | null>(null);
+  const syncVocals = async () => {
+    setSyncNote("Syncing…");
+    const res = await w.mutate(`/api/projects/${w.tree.project.id}/lyrics`, { action: "sync" });
+    const n = res ? Number(res.headers.get("x-synced") ?? 0) : null;
+    setSyncNote(
+      n === null ? null : n ? `${n} lines synced to the vocals` : "No written line was found in the vocals — use 👆 Tap along",
+    );
+  };
   const waveRef = useRef<HTMLDivElement>(null);
 
   // fine-grained clock for this bar only
@@ -378,8 +397,9 @@ function PlayerBar({ peaks, audioRef }: { peaks: number[]; audioRef: React.RefOb
   return (
     <>
     {/* reserves room at the end of the page so the fixed player never covers the last lines */}
-    <div aria-hidden className={expanded ? "h-56" : "h-14"} />
+    <div aria-hidden className={`${expanded ? "h-56" : "h-14"} ${tapOpen ? "pb-20" : ""}`} />
     <div className="fixed inset-x-0 bottom-14 z-30 border-t border-line bg-panel/95 px-3 py-2 shadow-[0_-4px_16px_rgba(0,0,0,0.08)] backdrop-blur lg:bottom-0 lg:left-44 lg:right-[380px]">
+      {tapOpen && <TapSync onClose={() => setTapOpen(false)} />}
       <div className={`flex items-center gap-2 text-sm ${expanded ? "flex-wrap" : "flex-nowrap overflow-hidden"}`}>
         <button className="btn-primary w-16 justify-center" disabled={!p.ready} onClick={p.toggle} title="Play / pause (space)">
           {p.ready ? (p.playing ? "❚❚" : "▶") : "…"}
@@ -502,6 +522,16 @@ function PlayerBar({ peaks, audioRef }: { peaks: number[]; audioRef: React.RefOb
             <button className="btn px-2 py-0.5 text-xs" onClick={() => setLyricsOpen(true)} title="Read the vocals of this song and fill the free bars">
               🎤 Lyrics from beat
             </button>
+            <button
+              className="btn px-2 py-0.5 text-xs"
+              onClick={() => void syncVocals()}
+              title="Find each written line in the vocals read from this song and follow them exactly (no API call)"
+            >
+              🎯 Sync to vocals
+            </button>
+            <button className="btn px-2 py-0.5 text-xs" onClick={() => setTapOpen((v) => !v)} title="Tap while the song plays each time a line starts">
+              👆 Tap along
+            </button>
             {p.loopId && (
               <button className="btn-ghost px-1 text-xs text-accent" onClick={() => p.setLoop(null)}>
                 🔁 loop on — stop
@@ -525,6 +555,7 @@ function PlayerBar({ peaks, audioRef }: { peaks: number[]; audioRef: React.RefOb
             </button>
           </div>
           {p.status && <p className="mt-1 text-xs text-muted">{p.status}</p>}
+          {syncNote && <p className="mt-1 text-xs text-muted">{syncNote}</p>}
         </>
       )}
       {barLength(audio) === null && <p className="mt-1 text-xs text-warn">No tempo detected — enter the BPM to get bars.</p>}

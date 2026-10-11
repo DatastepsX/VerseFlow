@@ -27,24 +27,6 @@ export function sectionRanges(sections: Pick<Section, "id" | "audio_start">[], a
   return map;
 }
 
-/** Which section and which written line the playhead is on. */
-export function positionAt(
-  time: number,
-  sections: Pick<Section, "id" | "audio_start" | "bars_per_line">[],
-  audio: AudioTrack | null,
-) {
-  if (!audio) return null;
-  const ranges = sectionRanges(sections, audio);
-  const bl = barLength(audio);
-  for (const s of sections) {
-    const r = ranges.get(s.id);
-    if (!r || time < r.start || time >= r.end) continue;
-    const lineIndex = bl ? Math.floor((time - r.start + 0.02) / (bl * (s.bars_per_line || 1))) : null;
-    return { sectionId: s.id, lineIndex };
-  }
-  return null;
-}
-
 export function fmtTime(t: number) {
   if (!Number.isFinite(t)) return "0:00";
   const m = Math.floor(t / 60);
