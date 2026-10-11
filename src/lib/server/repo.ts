@@ -147,6 +147,9 @@ export async function updateProject(
 }
 
 export async function deleteProject(id: string) {
+  // the uploaded beats live in storage under the project's folder: remove them too
+  const { data: files } = await db().storage.from(BUCKET).list(id);
+  if (files?.length) await db().storage.from(BUCKET).remove(files.map((f) => `${id}/${f.name}`));
   check(await db().from("projects").delete().eq("id", id));
 }
 
