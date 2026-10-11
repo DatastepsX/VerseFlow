@@ -11,3 +11,6 @@
 - Schema changes: apply a migration to the Supabase project `verseflow` (ref `vqrwahhhusessvzvqfqb`) and keep
   `src/lib/types.ts` in sync.
 - Never let the AI modify lines with status APPROVED / APPROVED_EDITED; AI output is stored as `alternatives`.
+- Keep API usage low: next-bar suggestions come from the section's `bank_lines` via `src/lib/suggest.ts` (no API
+  call). Only add new AI calls when the user explicitly asks, label them in the UI ("· 1 call"), and log them
+  through `callJson` in `src/lib/server/ai.ts` (records `ai_calls`).

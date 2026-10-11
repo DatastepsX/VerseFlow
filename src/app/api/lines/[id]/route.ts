@@ -1,4 +1,4 @@
-import { addAlternatives, deleteLine, getTree, moveLine, updateLine } from "@/lib/server/repo";
+import { addAlternatives, deleteLine, getTree, moveLine, setBankState, updateLine } from "@/lib/server/repo";
 import { generateOptions } from "@/lib/server/ai";
 import { body, handle, pick, treeResponse } from "@/lib/server/http";
 import type { Line } from "@/lib/types";
@@ -10,6 +10,7 @@ export async function PATCH(req: Request, ctx: RouteContext<"/api/lines/[id]">) 
     const b = await body(req);
     const action = typeof b.action === "string" ? b.action : "edit";
     const projectId = await updateLine((await ctx.params).id, pick<Line>(b, ["text", "status", "kind", "note"]), action);
+    if (typeof b.bankId === "string") await setBankState(b.bankId, "used");
     return treeResponse(projectId);
   });
 }

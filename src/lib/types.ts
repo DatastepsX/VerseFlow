@@ -94,9 +94,29 @@ export interface Alternative {
   created_at: string;
 }
 
+/** A pre-generated bar in a section's suggestion bank (served locally, no API call). */
+export interface BankLine {
+  id: string;
+  section_id: string;
+  /** lines of the same family share an end rhyme; consecutive pairs (0-1, 2-3…) were written as couplets */
+  family: string;
+  family_pos: number;
+  text: string;
+  state: "available" | "used";
+}
+
+export interface AiUsage {
+  calls: number;
+  input_tokens: number;
+  output_tokens: number;
+}
+
 export interface ProjectTree {
   project: Project;
   sections: (Section & { lines: (Line & { alternatives: Alternative[] })[] })[];
+  /** bank lines (available + used) of all sections */
+  bank: BankLine[];
+  usage: AiUsage;
 }
 
 export interface LineEvent {

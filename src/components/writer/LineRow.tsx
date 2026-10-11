@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { analyzeLine, compareLines, type RhymeMatch } from "@/lib/rhyme/analyze";
 import type { Alternative, Line } from "@/lib/types";
+import { BankPicker } from "./Bank";
 import { useWriter } from "./context";
 import { AI_ACTIONS, isLocked, letterColor, STATUS_META } from "./util";
 
@@ -33,9 +34,13 @@ interface Props {
   targetSyllables: number | null;
   groupSize: number;
   isRap: boolean;
+  /** section line texts + this line's index, for bank suggestions */
+  sectionTexts: string[];
+  index: number;
+  scheme: string | null;
 }
 
-export function LineRow({ line, number, letter, partnerText, partnerNumber, targetSyllables, groupSize, isRap }: Props) {
+export function LineRow({ line, number, letter, partnerText, partnerNumber, targetSyllables, groupSize, isRap, sectionTexts, index, scheme }: Props) {
   const w = useWriter();
   const selected = w.selectedId === line.id;
   const [draft, setDraft] = useState(line.text);
@@ -203,12 +208,12 @@ export function LineRow({ line, number, letter, partnerText, partnerNumber, targ
               )}
               {w.aiEnabled && !rhythm && (
                 <button className="btn" disabled={busy} onClick={() => gen()}>
-                  {busy ? "…" : "✨ 3 options"}
+                  {busy ? "…" : "✨ AI options · 1 call"}
                 </button>
               )}
               {w.aiEnabled && !rhythm && groupSize > 1 && (
                 <button className="btn" disabled={busy} onClick={() => gen(undefined, "group")}>
-                  ✨ {groupSize === 2 ? "Couplet" : "Group"}
+                  ✨ {groupSize === 2 ? "Couplet" : "Group"} · 1 call
                 </button>
               )}
               <div className="relative">
@@ -283,6 +288,20 @@ export function LineRow({ line, number, letter, partnerText, partnerNumber, targ
               value={instruction}
               onChange={(e) => setInstruction(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && gen()}
+            />
+          )}
+
+          {!rhythm && !editing && (!isLocked(line) || !line.text.trim()) && w.tree.bank.some((b) => b.section_id === line.section_id) && (
+            <BankPicker
+              sectionId={line.section_id}
+              index={index}
+              texts={sectionTexts}
+              groupSize={groupSize}
+              scheme={scheme}
+              title={line.text.trim() ? "Replace from your bank" : "Fill from your bank"}
+              onUse={(b) =>
+                void w.mutate(`/api/lines/${line.id}`, { text: b.text, status: "APPROVED", bankId: b.id, action: "bank" }, "PATCH")
+              }
             />
           )}
 

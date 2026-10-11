@@ -3,9 +3,13 @@ import Anthropic from "@anthropic-ai/sdk";
 import { analyzeLine, lastWord } from "@/lib/rhyme/analyze";
 import { rhymePartners } from "@/lib/scheme";
 import { LANGUAGES, PROJECT_TYPES, type ProjectTree } from "@/lib/types";
-import { rejectedAlternatives } from "./repo";
+import { bankTexts, rejectedAlternatives, recordAiCall } from "./repo";
 
-const MODEL = "claude-opus-5-5";
+/** Overridable in Vercel env (e.g. claude-sonnet-5-5 or claude-haiku-5-5 for lower cost). */
+const MODEL = process.env.AI_MODEL || "claude-opus-5-5";
+const EFFORT = (process.env.AI_EFFORT || "medium") as "low" | "medium" | "high";
+// server-side refusal fallback is supported on these models only
+const FALLBACKS = /^claude-(opus-5|fable-5|sonnet-5-5)/.test(MODEL);
 
 export class AiUnavailable extends Error {}
 
@@ -155,23 +159,134 @@ ${current.length ? `Current text of the target (offer alternatives to it): ${cur
 ${rejected.length ? `Already rejected — do not repeat or closely paraphrase:\n${rejected.map((r) => `- ${r.text.replace(/\n/g, " / ")}`).join("\n")}` : ""}
 Each option's "lines" array must contain exactly ${targetIdx.length} line${targetIdx.length > 1 ? "s" : ""}.`;
 
-  const client = new Anthropic();
-  const response = await client.beta.messages.create({
-    model: MODEL,
-    max_tokens: 16000,
-    betas: ["server-side-fallback-2026-07-01"],
-    fallbacks: "default",
-    output_config: { effort: "medium", format: { type: "json_schema", schema: OUTPUT_SCHEMA } },
-    system: SYSTEM,
-    messages: [{ role: "user", content: prompt }],
-  });
-  if (response.stop_reason === "refusal") throw new Error("The AI declined this request. Try rephrasing the direction.");
-  const text = response.content.find((b) => b.type === "text");
-  if (!text || text.type !== "text") throw new Error("Empty AI response");
-  const parsed = JSON.parse(text.text) as { options: { lines: string[] }[] };
+  const parsed = await callJson<{ options: { lines: string[] }[] }>(project.id, "line_options", prompt, OUTPUT_SCHEMA);
   const options = parsed.options
     .map((o) => o.lines.map((l) => l.trim()).filter(Boolean))
     .filter((o) => o.length === targetIdx.length)
     .slice(0, count);
   return { targetIds: targetIdx.map((k) => lines[k].id), options };
+}
+
+async function callJson<T>(projectId: string, kind: string, prompt: string, schema: object, system = SYSTEM): Promise<T> {
+  const client = new Anthropic();
+  const response = await client.beta.messages.create({
+    model: MODEL,
+    max_tokens: 16000,
+    ...(FALLBACKS ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const } : {}),
+    output_config: { effort: EFFORT, format: { type: "json_schema", schema: schema as Record<string, unknown> } },
+    system,
+    messages: [{ role: "user", content: prompt }],
+  });
+  await recordAiCall(projectId, kind, response.model, response.usage).catch(() => {});
+  if (response.stop_reason === "refusal") throw new Error("The AI declined this request. Try rephrasing the direction.");
+  if (response.stop_reason === "max_tokens") throw new Error("The AI response was cut off — try again.");
+  const text = response.content.find((b) => b.type === "text");
+  if (!text || text.type !== "text") throw new Error("Empty AI response");
+  return JSON.parse(text.text) as T;
+}
+
+// ---------- suggestion bank ----------
+
+const BANK_SCHEMA = {
+  type: "object",
+  properties: {
+    families: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          rhyme: { type: "string" },
+          lines: { type: "array", items: { type: "string" } },
+        },
+        required: ["rhyme", "lines"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["families"],
+  additionalProperties: false,
+};
+
+export interface BankRequest {
+  tree: ProjectTree;
+  sectionId: string;
+  /** line texts whose ending needs rhyming partners (e.g. an unpaired line) */
+  targets: string[];
+  /** number of new rhyme families to invent */
+  newFamilies: number;
+  linesPerFamily: number;
+  instruction?: string;
+}
+
+/**
+ * One API call that stocks a section with many candidate bars, organised as
+ * rhyme families. The app then serves next-bar suggestions from this bank
+ * locally (rhyme + syllable matching), without further API calls.
+ */
+export async function fillBank(req: BankRequest): Promise<{ rhyme: string; lines: string[] }[]> {
+  if (!aiConfigured()) throw new AiUnavailable("AI is not configured yet (ANTHROPIC_API_KEY missing).");
+  const { tree, sectionId } = req;
+  const { project } = tree;
+  const section = tree.sections.find((s) => s.id === sectionId);
+  if (!section) throw new Error("Section not found");
+  const lang = project.language;
+  const lines = section.lines;
+  const g = Math.max(1, section.group_size);
+
+  const decided = lines.filter((l) => l.kind === "lyric" && l.text.trim() && l.status !== "DECLINED");
+  const rhythmRefs = lines.filter((l) => l.kind === "rhythm_ref" && l.text.trim());
+  const sylFrom = rhythmRefs.length ? rhythmRefs : decided;
+  const avgSyl = sylFrom.length
+    ? Math.round(sylFrom.reduce((n, l) => n + analyzeLine(l.text, lang).syllables, 0) / sylFrom.length)
+    : null;
+
+  const [rejected, available] = await Promise.all([bankTexts(sectionId, "rejected", 40), bankTexts(sectionId, "available", 60)]);
+  const targets = [...new Set(req.targets.map((t) => t.trim()).filter(Boolean))].slice(0, 4);
+  const n = req.linesPerFamily;
+
+  const sectionText = lines.length
+    ? lines
+        .map((l, k) => {
+          const tag = l.kind === "rhythm_ref" ? "[RHYTHM] " : l.status === "DECLINED" ? "[DECLINED] " : "";
+          return `${k > 0 && k % g === 0 ? "\n" : ""}${k + 1}. ${tag}${l.text || "(empty)"}`;
+        })
+        .join("\n")
+    : "(no lines yet)";
+
+  const otherSections = tree.sections
+    .filter((s) => s.id !== section.id && s.lines.some((l) => l.text.trim()))
+    .map((s) => `${s.name}:\n` + s.lines.filter((l) => l.kind === "lyric" && l.text.trim() && l.status !== "DECLINED").map((l) => `  ${l.text}`).join("\n"))
+    .join("\n\n");
+
+  const st = project.settings ?? {};
+  const targetSpec = targets
+    .map((t, i) => {
+      const a = analyzeLine(t, lang);
+      return `  T${i + 1}. ${n} lines that rhyme exactly with “${t}” (ending “${lastWord(t)}”, sound -${a.rhymeKey}); set "rhyme" to "-${a.rhymeKey}".`;
+    })
+    .join("\n");
+
+  const prompt = `PROJECT
+Title: ${project.title}
+Type: ${PROJECT_TYPES.find((t) => t.value === project.type)?.label ?? project.type}
+Language: ${langName(lang)}${st.secondaryLanguage ? ` (occasional ${st.secondaryLanguage} words are welcome)` : ""}
+${st.genre ? `Genre: ${st.genre}\n` : ""}${st.style ? `Style / references: ${st.style}\n` : ""}${st.mood ? `Mood: ${st.mood}\n` : ""}${st.simpleLanguage ? "Vocabulary: simple, modern, direct — avoid overly poetic words\n" : ""}${st.explicitness ? `Explicit content: ${st.explicitness}\n` : ""}${project.concept ? `Story / concept: ${project.concept}\n` : ""}
+${otherSections ? `OTHER SECTIONS (context only)\n${otherSections}\n\n` : ""}CURRENT SECTION: ${section.name}${section.story_beat ? `\nStory beat: ${section.story_beat}` : ""}${section.intensity ? `\nEmotional intensity: ${section.intensity}/10` : ""}${section.notes ? `\nNotes: ${section.notes}` : ""}
+${sectionText}
+
+TASK — build a bank of candidate bars the writer can pick from while continuing this section.
+Organise them as rhyme families: every line in a family ends with the same rhyme sound (exact rhyme).
+Inside each family, write the lines so that lines 1+2, 3+4, 5+6 … each form a coherent ${g === 1 ? "pair" : "couplet"}, and every line also works on its own as a next bar.
+${targetSpec ? `Families that answer existing lines (write these first):\n${targetSpec}\n` : ""}Then ${req.newFamilies} new families on ${req.newFamilies} different rhyme sounds, ${n} lines each, that continue the story from the last lines and move it forward (vary the images and angles; no filler).
+${avgSyl ? `Every line about ${avgSyl} syllables (±2).` : "Keep lines a natural, performable length."}
+${req.instruction ? `Writer's direction: ${req.instruction}` : ""}
+${available.length ? `Already in the bank — do not repeat:\n${available.map((t) => `- ${t}`).join("\n")}` : ""}
+${rejected.length ? `Rejected by the writer — avoid similar lines:\n${rejected.map((t) => `- ${t}`).join("\n")}` : ""}
+Do not repeat lines that already exist in the song. "rhyme" is a short label of the shared ending (e.g. "-ore").`;
+
+  const parsed = await callJson<{ families: { rhyme: string; lines: string[] }[] }>(project.id, "bank", prompt, BANK_SCHEMA);
+  const existing = new Set(lines.map((l) => l.text.trim().toLowerCase()));
+  return parsed.families
+    .map((f) => ({ rhyme: f.rhyme.slice(0, 20), lines: f.lines.map((l) => l.trim()).filter((l) => l && !existing.has(l.toLowerCase())) }))
+    .filter((f) => f.lines.length > 0);
 }

@@ -70,6 +70,20 @@ export function Writer({ initial, aiEnabled }: { initial: ProjectTree; aiEnabled
     [mutate, pid],
   );
 
+  const [filling, setFilling] = useState<Set<string>>(new Set());
+  const fillBank = useCallback(
+    async (sectionId: string, targets: string[] = []) => {
+      setFilling((s) => new Set(s).add(sectionId));
+      await mutate(`/api/sections/${sectionId}`, { action: "fillBank", targets });
+      setFilling((s) => {
+        const n = new Set(s);
+        n.delete(sectionId);
+        return n;
+      });
+    },
+    [mutate],
+  );
+
   const lookupRhyme = useCallback((text: string) => {
     setRhymeQuery(text);
     setTab("rhymes");
@@ -96,9 +110,11 @@ export function Writer({ initial, aiEnabled }: { initial: ProjectTree; aiEnabled
         }
       },
       lookupRhyme,
+      filling,
+      fillBank,
       aiEnabled,
     }),
-    [tree, mutate, selectedId, generating, generate, lookupRhyme, aiEnabled, showError],
+    [tree, mutate, selectedId, generating, generate, lookupRhyme, filling, fillBank, aiEnabled, showError],
   );
 
   useEffect(() => {
@@ -160,6 +176,7 @@ export function Writer({ initial, aiEnabled }: { initial: ProjectTree; aiEnabled
             <h1 className="truncate font-semibold leading-tight">{tree.project.title}</h1>
             <p className="truncate text-xs text-muted">
               {typeLabel} · {tree.project.language.toUpperCase()} · {approved}/{totalLines} approved
+              {aiEnabled ? ` · AI: ${tree.usage.calls} call${tree.usage.calls === 1 ? "" : "s"}${tree.usage.calls ? `, ${Math.round((tree.usage.input_tokens + tree.usage.output_tokens) / 100) / 10}k tokens` : ""}` : ""}
               {pending > 0 ? " · saving…" : ""}
             </p>
           </div>

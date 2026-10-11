@@ -5,6 +5,7 @@ import { analyzeLine, compareLines, lastWord, rhymeScheme } from "@/lib/rhyme/an
 import { rhymePartners } from "@/lib/scheme";
 import type { ProjectTree } from "@/lib/types";
 import { useWriter } from "./context";
+import { BankPicker } from "./Bank";
 import { LineRow, RhymeBadge } from "./LineRow";
 
 type SectionT = ProjectTree["sections"][number];
@@ -71,6 +72,9 @@ export function SectionBlock({ section, index, total }: { section: SectionT; ind
                   targetSyllables={targetSyl}
                   groupSize={g}
                   isRap={isRap}
+                  sectionTexts={texts}
+                  index={k}
+                  scheme={section.rhyme_scheme}
                 />
               );
             })}
@@ -86,6 +90,7 @@ export function SectionBlock({ section, index, total }: { section: SectionT; ind
 function Composer({ section, texts, targetSyl, offset }: { section: SectionT; texts: string[]; targetSyl: number | null; offset: number }) {
   const w = useWriter();
   const [text, setText] = useState("");
+  const [bankId, setBankId] = useState<string | null>(null);
   const [asDraft, setAsDraft] = useState(false);
   const [busy, setBusy] = useState(false);
   const g = Math.max(1, section.group_size);
@@ -98,32 +103,20 @@ function Composer({ section, texts, targetSyl, offset }: { section: SectionT; te
   const match = a && pa ? compareLines(a, pa) : null;
   const startsGroup = nextIdx % g === 0 && g > 1;
 
-  const add = async () => {
-    const t = text.trim();
+  const add = async (t = text.trim(), fromBank = bankId) => {
     if (!t || busy) return;
     setBusy(true);
-    const res = await w.mutate(`/api/sections/${section.id}`, { action: "addLine", text: t, status: asDraft ? "OPEN" : "APPROVED" });
+    const res = await w.mutate(`/api/sections/${section.id}`, {
+      action: "addLine",
+      text: t,
+      status: asDraft ? "OPEN" : "APPROVED",
+      bankId: fromBank ?? undefined,
+    });
     setBusy(false);
-    if (res) setText("");
-  };
-
-  const suggest = async (scope: "line" | "group") => {
-    setBusy(true);
-    const res = await w.mutate(`/api/sections/${section.id}`, { action: "addLine", text: "", status: "OPEN" });
-    setBusy(false);
-    const id = res?.headers.get("x-line-id");
-    if (!id) return;
-    w.select(id);
-    if (scope === "group") {
-      // make room for the rest of the group, then ask for whole-group options
-      let prev = id;
-      for (let k = 1; k < g; k++) {
-        const r = await w.mutate(`/api/sections/${section.id}`, { action: "addLine", text: "", status: "OPEN", afterLineId: prev });
-        prev = r?.headers.get("x-line-id") ?? prev;
-      }
+    if (res) {
+      setText("");
+      setBankId(null);
     }
-    await w.generate(id, { scope, instruction: text.trim() ? `Idea to build on: ${text.trim()}` : undefined });
-    setText("");
   };
 
   return (
@@ -167,19 +160,24 @@ function Composer({ section, texts, targetSyl, offset }: { section: SectionT; te
         <label className="flex items-center gap-1">
           <input type="checkbox" checked={asDraft} onChange={(e) => setAsDraft(e.target.checked)} /> add as draft
         </label>
-        {w.aiEnabled && (
-          <span className="ml-auto flex gap-1.5">
-            <button className="btn px-2 py-1 text-xs" disabled={busy} onClick={() => void suggest("line")}>
-              ✨ Suggest next line
-            </button>
-            {g > 1 && startsGroup && (
-              <button className="btn px-2 py-1 text-xs" disabled={busy} onClick={() => void suggest("group")}>
-                ✨ Suggest {g === 2 ? "couplet" : "group"}
-              </button>
-            )}
-          </span>
-        )}
       </div>
+      {(w.aiEnabled || w.tree.bank.some((b) => b.section_id === section.id)) && (
+        <div className="mt-2 border-t border-line pl-8 pt-2">
+          <BankPicker
+            sectionId={section.id}
+            index={nextIdx}
+            texts={texts}
+            groupSize={g}
+            scheme={section.rhyme_scheme}
+            title={pa ? "Next bar from your bank" : "Start the next " + (g === 2 ? "couplet" : g > 2 ? "group" : "line")}
+            onUse={(b) => void add(b.text, b.id)}
+            onEdit={(b) => {
+              setText(b.text);
+              setBankId(b.id);
+            }}
+          />
+        </div>
+      )}
     </div>
   );
 }

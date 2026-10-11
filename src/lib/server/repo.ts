@@ -1,7 +1,9 @@
 import "server-only";
 import { check, db } from "./db";
 import type {
+  AiUsage,
   Alternative,
+  BankLine,
   Line,
   LineEvent,
   LineKind,
@@ -78,7 +80,7 @@ export async function createProject(input: {
 }
 
 export async function getTree(projectId: string): Promise<ProjectTree> {
-  const [p, s, l, a] = await Promise.all([
+  const [p, s, l, a, b, u] = await Promise.all([
     db().from("projects").select("*").eq("id", projectId).maybeSingle(),
     db().from("sections").select("*").eq("project_id", projectId).order("position"),
     db().from("lines").select(LINE_COLS).eq("project_id", projectId).eq("deleted", false).order("position"),
@@ -88,12 +90,27 @@ export async function getTree(projectId: string): Promise<ProjectTree> {
       .eq("project_id", projectId)
       .eq("state", "pending")
       .order("created_at"),
+    db()
+      .from("bank_lines")
+      .select("id, section_id, family, family_pos, text, state")
+      .eq("project_id", projectId)
+      .in("state", ["available", "used"])
+      .order("created_at")
+      .order("family_pos"),
+    db().from("ai_calls").select("input_tokens, output_tokens").eq("project_id", projectId),
   ]);
   const project = check(p) as Project | null;
   if (!project) throw new NotFound("Project not found");
   const sections = check(s) as Section[];
   const lines = check(l) as Line[];
   const alts = check(a) as Alternative[];
+  const bank = check(b) as BankLine[];
+  const calls = check(u) as { input_tokens: number; output_tokens: number }[];
+  const usage: AiUsage = {
+    calls: calls.length,
+    input_tokens: calls.reduce((n, c) => n + c.input_tokens, 0),
+    output_tokens: calls.reduce((n, c) => n + c.output_tokens, 0),
+  };
   const altsByLine = new Map<string, Alternative[]>();
   for (const alt of alts) (altsByLine.get(alt.line_id) ?? altsByLine.set(alt.line_id, []).get(alt.line_id)!).push(alt);
   return {
@@ -104,6 +121,8 @@ export async function getTree(projectId: string): Promise<ProjectTree> {
         .filter((ln) => ln.section_id === sec.id)
         .map((ln) => ({ ...ln, alternatives: altsByLine.get(ln.id) ?? [] })),
     })),
+    bank,
+    usage,
   };
 }
 
@@ -495,4 +514,71 @@ export async function restoreVersion(versionId: string) {
   await insertSnapshot(v.project_id, v.snapshot, false);
   await touch(v.project_id);
   return v.project_id;
+}
+
+// ---------- suggestion bank + AI usage ----------
+
+export async function insertBank(
+  projectId: string,
+  sectionId: string,
+  families: { rhyme: string; lines: string[] }[],
+) {
+  const batch_id = crypto.randomUUID();
+  const rows = families.flatMap((f, fi) =>
+    f.lines
+      .map((t) => t.trim())
+      .filter(Boolean)
+      .map((text, pos) => ({
+        project_id: projectId,
+        section_id: sectionId,
+        family: `${batch_id.slice(0, 8)}:${fi}:${f.rhyme}`,
+        family_pos: pos,
+        text,
+        batch_id,
+      })),
+  );
+  if (rows.length) check(await db().from("bank_lines").insert(rows));
+  return rows.length;
+}
+
+export async function setBankState(id: string, state: "used" | "rejected" | "available") {
+  const row = check(await db().from("bank_lines").update({ state }).eq("id", id).select("project_id").single()) as {
+    project_id: string;
+  };
+  return row.project_id;
+}
+
+export async function clearBank(sectionId: string) {
+  check(await db().from("bank_lines").update({ state: "rejected" }).eq("section_id", sectionId).eq("state", "available"));
+}
+
+export async function bankTexts(sectionId: string, state: "rejected" | "available", limit = 40) {
+  return (
+    check(
+      await db()
+        .from("bank_lines")
+        .select("text")
+        .eq("section_id", sectionId)
+        .eq("state", state)
+        .order("created_at", { ascending: false })
+        .limit(limit),
+    ) as { text: string }[]
+  ).map((r) => r.text);
+}
+
+export async function recordAiCall(
+  projectId: string,
+  kind: string,
+  model: string,
+  usage: { input_tokens?: number | null; output_tokens?: number | null },
+) {
+  await db()
+    .from("ai_calls")
+    .insert({
+      project_id: projectId,
+      kind,
+      model,
+      input_tokens: usage.input_tokens ?? 0,
+      output_tokens: usage.output_tokens ?? 0,
+    });
 }

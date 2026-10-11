@@ -23,6 +23,10 @@ export interface WriterApi {
   setInsertTarget: (fn: ((word: string) => void) | null) => void;
   insertWord: (word: string) => void;
   lookupRhyme: (text: string) => void;
+  /** sections whose bank is being filled */
+  filling: Set<string>;
+  /** one AI call that stocks a section's suggestion bank */
+  fillBank: (sectionId: string, targets?: string[]) => Promise<void>;
   aiEnabled: boolean;
 }
 

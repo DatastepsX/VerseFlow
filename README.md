@@ -19,9 +19,16 @@ Product spec: see the original `verseflow_product_spec.md` (Phase 1 + core of Ph
   - automatic rhyme-scheme letters (A, B, …) per section, partner check (“should rhyme with line 3”), syllable target per section
   - English: heuristic analysis (Datamuse for the rhyme dictionary)
 - **Rhyme dictionary** (`/api/rhymes`): Italian index of ~120k words ranked by frequency; English via Datamuse
-- **AI alternatives** (Claude): 3 options for a line, a whole couplet, or the next line; quick directions
-  (shorter, more aggressive, better rhyme, fit rhythm, …). The prompt receives locked lines, rhyme requirement,
-  syllable target, story beat, style settings and previously rejected options.
+- **Suggestion bank (low API usage)**: one AI call writes ~30–40 bars for a section, organised as *rhyme families*
+  (lines sharing an end rhyme, written so consecutive pairs form couplets). Next-bar suggestions are then served
+  **locally** from the bank (`src/lib/suggest.ts`): a slot that must rhyme only gets bars that the rhyme engine
+  confirms rhyme; an opening slot gets one bar per family, preferring families that still have partners; after
+  using a bank bar, its couplet partner ranks first. Rejected bars are never shown again and are sent as
+  "avoid" in the next fill. A new AI call is only offered when nothing in the bank fits (e.g. “Get bars rhyming
+  with ‘distante’”), or explicitly via a line's “AI options”.
+- **AI options on demand** (Claude): 3 options for a line or a whole couplet, with quick directions
+  (shorter, more aggressive, better rhyme, fit rhythm, …) — each is one call, labelled in the UI.
+- **Usage tracking**: every AI call is logged (`ai_calls`: kind, model, tokens); the header shows calls/tokens per project.
 - **History**: every line change is an event → undo / redo (Ctrl/Cmd+Z), restore a previous text, named **versions** with restore
 - **Full version** panel with copy / .txt / .md export (all lines or approved only)
 - **Recording mode** (`/p/:id/record`): dark, large type, A−/A+, line numbers, auto-scroll, jump to section
@@ -40,7 +47,7 @@ Next.js 16 (App Router, React 19, Tailwind 4)  — deployed on Vercel
 ```
 
 Database: Supabase project `verseflow` (tables `projects`, `sections`, `lines`, `alternatives`, `line_events`,
-`project_versions`). The DB key is used **server-side only**. Until user accounts exist, access is protected by a
+`project_versions`, `bank_lines`, `ai_calls`). The DB key is used **server-side only**. Until user accounts exist, access is protected by a
 single shared password (`APP_PASSWORD`).
 
 ## Environment variables
@@ -51,6 +58,8 @@ single shared password (`APP_PASSWORD`).
 | `SUPABASE_KEY` | Supabase API key (server only) |
 | `ANTHROPIC_API_KEY` | enables AI suggestions (optional — the app works without it) |
 | `APP_PASSWORD` | shared access password (if unset, the app is open) |
+| `AI_MODEL` | Claude model (default `claude-opus-5-5`; e.g. `claude-sonnet-5-5` / `claude-haiku-5-5` cost less) |
+| `AI_EFFORT` | `low` / `medium` (default) / `high` — lower = fewer thinking tokens |
 
 ## Development
 

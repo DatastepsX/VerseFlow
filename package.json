@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "node --import tsx --test src/**/*.test.ts"
+    "test": "node --import tsx --test src/lib/**/*.test.ts src/lib/*.test.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.133.0",
