@@ -309,3 +309,38 @@ Do not repeat lines that already exist in the song. "rhyme" is a short label of 
     .map((f) => ({ rhyme: f.rhyme.slice(0, 20), lines: f.lines.map((l) => l.trim()).filter((l) => l && !existing.has(l.toLowerCase())) }))
     .filter((f) => f.lines.length > 0);
 }
+
+// ---------- fit one line to a length ----------
+
+const FIT_SCHEMA = {
+  type: "object",
+  properties: { lines: { type: "array", items: { type: "string" } } },
+  required: ["lines"],
+  additionalProperties: false,
+};
+
+/**
+ * Rewrite one line (the writer's own text or a chosen bar) so it fits the
+ * rhythm of the line before — same meaning, same last word (keeps the rhyme).
+ * One small AI call; the results are stored in the bank for reuse.
+ */
+export async function fitLine(opts: { tree: ProjectTree; sectionId: string; text: string; reference: string; count?: number }) {
+  if (!aiConfigured()) throw new AiUnavailable("AI is not configured yet (ANTHROPIC_API_KEY missing).");
+  const { tree, text, reference } = opts;
+  const lang = tree.project.language;
+  const ref = prosody(reference, lang);
+  const cur = prosody(text, lang);
+  const end = lastWord(text);
+  const prompt = `Language: ${langName(lang)}. ${tree.project.settings?.simpleLanguage ? "Simple, modern wording." : ""}
+Line before (rhythm template): “${reference}” → ${describeRhythm(ref, lang)}
+Line to fit: “${text}” → ${cur.syllables} syllables
+
+Rewrite the line to fit the template: exactly ${ref.syllables} sung syllables (count vowel merges between words), stresses in the same places, same ending type.
+Keep its meaning and image, keep the final word “${end}” (it carries the rhyme), sound natural and performable — no filler padding.
+Return ${opts.count ?? 3} different versions.`;
+  const parsed = await callJson<{ lines: string[] }>(tree.project.id, "fit_line", prompt, FIT_SCHEMA);
+  return parsed.lines
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .slice(0, opts.count ?? 3);
+}

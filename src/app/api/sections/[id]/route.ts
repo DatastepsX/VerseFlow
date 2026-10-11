@@ -1,4 +1,4 @@
-import { fillBank } from "@/lib/server/ai";
+import { fillBank, fitLine } from "@/lib/server/ai";
 import { addLine, clearBank, deleteSection, getTree, insertBank, moveSection, setBankState, updateSection } from "@/lib/server/repo";
 import { rhymePartners } from "@/lib/scheme";
 import { db } from "@/lib/server/db";
@@ -37,6 +37,7 @@ export async function POST(req: Request, ctx: RouteContext<"/api/sections/[id]">
       targets?: string[];
       instruction?: string;
       replace?: boolean;
+      reference?: string;
     }>(req);
     if (b.action === "addLine") {
       const line = await addLine(id, { text: b.text, status: b.status, kind: b.kind, afterLineId: b.afterLineId });
@@ -44,6 +45,14 @@ export async function POST(req: Request, ctx: RouteContext<"/api/sections/[id]">
       const res = await treeResponse(line.project_id);
       res.headers.set("x-line-id", line.id);
       return res;
+    }
+    if (b.action === "fitText") {
+      // 1 AI call: rewrite the writer's line to the length/flow of the line before; stored in the bank
+      if (!b.text?.trim() || !b.reference?.trim()) return Response.json({ error: "text and reference required" }, { status: 400 });
+      const s = await sectionProject(id);
+      const lines = await fitLine({ tree: await getTree(s), sectionId: id, text: b.text.slice(0, 300), reference: b.reference.slice(0, 300) });
+      await insertBank(s, id, [{ rhyme: "fit", lines }]);
+      return treeResponse(s);
     }
     if (b.action === "fillBank") {
       // one AI call that stocks this section with rhyme families of candidate bars

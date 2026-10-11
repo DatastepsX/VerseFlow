@@ -142,6 +142,9 @@ function Composer({
   const w = useWriter();
   const [text, setText] = useState("");
   const [bankId, setBankId] = useState<string | null>(null);
+  // "fit my line" results: bank lines created by the last fit call
+  const [fitBefore, setFitBefore] = useState<Set<string> | null>(null);
+  const [fitting, setFitting] = useState(false);
   const [asDraft, setAsDraft] = useState(false);
   const [busy, setBusy] = useState(false);
   const g = Math.max(1, section.group_size);
@@ -157,6 +160,17 @@ function Composer({
   const rhythmRefLine = section.lines.find((l) => l.kind === "rhythm_ref" && l.text.trim())?.text;
   const refText = rhythmReference(texts, nextIdx, rhythmRefLine);
   const refProsody = refText ? prosody(refText, w.lang) : null;
+  const fitted = fitBefore
+    ? w.tree.bank.filter((b) => b.section_id === section.id && b.state === "available" && b.family.endsWith(":fit") && !fitBefore.has(b.id))
+    : [];
+  const sylGap = text.trim() && refProsody ? prosody(text, w.lang).syllables - refProsody.syllables : 0;
+  const fitText = async () => {
+    if (!refText) return;
+    setFitting(true);
+    setFitBefore(new Set(w.tree.bank.map((b) => b.id)));
+    await w.mutate(`/api/sections/${section.id}`, { action: "fitText", text: text.trim(), reference: refText });
+    setFitting(false);
+  };
   const bankSize = w.tree.bank.filter((b) => b.section_id === section.id).length;
   // bars already generated anywhere in the project that fit this slot (free)
   const reusable = suggestForSlot({
@@ -229,6 +243,16 @@ function Composer({
             setBankId(null);
           }}
         />
+        {w.aiEnabled && Math.abs(sylGap) >= 3 && (
+          <button
+            className="btn px-2 py-0.5 text-xs"
+            disabled={fitting}
+            onClick={() => void fitText()}
+            title="Rewrite your line to the length and flow of the line before — same meaning, same last word"
+          >
+            {fitting ? "Fitting…" : `✨ Fit to ${refProsody?.syllables} syl · 1 call`}
+          </button>
+        )}
         {pa && (
           <span className="flex items-center gap-1">
             rhyme with “{lastWord(partnerText)}” (-{pa.rhymeKey}) {match && <RhymeBadge match={match} />}
@@ -243,6 +267,22 @@ function Composer({
           <input type="checkbox" checked={asDraft} onChange={(e) => setAsDraft(e.target.checked)} /> add as draft
         </label>
       </div>
+      {fitted.length > 0 && (
+        <div className="mt-2 space-y-1 pl-8">
+          <div className="text-[11px] font-semibold uppercase tracking-wide">Your line, fitted to {refProsody?.syllables} syllables</div>
+          {fitted.map((b) => (
+            <div key={b.id} className="flex items-baseline gap-2 rounded-md border border-accent/40 bg-accent-soft/40 px-2.5 py-1.5">
+              <button className="min-w-0 flex-1 text-left text-[16px] leading-snug hover:text-accent" onClick={() => void add(b.text, b.id)}>
+                {b.text}
+              </button>
+              <span className="font-mono text-[11px] text-muted">{prosody(b.text, w.lang).syllables}</span>
+              <button className="btn-ghost px-1 py-0 text-xs" title="Edit before using" onClick={() => (setText(b.text), setBankId(b.id))}>
+                ✎
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
       {written >= 1 && (
         <div className="mt-2 border-t border-line pl-8 pt-2">
           <BankPicker

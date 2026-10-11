@@ -51,6 +51,9 @@ export function BankPicker({
     sectionId,
   });
   const filling = w.filling.has(sectionId);
+  // the bank has bars, but none flows like the line before → say so and offer better ones
+  const bestFit = suggestions.reduce((m, x) => Math.max(m, x.rhythm), 0);
+  const poorFit = !!reference && suggestions.length > 0 && bestFit < 0.6;
   const written = texts.filter((t) => t.trim()).length;
   const fillLabel =
     partnerText && matches === 0
@@ -151,14 +154,25 @@ export function BankPicker({
         </p>
       )}
 
-      {w.aiEnabled && !filling && (suggestions.length < 3 || available < 6) && (
+      {poorFit && (
+        <p className="rounded-md bg-warn-soft px-2.5 py-1.5 text-xs text-warn">
+          These bars don&apos;t flow like the line before ({reference!.prosody.syllables} syllables) — get bars written for it below, or adjust one with − / +.
+        </p>
+      )}
+
+      {w.aiEnabled && !filling && (suggestions.length < 3 || available < 6 || poorFit) && (
         <button
           className="btn px-2 py-1 text-xs"
           disabled={filling}
-          onClick={() => void w.fillBank(sectionId, partnerText && matches === 0 ? [partnerText] : [])}
+          onClick={() => void w.fillBank(sectionId, partnerText && (matches === 0 || poorFit) ? [partnerText] : [])}
           title="One AI call writes ~30–40 bars for this section; afterwards suggestions are free"
         >
-          {available === 0 ? "✨ Show options now" : fillLabel} · 1 AI call
+          {available === 0
+            ? "✨ Show options now"
+            : poorFit
+              ? `✨ Get ${reference!.prosody.syllables}-syllable bars${partnerText ? ` rhyming with “${lastWord(partnerText)}”` : ""}`
+              : fillLabel}{" "}
+          · 1 AI call
         </button>
       )}
     </div>
