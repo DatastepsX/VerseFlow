@@ -6,6 +6,7 @@ import { sectionPattern } from "@/lib/pattern";
 import { prosody } from "@/lib/rhyme/prosody";
 import type { ProjectTree } from "@/lib/types";
 import { useWriter } from "./context";
+import { Spinner } from "./Spinner";
 
 /** bars the server drafts per call (DRAFT_CHUNK in src/lib/server/ai.ts) — used for the call count label */
 const DRAFT_CHUNK = 8;
@@ -180,12 +181,12 @@ export function SectionWorkflow({ section }: { section: SectionT }) {
               onClick={() => void run("fill")}
               title="Writes every open bar with 3 options each, following the pattern and the rhyme scheme"
             >
-              {busy === "fill" ? `Writing bars${working}` : `✨ Fill ${open} bars · ${callLabel(open)}`}
+              {busy === "fill" ? <><Spinner /> {`Writing bars${working}`}</> : `✨ Fill ${open} bars · ${callLabel(open)}`}
             </button>
           )}
           {w.aiEnabled && replace > 0 && (
             <button className="btn-primary px-2 py-1 text-xs" disabled={!!busy} onClick={() => void run("replace")} title="New options only for the bars marked ✕, fitting the bars you keep">
-              {busy === "replace" ? `Rewriting${working}` : `↻ Replace ${replace} marked · ${callLabel(replace)}`}
+              {busy === "replace" ? <><Spinner /> {`Rewriting${working}`}</> : `↻ Replace ${replace} marked · ${callLabel(replace)}`}
             </button>
           )}
           {w.aiEnabled && polishable > 0 && (
@@ -195,12 +196,12 @@ export function SectionWorkflow({ section }: { section: SectionT }) {
               onClick={() => void run("polish")}
               title="3 improved versions of every line you haven't approved yet — your text stays, the versions appear under ↻ on each line"
             >
-              {busy === "polish" ? `Polishing${working}` : `✨ Polish ${polishable} lines · ${callLabel(polishable)}`}
+              {busy === "polish" ? <><Spinner /> {`Polishing${working}`}</> : `✨ Polish ${polishable} lines · ${callLabel(polishable)}`}
             </button>
           )}
           {review > 0 && (
             <button className="btn px-2 py-1 text-xs" disabled={!!busy} onClick={() => void run("keepAll")}>
-              ✓ Keep all {review} drafts
+              {busy === "keep" ? <Spinner /> : "✓"} Keep all {review} drafts
             </button>
           )}
           {!w.aiEnabled && <span className="text-warn">AI is off (no API key)</span>}

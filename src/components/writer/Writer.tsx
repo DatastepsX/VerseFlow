@@ -211,6 +211,12 @@ export function Writer({ initial, aiEnabled }: { initial: ProjectTree; aiEnabled
           </Link>
         </header>
         <SectionNav />
+        {(pending > 0 || generating.size > 0 || filling.size > 0) && (
+          // something is being saved or the AI is writing: a thin moving bar at the top of the screen
+          <div className="pointer-events-none fixed inset-x-0 top-0 z-50 h-[3px] overflow-hidden bg-accent/15" role="progressbar" aria-label="Working">
+            <div className="h-full w-1/3 animate-[vf-progress_1.1s_ease-in-out_infinite] rounded-full bg-accent" />
+          </div>
+        )}
 
         {!aiEnabled && (
           <div className="border-b border-line bg-warn-soft px-4 py-1.5 text-center text-xs text-warn">

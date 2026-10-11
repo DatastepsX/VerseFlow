@@ -11,6 +11,7 @@ import { usePlayer } from "./Player";
 import { LengthControls } from "./LengthControls";
 import { useWriter } from "./context";
 import { useFollow } from "./follow";
+import { Spinner } from "./Spinner";
 import { snapSectionStart } from "@/lib/audio/structure";
 import { AI_ACTIONS, isLocked, letterColor, STATUS_META } from "./util";
 
@@ -57,6 +58,17 @@ export function LineRow({ line, number, letter, partnerText, partnerNumber, targ
   const [note, setNote] = useState<string | null>(null);
   const ref = useRef<HTMLTextAreaElement>(null);
   const busy = w.generating.has(line.id);
+  // a tap on ✓ / ✕ / ↻ shows at once that it is being saved (and can't be tapped twice)
+  const [saving, setSaving] = useState(false);
+  const act = async (p: Promise<unknown>) => {
+    setSaving(true);
+    try {
+      await p;
+    } finally {
+      setSaving(false);
+    }
+  };
+  const working = busy || saving;
 
   const [editingRaw, setEditingRaw] = useState(false);
   const [menuRaw, setMenu] = useState(false);
@@ -107,7 +119,7 @@ export function LineRow({ line, number, letter, partnerText, partnerNumber, targ
   };
 
   const setStatus = (status: Line["status"], action: string) =>
-    w.mutate(`/api/lines/${line.id}`, { status, action }, "PATCH");
+    act(w.mutate(`/api/lines/${line.id}`, { status, action }, "PATCH"));
 
   const gen = (instr?: string, scope: "line" | "group" = "line") => {
     setMenu(false);
@@ -169,13 +181,14 @@ export function LineRow({ line, number, letter, partnerText, partnerNumber, targ
           </span>
         )}
         <span className="flex shrink-0 items-center gap-1.5">
+          {working && <Spinner className="text-accent" />}
           {reviewable && !editing && (
-            <span className="flex items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
+            <span className={`flex items-center gap-0.5 ${working ? "pointer-events-none opacity-40" : ""}`} onClick={(e) => e.stopPropagation()}>
               {line.status !== "SUGGESTED" || line.alternatives.length === 0 ? null : (
                 <button
                   className="rounded px-1.5 py-0.5 text-xs text-accent hover:bg-accent-soft"
                   title={`Next option (${line.alternatives.length} more) — free`}
-                  onClick={() => void w.mutate(`/api/alternatives/${line.alternatives[0].id}`, { action: "swap" })}
+                  onClick={() => void act(w.mutate(`/api/alternatives/${line.alternatives[0].id}`, { action: "swap" }))}
                 >
                   ↻{line.alternatives.length}
                 </button>
@@ -184,10 +197,12 @@ export function LineRow({ line, number, letter, partnerText, partnerNumber, targ
                 className={`rounded px-1.5 py-0.5 text-xs ${line.status === "DECLINED" ? "bg-bad text-white" : "text-bad hover:bg-bad-soft"}`}
                 title={line.status === "DECLINED" ? "Marked to replace — tap to undo" : "Mark to replace"}
                 onClick={() =>
-                  void w.mutate(
-                    `/api/lines/${line.id}`,
-                    line.status === "DECLINED" ? { status: "SUGGESTED", action: "unmark" } : { status: "DECLINED", action: "mark_replace" },
-                    "PATCH",
+                  void act(
+                    w.mutate(
+                      `/api/lines/${line.id}`,
+                      line.status === "DECLINED" ? { status: "SUGGESTED", action: "unmark" } : { status: "DECLINED", action: "mark_replace" },
+                      "PATCH",
+                    ),
                   )
                 }
               >
@@ -196,7 +211,7 @@ export function LineRow({ line, number, letter, partnerText, partnerNumber, targ
               <button
                 className="rounded px-1.5 py-0.5 text-xs text-ok hover:bg-ok-soft"
                 title="Keep this bar"
-                onClick={() => void w.mutate(`/api/lines/${line.id}`, { status: "APPROVED", action: "approve" }, "PATCH")}
+                onClick={() => void act(w.mutate(`/api/lines/${line.id}`, { status: "APPROVED", action: "approve" }, "PATCH"))}
               >
                 ✓
               </button>
@@ -214,6 +229,13 @@ export function LineRow({ line, number, letter, partnerText, partnerNumber, targ
           )}
         </span>
       </div>
+
+      {busy && (
+        // visible even when the line isn't selected: the options are on their way
+        <div className="flex items-center gap-2 px-2 pb-1.5 pl-10 text-xs text-accent">
+          <Spinner /> Claude is writing new options for this line…
+        </div>
+      )}
 
       {selected && (
         <div className="space-y-2 px-2 pb-2 pl-10" onClick={(e) => e.stopPropagation()}>
@@ -280,12 +302,18 @@ export function LineRow({ line, number, letter, partnerText, partnerNumber, targ
               )}
               {w.aiEnabled && !rhythm && (
                 <button className="btn" disabled={busy} onClick={() => gen()}>
-                  {busy ? "…" : "✨ AI options · 1 call"}
+                  {busy ? (
+                    <>
+                      <Spinner /> Writing options…
+                    </>
+                  ) : (
+                    "✨ AI options · 1 call"
+                  )}
                 </button>
               )}
               {w.aiEnabled && !rhythm && groupSize > 1 && (
                 <button className="btn" disabled={busy} onClick={() => gen(undefined, "group")}>
-                  ✨ {groupSize === 2 ? "Couplet" : "Group"} · 1 call
+                  {busy ? <Spinner /> : "✨"} {groupSize === 2 ? "Couplet" : "Group"} · 1 call
                 </button>
               )}
               <div className="relative">
@@ -522,7 +550,13 @@ function Alternatives({
       <div className="flex gap-1.5">
         {w.aiEnabled && (
           <button className="btn px-2 py-1 text-xs" disabled={busy} onClick={onMore}>
-            {busy ? "Writing…" : "✨ 3 new options"}
+            {busy ? (
+              <>
+                <Spinner /> Writing…
+              </>
+            ) : (
+              "✨ 3 new options"
+            )}
           </button>
         )}
         <button
