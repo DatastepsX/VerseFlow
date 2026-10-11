@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { songRhymeDistance } from "@/lib/scheme";
 import { PROJECT_TYPES, type ProjectTree } from "@/lib/types";
 import { WriterContext, type GenerateOptions, type WriterApi } from "./context";
 import { BarsPanel, FullTextPanel, HistoryPanel, ProjectSettingsPanel, RhymePanel } from "./Panels";
@@ -94,6 +95,11 @@ export function Writer({ initial, aiEnabled }: { initial: ProjectTree; aiEnabled
     setMobile("rhymes");
   }, []);
 
+  const lang = tree.project.language;
+  const songRhyme = useMemo(
+    () => songRhymeDistance(tree.sections.map((s) => s.lines.filter((l) => l.kind === "lyric").map((l) => l.text)), lang),
+    [tree.sections, lang],
+  );
   const api: WriterApi = useMemo(
     () => ({
       tree,
@@ -126,8 +132,9 @@ export function Writer({ initial, aiEnabled }: { initial: ProjectTree; aiEnabled
       filling,
       fillBank,
       aiEnabled,
+      songRhyme,
     }),
-    [tree, mutate, selectedId, generating, generate, lookupRhyme, filling, fillBank, aiEnabled, showError],
+    [tree, mutate, selectedId, generating, generate, lookupRhyme, filling, fillBank, aiEnabled, showError, songRhyme],
   );
 
   useEffect(() => {

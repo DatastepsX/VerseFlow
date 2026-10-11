@@ -30,6 +30,8 @@ export interface WriterApi {
   /** one AI call that stocks a section's suggestion bank */
   fillBank: (sectionId: string, targets?: string[]) => Promise<void>;
   aiEnabled: boolean;
+  /** how the song rhymes as written (1 = couplets, 2 = alternating): decides for sections too short to tell */
+  songRhyme: 1 | 2 | null;
 }
 
 export const WriterContext = createContext<WriterApi | null>(null);

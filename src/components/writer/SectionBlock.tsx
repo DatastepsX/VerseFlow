@@ -32,7 +32,7 @@ export function SectionBlock({ section, index, total }: { section: SectionT; ind
   // rhyme letters from what is actually written; partners from the intended scheme
   const texts = lines.map((l) => (l.kind === "lyric" && l.status !== "DECLINED" ? l.text : ""));
   const scheme = rhymeScheme(texts, w.lang, Math.max(4, g));
-  const partners = rhymePartners(texts, g, section.rhyme_scheme);
+  const partners = rhymePartners(texts, g, section.rhyme_scheme, w.lang, w.songRhyme);
 
   const sylRef = lines.filter((l) => l.kind === "rhythm_ref" && l.text.trim());
   const sylFrom = sylRef.length ? sylRef : lines.filter((l) => l.kind === "lyric" && l.text.trim() && l.status !== "DECLINED");
@@ -159,7 +159,7 @@ function Composer({
   const [busy, setBusy] = useState(false);
   const g = Math.max(1, section.group_size);
   const nextIdx = texts.length;
-  const partners = rhymePartners([...texts, text], g, section.rhyme_scheme);
+  const partners = rhymePartners([...texts, text], g, section.rhyme_scheme, w.lang, w.songRhyme);
   const p = partners[nextIdx].partner;
   const partnerText = p !== null && p < nextIdx ? texts[p] : "";
   const pa = partnerText.trim() ? analyzeLine(partnerText, w.lang) : null;

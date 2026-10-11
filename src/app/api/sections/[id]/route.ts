@@ -101,7 +101,7 @@ export async function POST(req: Request, ctx: RouteContext<"/api/sections/[id]">
       const tree = await getTree(s);
       const section = tree.sections.find((x) => x.id === id)!;
       const texts = section.lines.map((l) => (l.kind === "lyric" && l.status !== "DECLINED" ? l.text : ""));
-      const next = rhymePartners([...texts, ""], section.group_size, section.rhyme_scheme)[texts.length];
+      const next = rhymePartners([...texts, ""], section.group_size, section.rhyme_scheme, tree.project.language)[texts.length];
       const auto = next.partner !== null && texts[next.partner]?.trim() ? [texts[next.partner]] : [];
       const targets = [...auto, ...(b.targets ?? [])];
       const families = await fillBank({

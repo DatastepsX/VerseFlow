@@ -1,5 +1,6 @@
 import "server-only";
 import { performedBy } from "@/lib/artists";
+import { songRhymeDistance } from "@/lib/scheme";
 import Anthropic from "@anthropic-ai/sdk";
 import { analyzeLine, lastWord } from "@/lib/rhyme/analyze";
 import { describeRhythm, prosody } from "@/lib/rhyme/prosody";
@@ -36,6 +37,14 @@ function rhythmTemplate(
   return `RHYTHM TEMPLATE${refs.length ? " (the section's pattern — rhythm only, its words are not lyrics)" : " (the lines just before)"} — every new line must match it:
 ${pick.map((l) => `  “${l.text}” → ${describeRhythm(prosody(l.text, lang), lang)}`).join("\n")}
 Match the syllable count of the last template line (±1 sung syllable, counting vowel merges between words), put the stresses in the same places so it flows on the same beat, and use the same ending type.`;
+}
+
+/** how the song rhymes as written: decides for sections too short to tell */
+function songRhyme(tree: ProjectTree, lang: string) {
+  return songRhymeDistance(
+    tree.sections.map((s) => s.lines.filter((l) => l.kind === "lyric" && l.status !== "DECLINED").map((l) => l.text)),
+    lang,
+  );
 }
 
 export class AiUnavailable extends Error {}
@@ -114,7 +123,7 @@ export async function generateOptions(req: GenerateRequest): Promise<{ targetIds
     : null;
 
   // Rhyme requirements from the section's scheme
-  const partners = rhymePartners(lines.map((l) => l.text), g, section.rhyme_scheme);
+  const partners = rhymePartners(lines.map((l) => l.text), g, section.rhyme_scheme, lang, songRhyme(req.tree, lang));
   const strength = req.rhymeStrength ?? "exact";
   const requirements: string[] = [];
   for (const k of targetIdx) {
@@ -461,7 +470,7 @@ export async function draftSection(tree: ProjectTree, sectionId: string, mode: D
   // polish: lines improved in another call are context like any other written line
   const later = polish ? new Set<number>() : new Set(open.filter((k) => !slotSet.has(k)));
 
-  const partners = rhymePartners(texts.map((t, k) => (!polish && (slotSet.has(k) || later.has(k)) ? "x" : t)), g, section.rhyme_scheme);
+  const partners = rhymePartners(texts.map((t, k) => (!polish && (slotSet.has(k) || later.has(k)) ? "x" : t)), g, section.rhyme_scheme, lang, songRhyme(tree, lang));
   const rhymeRules = slots
     .map((k) => {
       if (polish) {

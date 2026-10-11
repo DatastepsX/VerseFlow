@@ -59,7 +59,7 @@ export function suggestForSlot(opts: {
   const { bank, texts, index, groupSize, scheme, lang } = opts;
   const count = opts.count ?? 3;
   const slotTexts = index < texts.length ? texts.map((t, i) => (i === index ? "" : t)) : [...texts, ""];
-  const p = rhymePartners(slotTexts, groupSize, scheme)[index]?.partner ?? null;
+  const p = rhymePartners(slotTexts, groupSize, scheme, lang)[index]?.partner ?? null;
   const partnerText = p !== null && slotTexts[p]?.trim() ? slotTexts[p] : null;
   const pa = partnerText ? analyzeLine(partnerText, lang) : null;
 
