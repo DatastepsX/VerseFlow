@@ -1,5 +1,9 @@
+import { fillSongBank } from "@/lib/server/ai";
+import { songPattern } from "@/lib/pattern";
 import {
   addSection,
+  getTree,
+  insertBank,
   deleteProject,
   duplicateProject,
   redo,
@@ -31,6 +35,8 @@ export async function DELETE(_req: Request, ctx: RouteContext<"/api/projects/[id
 }
 
 /** Project actions: undo, redo, duplicate, addSection, saveVersion */
+export const maxDuration = 300;
+
 export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]">) {
   return handle(async () => {
     const { id } = await ctx.params;
@@ -47,6 +53,16 @@ export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]">
       case "addSection":
         await addSection(id, { name: b.name ?? "New section", group_size: b.group_size, audio_start: b.audio_start ?? null });
         break;
+      case "fillSongBank": {
+        // one AI call: couplets for every unfinished section, following the pattern lines
+        const tree = await getTree(id);
+        const pattern = songPattern(tree);
+        if (!pattern) return Response.json({ error: "Write the first two lines (your pattern) first." }, { status: 400 });
+        const results = await fillSongBank(tree, pattern.lines);
+        for (const r of results) if (r.families.length) await insertBank(id, r.sectionId, r.families);
+        await updateProject(id, { settings: { ...tree.project.settings, songBankAt: new Date().toISOString(), songBankPattern: pattern.lines } });
+        break;
+      }
       case "saveVersion":
         await saveVersion(id, b.label ?? new Date().toLocaleString());
         break;

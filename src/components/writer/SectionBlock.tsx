@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { analyzeLine, compareLines, lastWord, rhymeScheme } from "@/lib/rhyme/analyze";
 import { rhymePartners } from "@/lib/scheme";
 import { prosody } from "@/lib/rhyme/prosody";
-import { rhythmReference, suggestForSlot } from "@/lib/suggest";
+import { rhythmReference } from "@/lib/suggest";
 import type { ProjectTree } from "@/lib/types";
 import { useWriter } from "./context";
 import { sectionRanges, fmtTime } from "@/lib/audio/song-map";
@@ -171,24 +171,25 @@ function Composer({
     await w.mutate(`/api/sections/${section.id}`, { action: "fitText", text: text.trim(), reference: refText });
     setFitting(false);
   };
-  const bankSize = w.tree.bank.filter((b) => b.section_id === section.id).length;
-  // bars already generated anywhere in the project that fit this slot (free)
-  const reusable = suggestForSlot({
-    bank: w.tree.bank,
-    texts,
-    index: nextIdx,
-    groupSize: g,
-    scheme: section.rhyme_scheme,
-    lang: w.lang,
-    sectionId: section.id,
-  }).matches;
-  const { autoFillBank } = w;
+  // suggestions for the whole song are prepared in one call once the pattern exists (see PatternBar)
 
-  // after the first two lines (rhythm + length are set), stock this section's bank once —
-  // unless bars from other sections already fit
-  useEffect(() => {
-    if (written >= 2 && bankSize === 0 && reusable < 3) autoFillBank(section.id);
-  }, [written, bankSize, reusable, autoFillBank, section.id]);
+  const addCouplet = async (first: { text: string; id: string }, second: { text: string; id: string }) => {
+    if (busy) return;
+    setBusy(true);
+    const st = asDraft ? "OPEN" : "APPROVED";
+    const r1 = await w.mutate(`/api/sections/${section.id}`, {
+      action: "addLines",
+      lines: [
+        { text: first.text, status: st, bankId: first.id },
+        { text: second.text, status: st, bankId: second.id },
+      ],
+    });
+    setBusy(false);
+    if (r1) {
+      setText("");
+      setBankId(null);
+    }
+  };
 
   const add = async (t = text.trim(), fromBank = bankId) => {
     if (!t || busy) return;
@@ -293,6 +294,7 @@ function Composer({
             scheme={section.rhyme_scheme}
             title={`Options for bar ${offset + nextIdx + 1}${pa ? ` · rhymes with “${lastWord(partnerText)}”` : ""}`}
             onUse={(b) => void add(b.text, b.id)}
+            onUseCouplet={(a, b) => void addCouplet(a, b)}
             onEdit={(b) => {
               setText(b.text);
               setBankId(b.id);

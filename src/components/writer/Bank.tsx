@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { lastWord } from "@/lib/rhyme/analyze";
-import { suggestForSlot } from "@/lib/suggest";
+import { coupletsForSlot, suggestForSlot } from "@/lib/suggest";
 import type { BankLine } from "@/lib/types";
 import { useWriter } from "./context";
 
@@ -18,6 +18,7 @@ export function BankPicker({
   groupSize,
   scheme,
   onUse,
+  onUseCouplet,
   onEdit,
   title = "From your bank",
 }: {
@@ -27,6 +28,8 @@ export function BankPicker({
   groupSize: number;
   scheme: string | null;
   onUse: (b: BankLine) => void;
+  /** when given and the slot opens a couplet, whole couplets are offered too */
+  onUseCouplet?: (first: BankLine, second: BankLine) => void;
   onEdit?: (b: BankLine) => void;
   title?: string;
 }) {
@@ -50,7 +53,12 @@ export function BankPicker({
     rhythmRef,
     sectionId,
   });
-  const filling = w.filling.has(sectionId);
+  const filling = w.filling.has(sectionId) || w.songFilling;
+  const opensCouplet = !!onUseCouplet && groupSize >= 2 && index % groupSize === 0;
+  const [cSkip, setCSkip] = useState(0);
+  const { couplets, total: coupletTotal } = opensCouplet
+    ? coupletsForSlot({ bank, texts, index, lang: w.lang, sectionId, rhythmRef, count: 3, skip: cSkip })
+    : { couplets: [], total: 0 };
   // the bank has bars, but none flows like the line before → say so and offer better ones
   const bestFit = suggestions.reduce((m, x) => Math.max(m, x.rhythm), 0);
   const poorFit = !!reference && suggestions.length > 0 && bestFit < 0.6;
@@ -88,6 +96,56 @@ export function BankPicker({
               .join("")}
           </span>
         </p>
+      )}
+
+      {couplets.length > 0 && (
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-2 text-[11px] uppercase tracking-wide text-muted">
+            <span>Couplets — tap “Use both” or a single line</span>
+            {coupletTotal > 3 && (
+              <button className="btn-ghost px-1 py-0 text-[11px] normal-case" onClick={() => setCSkip((x) => x + 3)}>
+                ↻ others ({coupletTotal})
+              </button>
+            )}
+          </div>
+          {couplets.map((c) => (
+            <div key={c.first.id} className="rounded-md border border-line bg-panel-2 px-2.5 py-2 hover:border-accent">
+              {[c.first, c.second].map((l, k) => (
+                <button key={l.id} className="block w-full text-left text-[16px] leading-snug hover:text-accent" onClick={() => onUse(l)} title="Use only this line">
+                  {l.text}
+                  <span className="ml-1.5 font-mono text-[11px] text-muted">{c.syllables[k]}</span>
+                </button>
+              ))}
+              <div className="mt-1.5 flex items-center gap-2">
+                <button className="btn-primary px-2 py-0.5 text-xs" onClick={() => onUseCouplet!(c.first, c.second)}>
+                  ✓ Use both
+                </button>
+                {reference && (
+                  <span
+                    className={`rounded px-1 font-mono text-[11px] ${c.rhythm >= 0.75 ? "bg-ok-soft text-ok" : c.rhythm >= 0.6 ? "bg-warn-soft text-warn" : "bg-bad-soft text-bad"}`}
+                    title="rhythm match with your pattern"
+                  >
+                    {Math.round(c.rhythm * 100)}%
+                  </span>
+                )}
+                {c.first.section_id !== sectionId && (
+                  <span className="text-[10px] uppercase tracking-wide text-muted">from {sectionName(c.first.section_id)}</span>
+                )}
+                <button
+                  className="btn-ghost ml-auto px-1 py-0 text-xs text-bad"
+                  title="Not for me — never suggest this couplet again"
+                  onClick={() => {
+                    void w.mutate(`/api/bank/${c.first.id}`, { action: "reject" });
+                    void w.mutate(`/api/bank/${c.second.id}`, { action: "reject" });
+                  }}
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+          ))}
+          {suggestions.length > 0 && <div className="pt-1 text-[11px] uppercase tracking-wide text-muted">or a single line</div>}
+        </div>
       )}
 
       {suggestions.map((s) => (
@@ -140,7 +198,7 @@ export function BankPicker({
 
       {filling && (
         <p className="animate-pulse rounded-md bg-accent-soft px-2.5 py-2 text-sm text-accent">
-          ✨ Writing ~40 bars that fit your lines (1 AI call)…
+          {w.songFilling ? "✨ Preparing couplets for the whole song (1 AI call)…" : "✨ Writing ~40 bars that fit your lines (1 AI call)…"}
         </p>
       )}
 

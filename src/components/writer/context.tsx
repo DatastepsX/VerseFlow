@@ -31,6 +31,9 @@ export interface WriterApi {
   fillBank: (sectionId: string, targets?: string[]) => Promise<void>;
   /** fill the bank once, automatically, when a section's first lines are written */
   autoFillBank: (sectionId: string) => void;
+  /** the one call that prepares suggestions for the whole song is running */
+  songFilling: boolean;
+  fillSong: () => Promise<void>;
   aiEnabled: boolean;
 }
 

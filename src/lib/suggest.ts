@@ -127,3 +127,56 @@ export function suggestForSlot(opts: {
     reference: refText && ref ? { text: refText, prosody: ref } : null,
   };
 }
+
+export interface CoupletSuggestion {
+  first: BankLine;
+  second: BankLine;
+  /** average rhythm match of both lines with the reference */
+  rhythm: number;
+  syllables: [number, number];
+}
+
+/**
+ * Whole couplets for a slot that opens a new couplet: pairs written together
+ * (family positions 0-1, 2-3, …) whose lines are both still available, ranked
+ * by how well both follow the reference flow; the section's own bars first.
+ */
+export function coupletsForSlot(opts: {
+  bank: BankLine[];
+  texts: string[];
+  index: number;
+  lang: string;
+  sectionId?: string;
+  rhythmRef?: string | null;
+  count?: number;
+  skip?: number;
+}): { couplets: CoupletSuggestion[]; total: number } {
+  const { bank, texts, index, lang } = opts;
+  const refText = rhythmReference(texts, index, opts.rhythmRef);
+  const ref = refText ? prosody(refText, lang) : null;
+  const inSong = new Set(texts.map((t) => t.trim().toLowerCase()));
+  const byFamily = new Map<string, BankLine[]>();
+  for (const b of bank) {
+    if (b.state !== "available" || inSong.has(b.text.trim().toLowerCase())) continue;
+    (byFamily.get(b.family) ?? byFamily.set(b.family, []).get(b.family)!).push(b);
+  }
+  const scored: (CoupletSuggestion & { score: number })[] = [];
+  for (const lines of byFamily.values()) {
+    const byPos = new Map(lines.map((l) => [l.family_pos, l]));
+    for (const l of lines) {
+      if (l.family_pos % 2 !== 0) continue;
+      const partner = byPos.get(l.family_pos + 1);
+      if (!partner) continue;
+      const p1 = prosody(l.text, lang);
+      const p2 = prosody(partner.text, lang);
+      const rhythm = ref ? (rhythmSimilarity(ref, p1) + rhythmSimilarity(ref, p2)) / 2 : 0.5;
+      const own = opts.sectionId && l.section_id === opts.sectionId ? 0.15 : 0;
+      scored.push({ first: l, second: partner, rhythm, syllables: [p1.syllables, p2.syllables], score: rhythm + own });
+    }
+  }
+  scored.sort((a, b) => b.score - a.score);
+  const count = opts.count ?? 3;
+  const skip = scored.length ? (opts.skip ?? 0) % scored.length : 0;
+  const rotated = [...scored.slice(skip), ...scored.slice(0, skip)];
+  return { couplets: rotated.slice(0, count), total: scored.length };
+}

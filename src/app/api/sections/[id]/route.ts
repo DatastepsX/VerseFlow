@@ -1,5 +1,5 @@
 import { fillBank, fitLine } from "@/lib/server/ai";
-import { addLine, clearBank, deleteSection, getTree, insertBank, moveSection, setBankState, updateSection } from "@/lib/server/repo";
+import { addLine, appendLines, clearBank, deleteSection, getTree, insertBank, moveSection, setBankState, updateSection } from "@/lib/server/repo";
 import { rhymePartners } from "@/lib/scheme";
 import { db } from "@/lib/server/db";
 import { body, handle, pick, treeResponse } from "@/lib/server/http";
@@ -38,6 +38,7 @@ export async function POST(req: Request, ctx: RouteContext<"/api/sections/[id]">
       instruction?: string;
       replace?: boolean;
       reference?: string;
+      lines?: { text: string; status?: LineStatus; bankId?: string }[];
     }>(req);
     if (b.action === "addLine") {
       const line = await addLine(id, { text: b.text, status: b.status, kind: b.kind, afterLineId: b.afterLineId });
@@ -45,6 +46,13 @@ export async function POST(req: Request, ctx: RouteContext<"/api/sections/[id]">
       const res = await treeResponse(line.project_id);
       res.headers.set("x-line-id", line.id);
       return res;
+    }
+    if (b.action === "addLines") {
+      // several lines at once (e.g. a whole couplet from the bank), appended in order
+      const items = (b.lines ?? []).filter((l) => l.text?.trim()).slice(0, 8);
+      await appendLines(id, items.map((l) => ({ text: l.text.trim(), status: l.status ?? "APPROVED" })));
+      for (const l of items) if (l.bankId) await setBankState(l.bankId, "used");
+      return treeResponse(await sectionProject(id));
     }
     if (b.action === "fitText") {
       // 1 AI call: rewrite the writer's line to the length/flow of the line before; stored in the bank

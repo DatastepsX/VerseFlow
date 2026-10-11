@@ -46,6 +46,9 @@ export interface ProjectSettings {
   explicitness?: "none" | "medium" | "high";
   rhymePreference?: string;
   secondaryLanguage?: string;
+  /** when the whole-song suggestion bank was last prepared, and from which pattern lines */
+  songBankAt?: string;
+  songBankPattern?: string[];
 }
 
 export interface Project {

@@ -3,6 +3,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { analyzeLine, lastWord } from "@/lib/rhyme/analyze";
 import { describeRhythm, prosody } from "@/lib/rhyme/prosody";
 import { rhymePartners } from "@/lib/scheme";
+import { sectionRanges } from "@/lib/audio/song-map";
 import { LANGUAGES, PROJECT_TYPES, type ProjectTree } from "@/lib/types";
 import { bankTexts, rejectedAlternatives, recordAiCall } from "./repo";
 
@@ -124,7 +125,13 @@ export async function generateOptions(req: GenerateRequest): Promise<{ targetIds
     } else if (p.partner !== null && targets.has(p.partner)) {
       requirements.push(`Line ${n} must rhyme with line ${p.partner + 1} (both are part of this option).`);
     } else {
-      requirements.push(`Line ${n}: free ending (it sets the rhyme for following lines).`);
+      // an opener sets the rhyme for its partner: make it easy to rhyme, and offer continuity with the previous couplet
+      const prevText = lines.slice(0, k).reverse().find((l) => l.kind === "lyric" && l.text.trim() && l.status !== "DECLINED")?.text;
+      const prevKey = prevText ? analyzeLine(prevText, lang).rhymeKey : null;
+      requirements.push(
+        `Line ${n} opens a new ${g === 2 ? "couplet" : "group"}: end it on a word with many natural rhymes in ${langName(lang)}` +
+          (prevKey ? ` — at least one option should keep the rhyme of the line before (“${lastWord(prevText!)}”, -${prevKey}), the others may open a new rhyme.` : "."),
+      );
     }
   }
 
@@ -343,4 +350,137 @@ Return ${opts.count ?? 3} different versions.`;
     .map((l) => l.trim())
     .filter(Boolean)
     .slice(0, opts.count ?? 3);
+}
+
+// ---------- one call for the whole song ----------
+
+const SONG_SCHEMA = {
+  type: "object",
+  properties: {
+    sections: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          index: { type: "integer" },
+          couplets: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: { lines: { type: "array", items: { type: "string" } } },
+              required: ["lines"],
+              additionalProperties: false,
+            },
+          },
+          partners: { type: "array", items: { type: "string" } },
+        },
+        required: ["index", "couplets", "partners"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["sections"],
+  additionalProperties: false,
+};
+
+export interface SongBankResult {
+  sectionId: string;
+  families: { rhyme: string; lines: string[] }[];
+}
+
+/**
+ * After the writer has set the pattern (their first lines), one call prepares
+ * candidate couplets for every unfinished section of the song, all following
+ * that pattern. Sections with the same name (a repeated chorus) share one set.
+ */
+export async function fillSongBank(tree: ProjectTree, pattern: string[]): Promise<SongBankResult[]> {
+  if (!aiConfigured()) throw new AiUnavailable("AI is not configured yet (ANTHROPIC_API_KEY missing).");
+  const { project } = tree;
+  const lang = project.language;
+  const st = project.settings ?? {};
+  const ranges = sectionRanges(tree.sections, tree.audio);
+  const barLen = tree.audio?.bpm ? (tree.audio.beats_per_bar * 60) / tree.audio.bpm : null;
+
+  // unique sections (by name) that still need lines
+  const groups = new Map<string, typeof tree.sections>();
+  for (const s of tree.sections) {
+    const key = s.name.trim().toLowerCase();
+    (groups.get(key) ?? groups.set(key, []).get(key)!).push(s);
+  }
+  const plan = [...groups.values()]
+    .map((secs) => {
+      const s = secs[0];
+      const written = s.lines.filter((l) => l.kind === "lyric" && l.text.trim() && l.status !== "DECLINED");
+      const r = ranges.get(s.id);
+      const target = r?.bars && barLen ? Math.max(2, Math.ceil(r.bars / (s.bars_per_line || 1))) : 8;
+      const remaining = target - written.length;
+      const texts = s.lines.map((l) => (l.kind === "lyric" && l.status !== "DECLINED" ? l.text : ""));
+      const next = rhymePartners([...texts, ""], s.group_size, s.rhyme_scheme)[texts.length];
+      const unpaired = next.partner !== null && texts[next.partner]?.trim() ? texts[next.partner] : null;
+      return { secs, s, written, target, remaining, unpaired };
+    })
+    .filter((x) => x.remaining > 0);
+  if (!plan.length) return [];
+  // offer a few more couplets than needed so there is a choice; keep the call bounded
+  let budget = 72;
+  const counts = plan.map((p) => {
+    const n = Math.min(8, Math.max(3, Math.ceil(p.remaining / 2) + 2), budget);
+    budget -= n;
+    return Math.max(0, n);
+  });
+
+  const patternText = pattern.map((l) => `  “${l}” → ${describeRhythm(prosody(l, lang), lang)}`).join("\n");
+  const sectionsText = plan
+    .map((p, i) => {
+      const s = p.s;
+      const lines = p.written.map((l) => `      ${l.text}`).join("\n");
+      return `S${i}. ${s.name}${p.secs.length > 1 ? ` (appears ${p.secs.length}×)` : ""} — ${p.target} lines in total, ${p.written.length} written${
+        s.story_beat ? `, story beat: ${s.story_beat}` : ""
+      }${s.intensity ? `, intensity ${s.intensity}/10` : ""}${s.notes ? `, notes: ${s.notes}` : ""}
+    ${lines ? `written so far:\n${lines}` : "nothing written yet"}
+    → write ${counts[i]} couplets${p.unpaired ? `, plus 4 single lines that rhyme exactly with “${p.unpaired}” (-${analyzeLine(p.unpaired, lang).rhymeKey})` : ""}`;
+    })
+    .join("\n\n");
+
+  const prompt = `PROJECT
+Title: ${project.title}
+Language: ${langName(lang)}${st.secondaryLanguage ? ` (occasional ${st.secondaryLanguage} words are welcome)` : ""}
+${st.genre ? `Genre: ${st.genre}\n` : ""}${st.style ? `Style / references: ${st.style}\n` : ""}${st.mood ? `Mood: ${st.mood}\n` : ""}${st.simpleLanguage ? "Vocabulary: simple, modern, direct — avoid overly poetic words\n" : ""}${st.explicitness ? `Explicit content: ${st.explicitness}\n` : ""}${project.concept ? `Story / concept: ${project.concept}\n` : ""}
+PATTERN — the writer's first lines define the flow of the whole song:
+${patternText}
+Every line you write must follow this pattern: the same number of sung syllables (±1, counting vowel merges between words), stresses in the same places, the same ending type. It must be performable on the same beat.
+
+SECTIONS TO PREPARE (in song order)
+${sectionsText}
+
+TASK
+For each section above, write the requested couplets: two lines that rhyme exactly with each other and form one idea.
+- Follow the pattern strictly (length, stresses, ending).
+- Fit the section's role in the story and continue from what is written; a chorus/hook should be catchy and repeatable.
+- Use different rhyme sounds across couplets (no two couplets in a section on the same rhyme), and don't reuse lines that already exist.
+Return "index" = the S-number of the section.`;
+
+  const parsed = await callJson<{ sections: { index: number; couplets: { lines: string[] }[]; partners: string[] }[] }>(
+    project.id,
+    "song_bank",
+    prompt,
+    SONG_SCHEMA,
+  );
+  const out: SongBankResult[] = [];
+  for (const r of parsed.sections) {
+    const p = plan[r.index];
+    if (!p) continue;
+    const families = [
+      ...r.couplets
+        .map((c) => c.lines.map((l) => l.trim()).filter(Boolean).slice(0, 2))
+        .filter((ls) => ls.length === 2)
+        .map((ls) => ({ rhyme: `-${analyzeLine(ls[1], lang).rhymeKey}`, lines: ls })),
+      ...(r.partners.length && p.unpaired
+        ? [{ rhyme: `-${analyzeLine(p.unpaired, lang).rhymeKey}`, lines: r.partners.map((l) => l.trim()).filter(Boolean) }]
+        : []),
+    ];
+    // a repeated section (e.g. every Chorus) gets the same candidates
+    for (const s of p.secs) out.push({ sectionId: s.id, families });
+  }
+  return out;
 }

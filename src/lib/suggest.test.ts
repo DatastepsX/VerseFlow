@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { suggestForSlot } from "./suggest";
+import { coupletsForSlot, suggestForSlot } from "./suggest";
 import type { BankLine } from "./types";
 
 let id = 0;
@@ -79,4 +79,15 @@ test("options follow the length and flow of the line before", () => {
   assert.equal(r.reference?.text, "Ti avevo davanti ma eri distante");
   assert.equal(r.suggestions[0].line.text, "per te quel momento non era importante");
   assert.ok(r.suggestions.every((s) => Math.abs(s.sylDiff) <= 2), JSON.stringify(r.suggestions.map((s) => [s.line.text, s.sylDiff])));
+});
+
+test("couplet suggestions pair lines written together and follow the flow", () => {
+  const b = [
+    ...fam("c1", ["per te quel momento non era importante", "e io ti guardavo da sempre distante"]),
+    ...fam("c2", ["sei corta", "e morta"]),
+  ];
+  const r = coupletsForSlot({ bank: b, texts: ["Ti avevo davanti ma eri distante", "il nodo che avevo nel petto si è sciolto"], index: 2, lang: "it" });
+  assert.equal(r.total, 2);
+  assert.equal(r.couplets[0].first.text, "per te quel momento non era importante");
+  assert.equal(r.couplets[0].second.text, "e io ti guardavo da sempre distante");
 });

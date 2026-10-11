@@ -19,6 +19,10 @@ Product spec: see the original `verseflow_product_spec.md` (Phase 1 + core of Ph
   - automatic rhyme-scheme letters (A, B, …) per section, partner check (“should rhyme with line 3”), syllable target per section
   - English: heuristic analysis (Datamuse for the rhyme dictionary)
 - **Rhyme dictionary** (`/api/rhymes`): Italian index of ~120k words ranked by frequency; English via Datamuse
+- **Pattern → whole song in one call**: the first two written lines (or lines marked as rhythm reference) are the
+  song's *pattern* (`src/lib/pattern.ts`). Once it exists, one AI call (`fillSongBank`) prepares couplets for every
+  unfinished section (sized from the section's bars, repeated sections share one set), all following the pattern.
+  At the start of each couplet the writer picks a whole couplet (“Use both”) or single lines; free afterwards.
 - **Suggestion bank (low API usage)**: one AI call writes ~30–40 bars for a section, organised as *rhyme families*
   (lines sharing an end rhyme, written so consecutive pairs form couplets). Next-bar suggestions are then served
   **locally** from the bank (`src/lib/suggest.ts`): a slot that must rhyme only gets bars that the rhyme engine
