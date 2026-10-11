@@ -34,7 +34,8 @@ export function BankPicker({
   const [skip, setSkip] = useState(0);
   const bank = w.tree.bank.filter((b) => b.section_id === sectionId);
   const available = bank.filter((b) => b.state === "available").length;
-  const { suggestions, partnerText, matches } = suggestForSlot({
+  const rhythmRef = w.tree.sections.find((x) => x.id === sectionId)?.lines.find((l) => l.kind === "rhythm_ref" && l.text.trim())?.text;
+  const { suggestions, partnerText, matches, reference } = suggestForSlot({
     bank,
     texts,
     index,
@@ -43,6 +44,7 @@ export function BankPicker({
     lang: w.lang,
     count: 3,
     skip,
+    rhythmRef,
   });
   const filling = w.filling.has(sectionId);
   const written = texts.filter((t) => t.trim()).length;
@@ -64,6 +66,18 @@ export function BankPicker({
         )}
       </div>
 
+      {reference && suggestions.length > 0 && (
+        <p className="text-[11px] text-muted" title={reference.text}>
+          follows the flow of “{reference.text.length > 42 ? reference.text.slice(0, 40) + "…" : reference.text}”: {reference.prosody.syllables} syllables{" "}
+          <span className="font-mono tracking-tight">
+            {reference.prosody.pattern
+              .split("-")
+              .map((x) => (x === "TA" ? "●" : "·"))
+              .join("")}
+          </span>
+        </p>
+      )}
+
       {suggestions.map((s) => (
         <div key={s.line.id} className="group/b flex items-baseline gap-2 rounded-md border border-line bg-panel-2 px-2.5 py-2 hover:border-accent">
           <button className="min-w-0 flex-1 text-left text-[16px] leading-snug hover:text-accent" onClick={() => onUse(s.line)} title="Use this bar">
@@ -75,7 +89,13 @@ export function BankPicker({
           >
             {s.quality === "perfect" ? "●" : s.quality === "assonance" ? "◐" : "○"}
           </span>
-          <span className="font-mono text-[11px] text-muted">{s.syllables}</span>
+          <span
+            className={`rounded px-1 font-mono text-[11px] ${!reference ? "text-muted" : Math.abs(s.sylDiff) <= 1 && s.rhythm >= 0.75 ? "bg-ok-soft text-ok" : Math.abs(s.sylDiff) <= 2 ? "bg-warn-soft text-warn" : "bg-bad-soft text-bad"}`}
+            title={reference ? `${s.syllables} syllables (${s.sylDiff >= 0 ? "+" : ""}${s.sylDiff} vs. the line before) · rhythm match ${Math.round(s.rhythm * 100)}%` : `${s.syllables} syllables`}
+          >
+            {s.syllables}
+            {reference ? ` · ${Math.round(s.rhythm * 100)}%` : ""}
+          </span>
           <span className="flex shrink-0 gap-0.5">
             <button className="btn-ghost px-1 py-0 text-xs text-ok" title="Use" onClick={() => onUse(s.line)}>
               ✓

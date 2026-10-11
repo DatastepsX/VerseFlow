@@ -1,6 +1,7 @@
 import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
 import { analyzeLine, lastWord } from "@/lib/rhyme/analyze";
+import { describeRhythm, prosody } from "@/lib/rhyme/prosody";
 import { rhymePartners } from "@/lib/scheme";
 import { LANGUAGES, PROJECT_TYPES, type ProjectTree } from "@/lib/types";
 import { bankTexts, rejectedAlternatives, recordAiCall } from "./repo";
@@ -10,6 +11,24 @@ const MODEL = process.env.AI_MODEL || "claude-opus-5-5";
 const EFFORT = (process.env.AI_EFFORT || "medium") as "low" | "medium" | "high";
 // server-side refusal fallback is supported on these models only
 const FALLBACKS = /^claude-(opus-5|fable-5|sonnet-5-5)/.test(MODEL);
+
+/**
+ * The rhythm the new lines must follow: lines marked as rhythm reference, or
+ * else the last written lines before `before` (the line before sets the flow).
+ */
+function rhythmTemplate(lines: { text: string; kind: string; status: string }[], lang: string, before = lines.length) {
+  const refs = lines.filter((l) => l.kind === "rhythm_ref" && l.text.trim());
+  const pick = refs.length
+    ? refs.slice(-2)
+    : lines
+        .slice(0, before)
+        .filter((l) => l.kind === "lyric" && l.text.trim() && l.status !== "DECLINED")
+        .slice(-2);
+  if (!pick.length) return "";
+  return `RHYTHM TEMPLATE${refs.length ? " (rhythm reference lines)" : " (the lines just before)"} — every new line must match it:
+${pick.map((l) => `  “${l.text}” → ${describeRhythm(prosody(l.text, lang), lang)}`).join("\n")}
+Match the syllable count of the last template line (±1 sung syllable, counting vowel merges between words), put the stresses in the same places so it flows on the same beat, and use the same ending type.`;
+}
 
 export class AiUnavailable extends Error {}
 
@@ -24,7 +43,7 @@ Rules:
 - Lines marked [LOCKED] are approved by the writer. Never alter them; use them as context.
 - Lines marked [RHYTHM] are prosody templates only: match their syllable count and stress feel, ignore their meaning.
 - Respect the rhyme requirement exactly as stated (exact rhyme = same sounds from the stressed vowel on; loose = same vowels / assonance).
-- Match the requested syllable count closely (±1) so the line is performable on the same beat.
+- Match the rhythm template exactly: same number of sung syllables (±1), stresses in the same places, same ending type — the new line must be singable/rappable on the same beat as the line before.
 - Write in the project's language. Keep the vocabulary natural for the style; prefer simple, singable wording unless asked otherwise.
 - Every option must be meaningfully different (wording, image or angle), and must not repeat rejected options.
 - Each option must fit the story beat and emotional intensity of the section, and connect with the lines around it.
@@ -153,7 +172,7 @@ ${sectionText}
 TASK
 Write ${count} options for ${targetIdx.length === 1 ? `line ${targetIdx[0] + 1}` : `lines ${targetIdx.map((k) => k + 1).join(" and ")} (each option contains all ${targetIdx.length} lines, in order)`}.
 ${requirements.join("\n")}
-${avgSyl ? `Target length: about ${avgSyl} syllables per line${rhythmRefs.length ? " (from the rhythm reference)" : ""}.` : ""}
+${rhythmTemplate(lines, lang, targetIdx[0]) || (avgSyl ? `Target length: about ${avgSyl} syllables per line.` : "")}
 ${req.instruction ? `Writer's direction: ${req.instruction}` : ""}
 ${current.length ? `Current text of the target (offer alternatives to it): ${current.join(" / ")}` : ""}
 ${rejected.length ? `Already rejected — do not repeat or closely paraphrase:\n${rejected.map((r) => `- ${r.text.replace(/\n/g, " / ")}`).join("\n")}` : ""}
@@ -278,7 +297,7 @@ TASK — build a bank of candidate bars the writer can pick from while continuin
 Organise them as rhyme families: every line in a family ends with the same rhyme sound (exact rhyme).
 Inside each family, write the lines so that lines 1+2, 3+4, 5+6 … each form a coherent ${g === 1 ? "pair" : "couplet"}, and every line also works on its own as a next bar.
 ${targetSpec ? `Families that answer existing lines (write these first):\n${targetSpec}\n` : ""}Then ${req.newFamilies} new families on ${req.newFamilies} different rhyme sounds, ${n} lines each, that continue the story from the last lines and move it forward (vary the images and angles; no filler).
-${avgSyl ? `Every line about ${avgSyl} syllables (±2).` : "Keep lines a natural, performable length."}
+${rhythmTemplate(lines, lang) || (avgSyl ? `Every line about ${avgSyl} syllables (±1).` : "Keep lines a natural, performable length.")}
 ${req.instruction ? `Writer's direction: ${req.instruction}` : ""}
 ${available.length ? `Already in the bank — do not repeat:\n${available.map((t) => `- ${t}`).join("\n")}` : ""}
 ${rejected.length ? `Rejected by the writer — avoid similar lines:\n${rejected.map((t) => `- ${t}`).join("\n")}` : ""}

@@ -22,7 +22,9 @@ Product spec: see the original `verseflow_product_spec.md` (Phase 1 + core of Ph
 - **Suggestion bank (low API usage)**: one AI call writes ~30–40 bars for a section, organised as *rhyme families*
   (lines sharing an end rhyme, written so consecutive pairs form couplets). Next-bar suggestions are then served
   **locally** from the bank (`src/lib/suggest.ts`): a slot that must rhyme only gets bars that the rhyme engine
-  confirms rhyme; an opening slot gets one bar per family, preferring families that still have partners; after
+  confirms rhyme, ranked by **rhythm match with the line before** (`src/lib/rhyme/prosody.ts`: sung syllables
+  with synalepha, stress positions aligned from the line end, ending type; bars > 2 syllables off are hidden while
+  closer ones exist); an opening slot gets one bar per family, preferring families that still have partners; after
   using a bank bar, its couplet partner ranks first. Rejected bars are never shown again and are sent as
   "avoid" in the next fill. A new AI call is only offered when nothing in the bank fits (e.g. “Get bars rhyming
   with ‘distante’”), or explicitly via a line's “AI options”.

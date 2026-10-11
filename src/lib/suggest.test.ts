@@ -59,3 +59,24 @@ test("lines already in the song are not suggested", () => {
   });
   assert.ok(!r.suggestions.some((s) => s.line.text === "per te quel momento non era importante"));
 });
+
+test("options follow the length and flow of the line before", () => {
+  const b = fam("x", [
+    "sei sempre distante", // too short
+    "e anche se adesso mi sembri così tanto lontana e distante", // too long
+    "per te quel momento non era importante", // same flow
+    "ti cercavo ogni giorno, ogni istante",
+  ]);
+  const r = suggestForSlot({
+    bank: b,
+    texts: ["Ti avevo davanti ma eri distante"],
+    index: 1,
+    groupSize: 2,
+    scheme: null,
+    lang: "it",
+    count: 2,
+  });
+  assert.equal(r.reference?.text, "Ti avevo davanti ma eri distante");
+  assert.equal(r.suggestions[0].line.text, "per te quel momento non era importante");
+  assert.ok(r.suggestions.every((s) => Math.abs(s.sylDiff) <= 2), JSON.stringify(r.suggestions.map((s) => [s.line.text, s.sylDiff])));
+});
