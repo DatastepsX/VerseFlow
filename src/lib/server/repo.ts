@@ -900,19 +900,44 @@ export async function mergeIntoPrevious(sectionId: string) {
  */
 export async function importSections(
   projectId: string,
-  sections: { name: string; lines: string[] }[],
+  sections: { name: string; lines: string[]; groupSize?: number }[],
   groupSize: number,
   replace: boolean,
 ) {
   if (replace) {
     const tree = await getTree(projectId);
-    for (const s of tree.sections) if (!s.lines.some((l) => l.text.trim())) await deleteSection(s.id);
+    const empty = tree.sections.filter((s) => !s.lines.some((l) => l.text.trim())).map((s) => s.id);
+    if (empty.length) check(await db().from("sections").delete().in("id", empty));
   }
-  for (const s of sections) {
-    const id = await addSection(projectId, { name: s.name, group_size: groupSize });
-    await appendLines(
-      id,
-      s.lines.map((text) => ({ text, status: "SUGGESTED" as LineStatus })),
+  // a few bulk writes, not one round trip per section / line (long texts stay fast)
+  const last = check(
+    await db().from("sections").select("position").eq("project_id", projectId).order("position", { ascending: false }).limit(1),
+  ) as { position: number }[];
+  const base = last[0]?.position ?? 0;
+  const secRows = check(
+    await db()
+      .from("sections")
+      .insert(sections.map((s, i) => ({ project_id: projectId, name: s.name, group_size: s.groupSize ?? groupSize, position: base + i + 1 })))
+      .select("id, position"),
+  ) as { id: string; position: number }[];
+  const idAt = new Map(secRows.map((r) => [r.position, r.id]));
+  const lineRows = sections.flatMap((s, i) =>
+    s.lines.map((text, k) => ({
+      project_id: projectId,
+      section_id: idAt.get(base + i + 1)!,
+      position: k + 1,
+      text,
+      status: "SUGGESTED" as LineStatus,
+      kind: "lyric",
+    })),
+  );
+  if (lineRows.length) {
+    const rows = check(await db().from("lines").insert(lineRows).select(LINE_COLS)) as Line[];
+    await db().from("line_events").delete().eq("project_id", projectId).eq("undone", true);
+    check(
+      await db()
+        .from("line_events")
+        .insert(rows.map((line) => ({ project_id: projectId, line_id: line.id, action: "create", before: { deleted: true }, after: snap({ ...line, deleted: false }) }))),
     );
   }
   await touch(projectId);

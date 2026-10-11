@@ -1,3 +1,5 @@
+export const maxDuration = 60;
+
 import { parseText } from "@/lib/text-import";
 import { createProject, importSections, listProjects } from "@/lib/server/repo";
 import { body, handle } from "@/lib/server/http";

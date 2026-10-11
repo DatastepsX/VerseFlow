@@ -12,6 +12,8 @@
 export interface ImportedSection {
   name: string;
   lines: string[];
+  /** lines per stanza when stanzas were combined into one part (couplets → 2) */
+  groupSize?: number;
 }
 
 const HEADING_WORDS =
@@ -98,6 +100,27 @@ export function parseText(text: string, kind: "song" | "rap" | "poem" | string =
   const repeated = keys.map((k, i) => keys.some((o, j) => j !== i && o === k && k.length > 0));
   const chorus = kind === "rap" ? "Hook" : "Chorus";
   const verse = kind === "poem" ? "Stanza" : kind === "rap" ? "Rap" : "Verse";
+  // many short stanzas (couplets, single lines): combine them into parts of ~8–12 lines
+  const short = filled.length > 8 && filled.reduce((n, b) => n + b.lines.length, 0) / filled.length < 4;
+  if (short) {
+    const sizes = filled.map((b) => b.lines.length);
+    const common = [1, 2, 3, 4].sort((a, b) => sizes.filter((x) => x === b).length - sizes.filter((x) => x === a).length)[0];
+    let n = 0;
+    let cur: ImportedSection | null = null;
+    for (const [i, b] of filled.entries()) {
+      if (repeated[i] && kind !== "poem") {
+        out.push({ name: chorus, lines: [...b.lines] });
+        cur = null;
+        continue;
+      }
+      if (!cur || cur.lines.length >= 8) {
+        cur = { name: `${kind === "poem" || kind === "speech" || kind === "story" ? "Part" : verse} ${++n}`, lines: [], groupSize: common };
+        out.push(cur);
+      }
+      cur.lines.push(...b.lines);
+    }
+    return out;
+  }
   let n = 0;
   for (const [i, b] of filled.entries()) {
     out.push({ name: repeated[i] && kind !== "poem" ? chorus : `${verse} ${++n}`, lines: [...b.lines] });
