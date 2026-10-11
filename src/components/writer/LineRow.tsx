@@ -11,6 +11,7 @@ import { usePlayer } from "./Player";
 import { LengthControls } from "./LengthControls";
 import { useWriter } from "./context";
 import { useFollow } from "./follow";
+import { snapSectionStart } from "@/lib/audio/structure";
 import { AI_ACTIONS, isLocked, letterColor, STATUS_META } from "./util";
 
 export function RhymeBadge({ match }: { match: RhymeMatch | null }) {
@@ -330,6 +331,27 @@ export function LineRow({ line, number, letter, partnerText, partnerNumber, targ
                         if (id) w.select(id);
                       }}
                     />
+                    {index > 0 && (
+                      <MenuItem
+                        label="✂ New section from here…"
+                        onClick={() => {
+                          setMenu(false);
+                          const name = window.prompt("This line and the ones after it become a new section. Name (e.g. Rap 1, Chorus, Bridge):", isRap ? "Hook" : "Rap");
+                          if (!name?.trim()) return;
+                          // the new section starts where this line is sung, on the bar (a pickup stays in it)
+                          const sec = w.tree.sections.find((x) => x.id === line.section_id);
+                          const k = sec?.lines.findIndex((l) => l.id === line.id) ?? -1;
+                          const at = line.audio_at ?? (sec ? player.lineStart(sec.id, k) : null);
+                          let start = at;
+                          if (at !== null && w.tree.audio?.bpm) {
+                            const bar = (w.tree.audio.beats_per_bar * 60) / w.tree.audio.bpm;
+                            start = snapSectionStart(at, w.tree.audio);
+                            if (start > at + 0.15) start = Math.max(0, start - bar);
+                          }
+                          void w.mutate(`/api/lines/${line.id}`, { action: "splitSection", name: name.trim(), start });
+                        }}
+                      />
+                    )}
                     <MenuItem label="Move up" onClick={() => (setMenu(false), void w.mutate(`/api/lines/${line.id}`, { action: "move", dir: -1 }))} />
                     <MenuItem label="Move down" onClick={() => (setMenu(false), void w.mutate(`/api/lines/${line.id}`, { action: "move", dir: 1 }))} />
                     <MenuItem label="Add my own option…" onClick={() => {

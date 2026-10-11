@@ -1,5 +1,5 @@
 import { draftPlan, draftSection, fillBank, fitLine } from "@/lib/server/ai";
-import { addLine, appendLines, applyDraft, clearBank, deleteSection, getTree, insertBank, moveSection, setBankState, updateLine, updateSection } from "@/lib/server/repo";
+import { addLine, appendLines, applyDraft, clearBank, deleteSection, getTree, insertBank, mergeIntoPrevious, moveSection, setBankState, updateLine, updateSection } from "@/lib/server/repo";
 import { rhymePartners } from "@/lib/scheme";
 import { db } from "@/lib/server/db";
 import { body, handle, pick, treeResponse } from "@/lib/server/http";
@@ -117,6 +117,7 @@ export async function POST(req: Request, ctx: RouteContext<"/api/sections/[id]">
       return treeResponse(s);
     }
     if (b.action === "move") return treeResponse(await moveSection(id, b.dir === -1 ? -1 : 1));
+    if (b.action === "mergePrevious") return treeResponse(await mergeIntoPrevious(id));
     return Response.json({ error: "Unknown action" }, { status: 400 });
   });
 }

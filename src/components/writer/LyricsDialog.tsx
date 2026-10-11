@@ -6,6 +6,13 @@ import type { LyricsPlan } from "@/lib/audio/lyrics";
 import { fmtTime } from "@/lib/audio/song-map";
 import { useWriter } from "./context";
 
+interface RebuiltSection {
+  name: string;
+  kind: string;
+  start: number;
+  lines: { text: string; at: number }[];
+}
+
 interface Status {
   configured: boolean;
   transcript: { created_at: string; words: number } | null;
@@ -21,6 +28,14 @@ export function LyricsDialog({ onClose }: { onClose: () => void }) {
   const hasAnchors = w.tree.sections.some((s) => s.audio_start !== null);
   const [status, setStatus] = useState<Status | null>(null);
   const [plan, setPlan] = useState<LyricsPlan | null>(null);
+  const [song, setSong] = useState<RebuiltSection[] | null>(null);
+  const kept = w.tree.sections.reduce(
+    (n, s) => n + s.lines.filter((l) => l.status === "APPROVED" || l.status === "APPROVED_EDITED").length,
+    0,
+  );
+  const written = w.tree.sections.reduce((n, s) => n + s.lines.filter((l) => l.text.trim()).length, 0);
+  // rebuilding is the better start while nothing is approved yet
+  const [mode, setMode] = useState<"rebuild" | "fill">(kept ? "fill" : "rebuild");
   const [auto, setAuto] = useState(!hasAnchors);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -38,6 +53,13 @@ export function LyricsDialog({ onClose }: { onClose: () => void }) {
         const data = (await res.json()) as { plan?: LyricsPlan; error?: string };
         if (!res.ok || !data.plan) throw new Error(data.error ?? "Something went wrong");
         setPlan(data.plan);
+        const r = await fetch(`/api/projects/${pid}/lyrics`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ action: "rebuildPlan" }),
+        });
+        const d2 = (await r.json()) as { song?: RebuiltSection[] };
+        setSong(d2.song ?? null);
         if (action === "transcribe") setStatus((s) => (s ? { ...s, transcript: { created_at: new Date().toISOString(), words: 0 } } : s));
       } catch (e) {
         setError((e as Error).message);
@@ -65,6 +87,20 @@ export function LyricsDialog({ onClose }: { onClose: () => void }) {
     if (res) onClose();
   };
 
+  const rebuildSong = async () => {
+    if (
+      written &&
+      !window.confirm(
+        `Replace all sections and lines (${written} written${kept ? `, ${kept} approved` : ""}) with the song rebuilt from the vocals? A version is saved first, so you can restore it under History → Versions.`,
+      )
+    )
+      return;
+    setBusy("Rebuilding the song…");
+    const res = await w.mutate(`/api/projects/${pid}/lyrics`, { action: "rebuild" });
+    setBusy(null);
+    if (res) onClose();
+  };
+
   const toggleAuto = (v: boolean) => {
     setAuto(v);
     if (status?.transcript) void call("plan", v);
@@ -78,8 +114,8 @@ export function LyricsDialog({ onClose }: { onClose: () => void }) {
           <div>
             <h2 className="font-semibold">Lyrics from the beat</h2>
             <p className="text-xs text-muted">
-              Reads the recorded vocals, splits them into lines per bar and fills only the bars you haven&apos;t written yet. Imported
-              lines are marked <em>Suggested</em> so you can approve or edit them.
+              Reads the recorded vocals: rebuild the whole song from them (sections + lines as they are sung), or fill only the bars you
+              haven&apos;t written yet. Imported lines are marked <em>Suggested</em> so you can approve or edit them.
             </p>
           </div>
           <button className="btn-ghost" onClick={onClose}>
@@ -107,20 +143,66 @@ export function LyricsDialog({ onClose }: { onClose: () => void }) {
           </div>
         )}
 
-        {!hasAnchors && (
+        {(plan || song) && (
+          <div className="mt-3 flex flex-wrap gap-1.5 text-sm">
+            <button className={mode === "rebuild" ? "btn-primary px-3 py-1 text-xs" : "btn px-3 py-1 text-xs"} onClick={() => setMode("rebuild")}>
+              Rebuild the song from the vocals
+            </button>
+            <button className={mode === "fill" ? "btn-primary px-3 py-1 text-xs" : "btn px-3 py-1 text-xs"} onClick={() => setMode("fill")}>
+              Only fill my free bars
+            </button>
+          </div>
+        )}
+
+        {mode === "rebuild" && song && !busy && (
+          <div className="mt-3 space-y-3">
+            <p className="text-xs text-muted">
+              Sections from how the vocals are performed — fast delivery is <strong>Rap</strong>, parts that come back are <strong>Chorus</strong>{" "}
+              / <strong>Bridge</strong>, the rest <strong>Verse</strong> — starting on the beat. Every sentence starts a new line and each line
+              keeps the time it is sung. Wrong somewhere? Afterwards use a line&apos;s ⋯ → “✂ New section from here” or a section&apos;s ⚙ →
+              “Merge into previous”, and rename sections by tapping their name.
+            </p>
+            <div className="max-h-[50vh] space-y-3 overflow-auto rounded-md border border-line p-3">
+              {song.map((s, i) => (
+                <div key={i}>
+                  <div className="text-xs font-bold uppercase tracking-wide text-accent">
+                    {s.name} <span className="font-normal text-muted">· {fmtTime(s.start)} · {s.lines.length ? `${s.lines.length} lines` : "instrumental"}</span>
+                  </div>
+                  {s.lines.map((l, k) => (
+                    <div key={k} className="flex gap-2 text-sm">
+                      <span className="w-9 shrink-0 text-right font-mono text-[11px] text-muted">{fmtTime(l.at)}</span>
+                      <span>{l.text}</span>
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+            <div className="flex items-center justify-end gap-2">
+              {written > 0 && <span className="mr-auto text-xs text-muted">Replaces your current {written} lines · a version is saved first</span>}
+              <button className="btn" onClick={onClose}>
+                Cancel
+              </button>
+              <button className="btn-primary" disabled={!song.some((s) => s.lines.length)} onClick={() => void rebuildSong()}>
+                Rebuild song
+              </button>
+            </div>
+          </div>
+        )}
+
+        {mode === "fill" && !hasAnchors && (
           <label className="mt-3 flex items-center gap-2 text-sm">
             <input type="checkbox" checked={auto} onChange={(e) => toggleAuto(e.target.checked)} />
             Detect sections (intro, verses, chorus/hook, outro) and anchor them on the beat
           </label>
         )}
-        {hasAnchors && (
+        {mode === "fill" && hasAnchors && (
           <p className="mt-3 text-xs text-muted">Using your anchored sections. Vocals before the first anchor are skipped.</p>
         )}
 
         {busy && <p className="mt-3 text-sm text-muted">{busy}</p>}
         {error && <p className="mt-3 rounded-md bg-bad-soft px-3 py-2 text-sm text-bad">{error}</p>}
 
-        {plan && !busy && (
+        {mode === "fill" && plan && !busy && (
           <div className="mt-4 space-y-3">
             <p className="text-sm">
               <strong>{plan.filled}</strong> lines to import · {plan.kept} of your lines kept

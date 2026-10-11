@@ -387,6 +387,19 @@ function SectionSettings({ section, index, total }: { section: SectionT; index: 
             </button>
           </>
         )}
+        {index > 0 && (
+          <button
+            className="btn text-xs"
+            title="Moves this section's lines to the end of the section before it"
+            onClick={() => {
+              const prev = w.tree.sections[index - 1];
+              if (window.confirm(`Merge “${section.name}” into “${prev.name}”? Its ${section.lines.length} lines move to the end of “${prev.name}”.`))
+                void w.mutate(`/api/sections/${section.id}`, { action: "mergePrevious" });
+            }}
+          >
+            ⤒ Merge into previous
+          </button>
+        )}
         <button
           className="btn ml-auto text-xs text-bad"
           onClick={() => {

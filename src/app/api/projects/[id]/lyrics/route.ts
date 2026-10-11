@@ -1,5 +1,6 @@
 import { planLyrics, type LyricsPlan } from "@/lib/audio/lyrics";
-import { applyLyricsPlan, getTree, setLineTimes } from "@/lib/server/repo";
+import { songSections, sungLines } from "@/lib/audio/song-lines";
+import { applyLyricsPlan, getTree, rebuildSong, setLineTimes } from "@/lib/server/repo";
 import { storedTranscript, transcribeBeat, transcriptionConfigured, vocalTimes } from "@/lib/server/transcribe";
 import { body, handle, treeResponse } from "@/lib/server/http";
 import type { ProjectTree } from "@/lib/types";
@@ -23,6 +24,19 @@ function plan(tree: ProjectTree, words: Parameters<typeof planLyrics>[0]["words"
   });
 }
 
+/** The song rebuilt from its vocals: sections (rap / chorus / verse…) with lines as they are sung. */
+function rebuild(tree: ProjectTree, words: Parameters<typeof planLyrics>[0]["words"]) {
+  const a = tree.audio!;
+  const bar = a.bpm ? (a.beats_per_bar * 60) / a.bpm : null;
+  const lines = sungLines(words, tree.project.language, { bar });
+  return songSections(lines, { ...a, duration: a.duration }, tree.project.type).map((s) => ({
+    name: s.name,
+    kind: s.kind,
+    start: s.start,
+    lines: s.lines.map((l) => ({ text: l.text, at: Math.round(Math.max(s.start, l.start - 0.05) * 1000) / 1000 })),
+  }));
+}
+
 /** Whether lyrics reading is set up, and the stored transcript's date (if any). */
 export async function GET(_req: Request, ctx: RouteContext<"/api/projects/[id]/lyrics">) {
   return handle(async () => {
@@ -36,6 +50,8 @@ export async function GET(_req: Request, ctx: RouteContext<"/api/projects/[id]/l
  *  transcribe {autoSections}  — 1 ElevenLabs call, stores the words, returns a preview plan
  *  plan {autoSections}        — preview from the stored transcript (free)
  *  apply {autoSections}       — writes the plan into the project (free), returns the tree
+ *  rebuildPlan                — preview of the whole song rebuilt from the vocals (free)
+ *  rebuild                    — replaces all sections + lines with it (version saved first; free)
  */
 export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]/lyrics">) {
   return handle(async () => {
@@ -51,6 +67,12 @@ export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]/l
     const stored = await storedTranscript(id);
     if (!stored) return Response.json({ error: "Read the lyrics first." }, { status: 400 });
     if (b.action === "plan") return Response.json({ plan: plan(tree, stored.words, auto), words: stored.words.length });
+    if (b.action === "rebuildPlan") return Response.json({ song: rebuild(tree, stored.words) });
+    if (b.action === "rebuild") {
+      const group = tree.project.type === "song" || tree.project.type === "rap" ? 2 : 1;
+      await rebuildSong(id, rebuild(tree, stored.words), group);
+      return treeResponse(id);
+    }
     if (b.action === "apply") {
       const p = plan(tree, stored.words, auto);
       const group = tree.project.type === "song" || tree.project.type === "rap" ? 2 : 1;

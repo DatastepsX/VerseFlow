@@ -29,6 +29,11 @@ Product spec: see the original `verseflow_product_spec.md` (Phase 1 + core of Ph
   (bar-synchronous timbre/harmony self-similarity). Typing the BPM or ÷2/×2 refits the grid; “🧲 Snap sections to
   the beat” also moves every section start onto the nearest beat change (≤ ~1 bar / 2.5 s) or bar line. Sections
   created from the lyrics start on beat changes too.
+- **Rebuild the song from the vocals** (`src/lib/audio/song-lines.ts`, Lyrics dialog, free): lines as they are sung
+  (every sentence starts a new line, pauses end lines, double-length lines split at their comma, lone words join the
+  next line) and sections as they are performed — fast delivery (≥ ~6 syllables/s) is **Rap**, repeated blocks are
+  **Chorus** / **Bridge** (lines that recur together), the rest **Verse**, long gaps **Break**, starts on the beat.
+  A version is saved first. By hand: a line's ⋯ → “✂ New section from here”, a section's ⚙ → “Merge into previous”.
 - **Line timing on the beat** (`src/lib/audio/timeline.ts`): the highlight follows each line's real start —
   “🎯 Sync to vocals” aligns the written lines with the transcribed vocals (word-level alignment, no API call; also
   runs after taking lyrics over), “👆 Tap along” lets the writer tap when lines start (stored in `lines.audio_at`);

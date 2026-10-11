@@ -812,3 +812,79 @@ export async function swapAlternative(altId: string) {
   check(await db().from("alternatives").update({ text: line.text, created_at: new Date().toISOString() }).eq("id", altId));
   return updateLine(alt.line_id, { text: alt.text, status: "SUGGESTED" }, "swap");
 }
+
+/**
+ * Replaces the whole song with sections + lines rebuilt from the vocals
+ * (a version is saved first, so it can be restored). Lines keep their sung
+ * start (audio_at) so playback follows them exactly.
+ */
+export async function rebuildSong(
+  projectId: string,
+  sections: { name: string; start: number; lines: { text: string; at: number }[] }[],
+  groupSize: number,
+) {
+  await saveVersion(projectId, "Before rebuilding from the vocals");
+  const old = check(await db().from("sections").select("id").eq("project_id", projectId)) as { id: string }[];
+  for (const s of old) await deleteSection(s.id);
+  for (const s of sections) {
+    const id = await addSection(projectId, { name: s.name, group_size: groupSize, audio_start: s.start });
+    const rows = await appendLines(
+      id,
+      s.lines.map((l) => ({ text: l.text, status: "SUGGESTED" as LineStatus })),
+    );
+    await setLineTimes(
+      projectId,
+      rows.map((r, i) => ({ id: r.id, at: s.lines[i].at })),
+    );
+  }
+  await touch(projectId);
+}
+
+/** "New section from here": this line and the ones after it move into a new section right after this one. */
+export async function splitSection(lineId: string, name: string, start: number | null) {
+  const line = await getLine(lineId);
+  const section = check(await db().from("sections").select("*").eq("id", line.section_id).single()) as Section;
+  const lines = check(
+    await db().from("lines").select("id").eq("section_id", section.id).eq("deleted", false).order("position"),
+  ) as { id: string }[];
+  const k = lines.findIndex((l) => l.id === lineId);
+  if (k <= 0) throw new Error("This is already the first line of the section.");
+  // make room right after the section (for sections without a beat anchor)
+  const after = check(
+    await db().from("sections").select("id, position").eq("project_id", section.project_id).gt("position", section.position),
+  ) as { id: string; position: number }[];
+  for (const s of after) check(await db().from("sections").update({ position: s.position + 1 }).eq("id", s.id));
+  const row = check(
+    await db()
+      .from("sections")
+      .insert({
+        project_id: section.project_id,
+        name: name.trim() || "New section",
+        group_size: section.group_size,
+        bars_per_line: section.bars_per_line,
+        audio_start: section.audio_start !== null ? start : null,
+        position: section.position + 1,
+      })
+      .select("id")
+      .single(),
+  ) as { id: string };
+  const moving = lines.slice(k).map((l) => l.id);
+  check(await db().from("lines").update({ section_id: row.id }).in("id", moving));
+  await touch(section.project_id);
+  return section.project_id;
+}
+
+/** Moves every line of the section to the end of the section before it and removes the section. */
+export async function mergeIntoPrevious(sectionId: string) {
+  const s = check(await db().from("sections").select("project_id").eq("id", sectionId).single()) as { project_id: string };
+  const tree = await getTree(s.project_id);
+  const i = tree.sections.findIndex((x) => x.id === sectionId);
+  if (i <= 0) throw new Error("There is no section before this one.");
+  const prev = tree.sections[i - 1];
+  const base = Math.max(0, ...prev.lines.map((l) => l.position));
+  const moving = tree.sections[i].lines;
+  for (const [k, l] of moving.entries())
+    check(await db().from("lines").update({ section_id: prev.id, position: base + k + 1 }).eq("id", l.id));
+  await deleteSection(sectionId);
+  return s.project_id;
+}

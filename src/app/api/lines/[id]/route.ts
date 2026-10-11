@@ -1,4 +1,4 @@
-import { addAlternatives, deleteLine, getTree, moveLine, setBankState, updateLine } from "@/lib/server/repo";
+import { addAlternatives, deleteLine, getTree, moveLine, setBankState, splitSection, updateLine } from "@/lib/server/repo";
 import { generateOptions } from "@/lib/server/ai";
 import { body, handle, pick, treeResponse } from "@/lib/server/http";
 import type { Line } from "@/lib/types";
@@ -32,8 +32,15 @@ export async function POST(req: Request, ctx: RouteContext<"/api/lines/[id]">) {
       count?: number;
       instruction?: string;
       rhymeStrength?: "exact" | "loose" | "none";
+      name?: string;
+      start?: number | null;
     }>(req);
     switch (b.action) {
+      case "splitSection":
+        // this line and the ones after it become a new section (e.g. where the rap starts)
+        return treeResponse(
+          await splitSection(id, (b.name ?? "New section").slice(0, 60), typeof b.start === "number" && Number.isFinite(b.start) ? b.start : null),
+        );
       case "move":
         return treeResponse(await moveLine(id, b.dir === -1 ? -1 : 1));
       case "addAlternative":
