@@ -221,7 +221,39 @@ function PlayerBar({ peaks, audioRef }: { peaks: number[]; audioRef: React.RefOb
   const audio = w.tree.audio!;
   const duration = audio.duration ?? 0;
   const [time, setTime] = useState(0);
-  const [expanded, setExpanded] = useState(true);
+  // full | mini (one row) | hidden (floating button); remembered per browser
+  const [mode, setModeState] = useState<"full" | "mini" | "hidden">("full");
+  const [typing, setTyping] = useState(false);
+  useEffect(() => {
+    let saved: string | null = null;
+    try {
+      saved = localStorage.getItem("vf.player.mode");
+    } catch {}
+    const initial = saved === "full" || saved === "mini" || saved === "hidden" ? saved : window.innerWidth < 1024 ? "mini" : "full";
+    // restoring a saved preference after hydration
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setModeState(initial);
+  }, []);
+  const setMode = (m: "full" | "mini" | "hidden") => {
+    setModeState(m);
+    try {
+      localStorage.setItem("vf.player.mode", m);
+    } catch {}
+  };
+  // on phones the keyboard needs the space: tuck the player away while typing
+  useEffect(() => {
+    const small = () => window.matchMedia("(max-width: 1023px)").matches;
+    const isField = (t: EventTarget | null) => t instanceof HTMLElement && (t.tagName === "TEXTAREA" || t.tagName === "INPUT");
+    const onIn = (e: FocusEvent) => small() && isField(e.target) && setTyping(true);
+    const onOut = (e: FocusEvent) => isField(e.target) && setTyping(false);
+    document.addEventListener("focusin", onIn);
+    document.addEventListener("focusout", onOut);
+    return () => {
+      document.removeEventListener("focusin", onIn);
+      document.removeEventListener("focusout", onOut);
+    };
+  }, []);
+  const expanded = mode === "full";
   const [bpmEdit, setBpmEdit] = useState<string | null>(null);
   const [lyricsOpen, setLyricsOpen] = useState(false);
   const waveRef = useRef<HTMLDivElement>(null);
@@ -276,9 +308,30 @@ function PlayerBar({ peaks, audioRef }: { peaks: number[]; audioRef: React.RefOb
   const anchorSection = (sectionId: string) =>
     void w.mutate(`/api/sections/${sectionId}`, { audio_start: p.snappedNow() }, "PATCH");
 
+  if (mode === "hidden" || typing) {
+    return (
+      <>
+        {!typing && (
+          <div className="fixed bottom-[4.5rem] right-3 z-30 flex overflow-hidden rounded-full border border-line bg-panel shadow-lg lg:bottom-4 lg:right-[396px]">
+            <button className="px-3 py-2 text-sm" disabled={!p.ready} onClick={p.toggle} title="Play / pause">
+              {p.playing ? "❚❚" : "▶"}
+            </button>
+            <button className="border-l border-line px-3 py-2 text-sm" onClick={() => setMode("mini")} title="Show the player">
+              🎵 {p.playing ? fmtTime(time) : ""}
+            </button>
+          </div>
+        )}
+        {lyricsOpen && <LyricsDialog onClose={() => setLyricsOpen(false)} />}
+      </>
+    );
+  }
+
   return (
+    <>
+    {/* reserves room at the end of the page so the fixed player never covers the last lines */}
+    <div aria-hidden className={expanded ? "h-56" : "h-14"} />
     <div className="fixed inset-x-0 bottom-14 z-30 border-t border-line bg-panel/95 px-3 py-2 shadow-[0_-4px_16px_rgba(0,0,0,0.08)] backdrop-blur lg:bottom-0 lg:left-44 lg:right-[380px]">
-      <div className="flex flex-wrap items-center gap-2 text-sm">
+      <div className={`flex items-center gap-2 text-sm ${expanded ? "flex-wrap" : "flex-nowrap overflow-hidden"}`}>
         <button className="btn-primary w-16 justify-center" disabled={!p.ready} onClick={p.toggle} title="Play / pause (space)">
           {p.ready ? (p.playing ? "❚❚" : "▶") : "…"}
         </button>
@@ -311,7 +364,7 @@ function PlayerBar({ peaks, audioRef }: { peaks: number[]; audioRef: React.RefOb
               {audio.bpm ? `${audio.bpm} BPM` : "BPM ?"}
             </button>
           )}
-          {audio.bpm && (
+          {audio.bpm && expanded && (
             <>
               <button className="btn-ghost px-1 text-xs" title="Half time" onClick={() => update({ bpm: Math.round((audio.bpm! / 2) * 10) / 10 })}>
                 ÷2
@@ -328,8 +381,11 @@ function PlayerBar({ peaks, audioRef }: { peaks: number[]; audioRef: React.RefOb
               </button>
             </>
           )}
-          <button className="btn-ghost px-1 text-xs" onClick={() => setExpanded((x) => !x)} title={expanded ? "Collapse" : "Expand"}>
+          <button className="btn-ghost px-1.5 text-sm" onClick={() => setMode(expanded ? "mini" : "full")} title={expanded ? "Make smaller" : "Show waveform & sections"}>
             {expanded ? "▾" : "▴"}
+          </button>
+          <button className="btn-ghost px-1.5 text-sm" onClick={() => setMode("hidden")} title="Hide the player">
+            ✕
           </button>
         </span>
       </div>
@@ -424,6 +480,7 @@ function PlayerBar({ peaks, audioRef }: { peaks: number[]; audioRef: React.RefOb
       {barLength(audio) === null && <p className="mt-1 text-xs text-warn">No tempo detected — enter the BPM to get bars.</p>}
       {lyricsOpen && <LyricsDialog onClose={() => setLyricsOpen(false)} />}
     </div>
+    </>
   );
 }
 

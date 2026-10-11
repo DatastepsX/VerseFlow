@@ -53,6 +53,8 @@ export function suggestForSlot(opts: {
   skip?: number;
   /** text of a line marked as rhythm reference in this section */
   rhythmRef?: string | null;
+  /** the slot's section: its own bank lines rank first, other sections' bars are reused too */
+  sectionId?: string;
 }): SlotSuggestions {
   const { bank, texts, index, groupSize, scheme, lang } = opts;
   const count = opts.count ?? 3;
@@ -97,6 +99,8 @@ export function suggestForSlot(opts: {
     }
     // flow of the line before matters as much as the rhyme
     score += 0.8 * rhythm;
+    // bars written for this section fit its story best; other sections' bars are reused after them
+    if (opts.sectionId && b.section_id === opts.sectionId) score += 0.15;
     scored.push({ line: b, score, quality, syllables: pr.syllables, rhythm, sylDiff });
   }
   scored.sort((x, y) => y.score - x.score);

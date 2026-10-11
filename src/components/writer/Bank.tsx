@@ -32,8 +32,11 @@ export function BankPicker({
 }) {
   const w = useWriter();
   const [skip, setSkip] = useState(0);
-  const bank = w.tree.bank.filter((b) => b.section_id === sectionId);
+  // the whole project's bank: bars generated for other sections are reused (no new API call)
+  const bank = w.tree.bank;
+  const sectionName = (id: string) => w.tree.sections.find((x) => x.id === id)?.name ?? "another section";
   const available = bank.filter((b) => b.state === "available").length;
+  const sectionAvailable = bank.filter((b) => b.state === "available" && b.section_id === sectionId).length;
   const rhythmRef = w.tree.sections.find((x) => x.id === sectionId)?.lines.find((l) => l.kind === "rhythm_ref" && l.text.trim())?.text;
   const { suggestions, partnerText, matches, reference } = suggestForSlot({
     bank,
@@ -45,10 +48,16 @@ export function BankPicker({
     count: 3,
     skip,
     rhythmRef,
+    sectionId,
   });
   const filling = w.filling.has(sectionId);
   const written = texts.filter((t) => t.trim()).length;
-  const fillLabel = partnerText && matches === 0 ? `✨ Get bars rhyming with “${lastWord(partnerText)}”` : available ? "✨ Refill bank" : "✨ Fill suggestion bank";
+  const fillLabel =
+    partnerText && matches === 0
+      ? `✨ Get bars rhyming with “${lastWord(partnerText)}”`
+      : sectionAvailable === 0
+        ? "✨ Write bars for this section"
+        : "✨ Refill bank";
 
   return (
     <div className="space-y-1.5">
@@ -82,6 +91,9 @@ export function BankPicker({
         <div key={s.line.id} className="group/b flex items-baseline gap-2 rounded-md border border-line bg-panel-2 px-2.5 py-2 hover:border-accent">
           <button className="min-w-0 flex-1 text-left text-[16px] leading-snug hover:text-accent" onClick={() => onUse(s.line)} title="Use this bar">
             {s.line.text}
+            {s.line.section_id !== sectionId && (
+              <span className="ml-1.5 align-middle text-[10px] uppercase tracking-wide text-muted">from {sectionName(s.line.section_id)}</span>
+            )}
           </button>
           <span
             className={`text-[11px] ${s.quality === "perfect" ? "text-ok" : s.quality === "assonance" ? "text-warn" : "text-muted"}`}

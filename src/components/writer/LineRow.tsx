@@ -117,7 +117,7 @@ export function LineRow({ line, number, letter, partnerText, partnerNumber, targ
             className="min-w-0 flex-1 field-sizing-content resize-none bg-transparent text-[17px] leading-snug outline-none"
             value={draft}
             onFocus={() =>
-              w.setInsertTarget((word) => setDraft((d) => (d.trim() ? `${d.replace(/\s+$/, "")} ${word}` : word)))
+              w.setInsertTarget((word, mode) => setDraft((d) => (mode === "replace" || !d.trim() ? word : `${d.replace(/\s+$/, "")} ${word}`)))
             }
             onChange={(e) => setDraft(e.target.value.replace(/\n/g, ""))}
             onKeyDown={(e) => {
@@ -367,7 +367,7 @@ function Alternatives({
                 className="input min-h-14 text-[15px]"
                 autoFocus
                 value={text}
-                onFocus={() => w.setInsertTarget((word) => setText((d) => `${d.replace(/\s+$/, "")} ${word}`))}
+                onFocus={() => w.setInsertTarget((word, mode) => setText((d) => (mode === "replace" ? word : `${d.replace(/\s+$/, "")} ${word}`)))}
                 onChange={(e) => setText(e.target.value)}
               />
             ) : (

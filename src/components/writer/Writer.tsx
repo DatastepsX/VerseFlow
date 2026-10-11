@@ -4,11 +4,11 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PROJECT_TYPES, type ProjectTree } from "@/lib/types";
 import { WriterContext, type GenerateOptions, type WriterApi } from "./context";
-import { FullTextPanel, HistoryPanel, ProjectSettingsPanel, RhymePanel } from "./Panels";
+import { BarsPanel, FullTextPanel, HistoryPanel, ProjectSettingsPanel, RhymePanel } from "./Panels";
 import { PlayerProvider, UploadBeatButton } from "./Player";
 import { SectionBlock } from "./SectionBlock";
 
-type Tab = "full" | "rhymes" | "history" | "settings";
+type Tab = "full" | "bars" | "rhymes" | "history" | "settings";
 type MobileView = "write" | Tab;
 
 export function Writer({ initial, aiEnabled }: { initial: ProjectTree; aiEnabled: boolean }) {
@@ -20,7 +20,7 @@ export function Writer({ initial, aiEnabled }: { initial: ProjectTree; aiEnabled
   const [rhymeQuery, setRhymeQuery] = useState("");
   const [toast, setToast] = useState<string | null>(null);
   const [pending, setPending] = useState(0);
-  const insertRef = useRef<((w: string) => void) | null>(null);
+  const insertRef = useRef<((text: string, mode?: "append" | "replace") => void) | null>(null);
   const pid = tree.project.id;
 
   const showError = useCallback((msg: string) => {
@@ -121,6 +121,15 @@ export function Writer({ initial, aiEnabled }: { initial: ProjectTree; aiEnabled
           showError(`“${word}” copied — click into a line first to insert directly.`);
         }
       },
+      placeBar: (text) => {
+        if (insertRef.current) {
+          insertRef.current(text, "replace");
+          setMobile("write");
+        } else {
+          void navigator.clipboard?.writeText(text);
+          showError("Bar copied — tap into the line you are writing to place it directly.");
+        }
+      },
       lookupRhyme,
       filling,
       fillBank,
@@ -170,6 +179,8 @@ export function Writer({ initial, aiEnabled }: { initial: ProjectTree; aiEnabled
   const panel = (t: Tab) =>
     t === "full" ? (
       <FullTextPanel />
+    ) : t === "bars" ? (
+      <BarsPanel />
     ) : t === "rhymes" ? (
       <RhymePanel key={rhymeQuery} query={rhymeQuery} setQuery={setRhymeQuery} />
     ) : t === "history" ? (
@@ -229,7 +240,7 @@ export function Writer({ initial, aiEnabled }: { initial: ProjectTree; aiEnabled
 
           {/* main writing area */}
           <main
-            className={`min-w-0 flex-1 px-2 pt-4 sm:px-6 ${tree.audio ? "pb-64 lg:pb-48" : "pb-28 lg:pb-12"} ${mobile === "write" ? "" : "hidden lg:block"}`}
+            className={`min-w-0 flex-1 px-2 pt-4 sm:px-6 pb-28 lg:pb-12 ${mobile === "write" ? "" : "hidden lg:block"}`}
             onClick={(e) => e.target === e.currentTarget && setSelectedId(null)}
           >
             <div className="mx-auto max-w-2xl space-y-8">
@@ -251,13 +262,13 @@ export function Writer({ initial, aiEnabled }: { initial: ProjectTree; aiEnabled
           {/* side panel (desktop) */}
           <aside className="sticky top-14 hidden h-[calc(100dvh-3.5rem)] w-[380px] shrink-0 flex-col border-l border-line bg-panel lg:flex">
             <div className="flex border-b border-line text-sm">
-              {(["full", "rhymes", "history"] as Tab[]).map((t) => (
+              {(["full", "bars", "rhymes", "history"] as Tab[]).map((t) => (
                 <button
                   key={t}
                   className={`flex-1 py-2 ${tab === t ? "border-b-2 border-accent font-semibold" : "text-muted hover:text-fg"}`}
                   onClick={() => setTab(t)}
                 >
-                  {t === "full" ? "Full version" : t === "rhymes" ? "Rhymes" : "History"}
+                  {t === "full" ? "Full version" : t === "bars" ? "Bars" : t === "rhymes" ? "Rhymes" : "History"}
                 </button>
               ))}
             </div>
@@ -274,6 +285,7 @@ export function Writer({ initial, aiEnabled }: { initial: ProjectTree; aiEnabled
             [
               ["write", "✎", "Write"],
               ["full", "≡", "Full text"],
+              ["bars", "✦", "Bars"],
               ["rhymes", "♪", "Rhymes"],
               ["history", "↺", "History"],
               ["settings", "⚙", "Settings"],

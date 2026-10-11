@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { analyzeLine, compareLines, lastWord, rhymeScheme } from "@/lib/rhyme/analyze";
 import { rhymePartners } from "@/lib/scheme";
+import { suggestForSlot } from "@/lib/suggest";
 import type { ProjectTree } from "@/lib/types";
 import { useWriter } from "./context";
 import { sectionRanges, fmtTime } from "@/lib/audio/song-map";
@@ -154,12 +155,23 @@ function Composer({
   const startsGroup = nextIdx % g === 0 && g > 1;
   const written = texts.filter((t) => t.trim()).length;
   const bankSize = w.tree.bank.filter((b) => b.section_id === section.id).length;
+  // bars already generated anywhere in the project that fit this slot (free)
+  const reusable = suggestForSlot({
+    bank: w.tree.bank,
+    texts,
+    index: nextIdx,
+    groupSize: g,
+    scheme: section.rhyme_scheme,
+    lang: w.lang,
+    sectionId: section.id,
+  }).matches;
   const { autoFillBank } = w;
 
-  // after the first two lines (rhythm + length are set), stock the bank once automatically
+  // after the first two lines (rhythm + length are set), stock this section's bank once —
+  // unless bars from other sections already fit
   useEffect(() => {
-    if (written >= 2 && bankSize === 0) autoFillBank(section.id);
-  }, [written, bankSize, autoFillBank, section.id]);
+    if (written >= 2 && bankSize === 0 && reusable < 3) autoFillBank(section.id);
+  }, [written, bankSize, reusable, autoFillBank, section.id]);
 
   const add = async (t = text.trim(), fromBank = bankId) => {
     if (!t || busy) return;
@@ -186,7 +198,12 @@ function Composer({
           className="min-w-0 flex-1 field-sizing-content resize-none bg-transparent py-1.5 text-[17px] leading-snug outline-none placeholder:text-muted"
           placeholder={nextIdx === 0 ? "Write the first line…" : pa ? `Next line — rhyme with “${lastWord(partnerText)}”` : "Write the next line…"}
           value={text}
-          onFocus={() => w.setInsertTarget((word) => setText((d) => (d.trim() ? `${d.replace(/\s+$/, "")} ${word}` : word)))}
+          onFocus={() =>
+            w.setInsertTarget((word, mode) => {
+              setText((d) => (mode === "replace" || !d.trim() ? word : `${d.replace(/\s+$/, "")} ${word}`));
+              if (mode === "replace") setBankId(null);
+            })
+          }
           onChange={(e) => setText(e.target.value.replace(/\n/g, ""))}
           onKeyDown={(e) => {
             if (e.key === "Enter") {

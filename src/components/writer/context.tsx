@@ -20,8 +20,10 @@ export interface WriterApi {
   generating: Set<string>;
   generate: (lineId: string, opts?: GenerateOptions) => Promise<void>;
   /** the focused text field registers a function that inserts a word into it */
-  setInsertTarget: (fn: ((word: string) => void) | null) => void;
+  setInsertTarget: (fn: ((text: string, mode?: "append" | "replace") => void) | null) => void;
   insertWord: (word: string) => void;
+  /** put a whole bar into the line being written (replaces its text) */
+  placeBar: (text: string) => void;
   lookupRhyme: (text: string) => void;
   /** sections whose bank is being filled */
   filling: Set<string>;

@@ -5,6 +5,7 @@ import { api, projectApi } from "@/lib/client/api";
 import type { RhymeResult } from "@/lib/rhyme/types";
 import { LANGUAGES, PROJECT_TYPES, type LineEvent, type ProjectSettings, type ProjectVersion } from "@/lib/types";
 import { useWriter } from "./context";
+import { prosody } from "@/lib/rhyme/prosody";
 import { download, fullText } from "./util";
 
 export function FullTextPanel() {
@@ -328,6 +329,82 @@ export function ProjectSettingsPanel({ onClose }: { onClose: () => void }) {
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Every bar generated so far, from all sections — browse, search and reuse
+ * them without a new AI call. Tap a bar to put it into the line you're writing.
+ */
+export function BarsPanel() {
+  const w = useWriter();
+  const [q, setQ] = useState("");
+  const [showUsed, setShowUsed] = useState(false);
+  const needle = q.trim().toLowerCase();
+  const bars = w.tree.bank.filter((b) => (showUsed || b.state === "available") && (!needle || b.text.toLowerCase().includes(needle)));
+  const total = w.tree.bank.filter((b) => b.state === "available").length;
+
+  const bySection = w.tree.sections
+    .map((s) => {
+      const fams = new Map<string, typeof bars>();
+      for (const b of bars.filter((x) => x.section_id === s.id)) (fams.get(b.family) ?? fams.set(b.family, []).get(b.family)!).push(b);
+      return { section: s, families: [...fams.entries()] };
+    })
+    .filter((x) => x.families.length);
+
+  return (
+    <div className="space-y-3">
+      <p className="text-xs text-muted">
+        {total} bars generated so far — free to reuse. Tap a bar to put it into the line you are writing (tap into a line first).
+      </p>
+      <div className="flex items-center gap-2">
+        <input className="input py-1.5" placeholder="Search bars or words…" value={q} onChange={(e) => setQ(e.target.value)} />
+        <label className="flex shrink-0 items-center gap-1 text-xs text-muted">
+          <input type="checkbox" checked={showUsed} onChange={(e) => setShowUsed(e.target.checked)} /> used
+        </label>
+      </div>
+      {bySection.length === 0 && (
+        <p className="text-sm text-muted">
+          {total ? "No bar matches your search." : "No bars yet — they appear here after the first “✨ … · 1 AI call” in any section."}
+        </p>
+      )}
+      {bySection.map(({ section, families }) => (
+        <div key={section.id}>
+          <h4 className="label">{section.name}</h4>
+          <div className="space-y-2">
+            {families.map(([fam, list]) => (
+              <div key={fam} className="rounded-md border border-line p-1.5">
+                <div className="px-1 pb-1 text-[10px] uppercase tracking-wide text-muted">rhyme {fam.split(":").slice(2).join(":") || "—"}</div>
+                {list.map((b) => (
+                  <div key={b.id} className={`flex items-baseline gap-2 rounded px-1.5 py-1 hover:bg-panel-2 ${b.state === "used" ? "opacity-50" : ""}`}>
+                    <button
+                      className="min-w-0 flex-1 text-left text-sm leading-snug hover:text-accent"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => w.placeBar(b.text)}
+                      title="Put this bar into the line you are writing"
+                    >
+                      {b.text}
+                    </button>
+                    <span className="font-mono text-[11px] text-muted">{prosody(b.text, w.lang).syllables}</span>
+                    {b.state === "used" ? (
+                      <span className="text-[10px] uppercase text-muted">used</span>
+                    ) : (
+                      <button
+                        className="btn-ghost px-1 py-0 text-xs text-bad"
+                        title="Not for me — never suggest again"
+                        onClick={() => void w.mutate(`/api/bank/${b.id}`, { action: "reject" })}
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
