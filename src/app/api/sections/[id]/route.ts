@@ -1,4 +1,4 @@
-import { draftSection, fillBank, fitLine } from "@/lib/server/ai";
+import { draftPlan, draftSection, fillBank, fitLine } from "@/lib/server/ai";
 import { addLine, appendLines, applyDraft, clearBank, deleteSection, getTree, insertBank, moveSection, setBankState, updateLine, updateSection } from "@/lib/server/repo";
 import { rhymePartners } from "@/lib/scheme";
 import { db } from "@/lib/server/db";
@@ -39,6 +39,8 @@ export async function POST(req: Request, ctx: RouteContext<"/api/sections/[id]">
       replace?: boolean;
       reference?: string;
       lines?: { text: string; status?: LineStatus; bankId?: string }[];
+      mode?: "fill" | "replace";
+      indices?: number[];
     }>(req);
     if (b.action === "addLine") {
       const line = await addLine(id, { text: b.text, status: b.status, kind: b.kind, afterLineId: b.afterLineId });
@@ -47,11 +49,24 @@ export async function POST(req: Request, ctx: RouteContext<"/api/sections/[id]">
       res.headers.set("x-line-id", line.id);
       return res;
     }
-    if (b.action === "fill" || b.action === "replace") {
-      // one AI call per chunk of ~8 bars: open bars (fill) or the bars marked ✕ (replace), from the section's pattern.
-      // x-remaining tells the client how many bars are left for the next call.
+    if (b.action === "draftPlan") {
+      // no AI call: creates the section's missing bars (fill) and returns the chunks (x-parts) the client then
+      // drafts in parallel — one call each — so a 40-bar section takes about as long as 8 bars
       const s = await sectionProject(id);
-      const { slots, remaining } = await draftSection(await getTree(s), id, b.action, b.instruction?.slice(0, 500));
+      const mode = b.mode === "replace" ? "replace" : "fill";
+      const plan = draftPlan(await getTree(s), id, mode);
+      if (plan.n > plan.lyricCount)
+        await appendLines(id, Array.from({ length: plan.n - plan.lyricCount }, () => ({ text: "", status: "OPEN" as LineStatus })));
+      const res = await treeResponse(s);
+      res.headers.set("x-parts", JSON.stringify(plan.chunks));
+      return res;
+    }
+    if (b.action === "fill" || b.action === "replace") {
+      // one AI call for a chunk of ~8 bars (b.indices, else the first chunk): open bars (fill) or the bars marked ✕
+      // (replace), from the section's pattern. x-remaining = open bars not written by this call.
+      const s = await sectionProject(id);
+      const only = Array.isArray(b.indices) ? b.indices.filter((k) => Number.isInteger(k)).slice(0, 16) : undefined;
+      const { slots, remaining } = await draftSection(await getTree(s), id, b.action, b.instruction?.slice(0, 500), only);
       await applyDraft(id, slots);
       const res = await treeResponse(s);
       res.headers.set("x-remaining", String(slots.length ? remaining : 0));

@@ -20,7 +20,7 @@ Product spec: see the original `verseflow_product_spec.md` (Phase 1 + core of Ph
   - English: heuristic analysis (Datamuse for the rhyme dictionary)
 - **Rhyme dictionary** (`/api/rhymes`): Italian index of ~120k words ranked by frequency; English via Datamuse
 - **Section pattern & draft workflow**: each section has its own *pattern* (⚙/♩ “Set pattern”: 1–2 lines that only
-  define rhythm, length and stresses — not lyrics; copyable between sections). “✨ Fill N bars · K calls” (one call per ~8 bars, drafts appear after each) drafts every
+  define rhythm, length and stresses — not lyrics; copyable between sections). “✨ Fill N bars · K calls” (one call per ~8 bars, all running in parallel with low thinking effort — `AI_DRAFT_EFFORT` — so 40 bars take about as long as 8) drafts every
   open bar of the section (count from its length on the beat) with 3 options each, following the pattern, the rhyme
   scheme and the surrounding text (`draftSection` in `src/lib/server/ai.ts`). Review pass: ✓ keep / ✕ to replace /
   ↻ next option (free) on each row; “↻ Replace N marked” (one call per ~8 bars) rewrites only the ✕ bars to fit the kept ones.
@@ -80,6 +80,7 @@ single shared password (`APP_PASSWORD`).
 | `ELEVENLABS_API_KEY` | enables “Lyrics from beat” (speech-to-text with ElevenLabs Scribe) |
 | `AI_MODEL` | Claude model (default `claude-opus-5-5`; e.g. `claude-sonnet-5-5` / `claude-haiku-5-5` cost less) |
 | `AI_EFFORT` | `low` / `medium` (default) / `high` — lower = fewer thinking tokens |
+| `AI_DRAFT_EFFORT` | effort for section drafts (Fill / Replace): `low` (default) / `medium` / `high` |
 
 ## Development
 

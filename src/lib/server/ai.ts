@@ -199,13 +199,13 @@ Each option's "lines" array must contain exactly ${targetIdx.length} line${targe
   return { targetIds: targetIdx.map((k) => lines[k].id), options };
 }
 
-async function callJson<T>(projectId: string, kind: string, prompt: string, schema: object, system = SYSTEM): Promise<T> {
+async function callJson<T>(projectId: string, kind: string, prompt: string, schema: object, system = SYSTEM, effort = EFFORT): Promise<T> {
   const client = new Anthropic();
   const response = await client.beta.messages.create({
     model: MODEL,
     max_tokens: 16000,
     ...(FALLBACKS ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const } : {}),
-    output_config: { effort: EFFORT, format: { type: "json_schema", schema: schema as Record<string, unknown> } },
+    output_config: { effort, format: { type: "json_schema", schema: schema as Record<string, unknown> } },
     system,
     messages: [{ role: "user", content: prompt }],
   });
@@ -393,20 +393,49 @@ export function sectionLineCount(tree: ProjectTree, sectionId: string) {
 const NEEDS = new Set(["DECLINED", "NEEDS_NEW_OPTIONS"]);
 
 /**
- * One call for a section:
+ * Section drafts:
  * - "fill": write every empty bar slot (up to the section's length)
  * - "replace": write only the bars the writer marked to replace (✕)
  * Each slot gets 3 options that follow the section's pattern, the rhyme
  * scheme and the context of the bars that are kept.
  */
-/** bars written per call — keeps each call well inside the function time limit */
+/** bars written per call — keeps each call short; a section's chunks run in parallel */
 export const DRAFT_CHUNK = 8;
+/** drafts think less than single-line options: much faster, the writer reviews them anyway */
+const DRAFT_EFFORT = (process.env.AI_DRAFT_EFFORT || "low") as "low" | "medium" | "high";
 
 /**
- * Drafts the next chunk of a section's open bars (whole line groups, about
- * DRAFT_CHUNK bars). `remaining` = open bars left for the next call.
+ * Which bars a fill/replace writes: `n` = bar count of the section,
+ * `open` = bar indices to write, `chunks` = those split into whole line
+ * groups of about DRAFT_CHUNK bars (couplets stay together), one call each.
  */
-export async function draftSection(tree: ProjectTree, sectionId: string, mode: "fill" | "replace", instruction?: string) {
+export function draftPlan(tree: ProjectTree, sectionId: string, mode: "fill" | "replace") {
+  const section = tree.sections.find((s) => s.id === sectionId);
+  if (!section) throw new Error("Section not found");
+  const lyrics = section.lines.filter((l) => l.kind === "lyric");
+  const n = mode === "fill" ? Math.max(sectionLineCount(tree, sectionId), lyrics.length) : lyrics.length;
+  const isSlot = (k: number) => {
+    const l = lyrics[k];
+    if (!l || !l.text.trim()) return mode === "fill" || !!l;
+    return NEEDS.has(l.status);
+  };
+  const open = Array.from({ length: n }, (_, k) => k).filter(isSlot);
+  const g = Math.max(1, section.group_size);
+  const chunks: number[][] = [];
+  for (const k of open) {
+    const cur = chunks[chunks.length - 1];
+    if (cur && (cur.length < DRAFT_CHUNK || Math.floor(k / g) === Math.floor(cur[cur.length - 1] / g))) cur.push(k);
+    else chunks.push([k]);
+  }
+  return { n, lyricCount: lyrics.length, open, chunks };
+}
+
+/**
+ * Drafts one chunk of a section's open bars: `only` (bar indices) or else the
+ * first chunk. Other open bars are left out ([LATER]). `remaining` = open bars
+ * not written by this call.
+ */
+export async function draftSection(tree: ProjectTree, sectionId: string, mode: "fill" | "replace", instruction?: string, only?: number[]) {
   if (!aiConfigured()) throw new AiUnavailable("AI is not configured yet (ANTHROPIC_API_KEY missing).");
   const { project } = tree;
   const lang = project.language;
@@ -414,22 +443,12 @@ export async function draftSection(tree: ProjectTree, sectionId: string, mode: "
   if (!section) throw new Error("Section not found");
   const pattern = sectionPattern(section);
   const lyrics = section.lines.filter((l) => l.kind === "lyric");
-  const n = mode === "fill" ? Math.max(sectionLineCount(tree, sectionId), lyrics.length) : lyrics.length;
+  const { n, open, chunks } = draftPlan(tree, sectionId, mode);
   const texts = Array.from({ length: n }, (_, k) => lyrics[k]?.text ?? "");
-  const isSlot = (k: number) => {
-    const l = lyrics[k];
-    if (!l || !l.text.trim()) return mode === "fill" || !!l;
-    return NEEDS.has(l.status);
-  };
-  const open = Array.from({ length: n }, (_, k) => k).filter(isSlot);
-  if (!open.length) return { slots: [] as DraftSlot[], remaining: 0 };
+  const want = only ? new Set(only) : null;
+  const slots = want ? open.filter((k) => want.has(k)) : (chunks[0] ?? []);
+  if (!slots.length) return { slots: [] as DraftSlot[], remaining: 0 };
   const g = Math.max(1, section.group_size);
-  // take whole groups (couplets stay together) until the chunk is full
-  const slots: number[] = [];
-  for (const k of open) {
-    if (slots.length >= DRAFT_CHUNK && Math.floor(k / g) !== Math.floor(slots[slots.length - 1] / g)) break;
-    slots.push(k);
-  }
   const slotSet = new Set(slots);
   const later = new Set(open.filter((k) => !slotSet.has(k)));
 
@@ -471,7 +490,7 @@ Title: ${project.title}
 Language: ${langName(lang)}${st.secondaryLanguage ? ` (occasional ${st.secondaryLanguage} words are welcome)` : ""}
 ${st.genre ? `Genre: ${st.genre}\n` : ""}${st.style ? `Style / references: ${st.style}\n` : ""}${st.mood ? `Mood: ${st.mood}\n` : ""}${st.simpleLanguage ? "Vocabulary: simple, modern, direct — avoid overly poetic words\n" : ""}${st.explicitness ? `Explicit content: ${st.explicitness}\n` : ""}${project.concept ? `Story / concept: ${project.concept}\n` : ""}
 ${others ? `REST OF THE SONG (context — stay consistent with it)\n${others}\n\n` : ""}SECTION: ${section.name}${section.story_beat ? `\nStory beat: ${section.story_beat}` : ""}${section.intensity ? `\nIntensity: ${section.intensity}/10` : ""}${section.notes ? `\nNotes: ${section.notes}` : ""}
-Lines grouped in ${g === 2 ? "couplets" : g === 1 ? "single lines" : `groups of ${g}`}. [KEEP] lines are fixed — never change them; write only the [OPEN] lines. [LATER] lines are written in a later step — skip them, but leave room for the text to continue there.
+Lines grouped in ${g === 2 ? "couplets" : g === 1 ? "single lines" : `groups of ${g}`}. [KEEP] lines are fixed — never change them; write only the [OPEN] lines. [LATER] lines are written separately — skip them, but leave room for the text to continue there.
 ${listing}
 
 ${template || "Keep lines a natural, performable length."}
@@ -483,7 +502,7 @@ ${instruction ? `Writer's direction: ${instruction}` : ""}
 ${rejected.size ? `Rejected before — do not repeat or closely paraphrase:\n${[...rejected].slice(0, 40).map((t) => `- ${t}`).join("\n")}` : ""}
 Return one entry per [OPEN] line, "line" = its number.`;
 
-  const parsed = await callJson<{ slots: { line: number; options: string[] }[] }>(project.id, mode === "fill" ? "section_fill" : "section_replace", prompt, DRAFT_SCHEMA);
+  const parsed = await callJson<{ slots: { line: number; options: string[] }[] }>(project.id, mode === "fill" ? "section_fill" : "section_replace", prompt, DRAFT_SCHEMA, SYSTEM, DRAFT_EFFORT);
   const drafted = parsed.slots
     .map((x) => ({ index: x.line - 1, options: x.options.map((o) => o.trim()).filter(Boolean).slice(0, 3) }))
     .filter((x) => slotSet.has(x.index) && x.options.length);

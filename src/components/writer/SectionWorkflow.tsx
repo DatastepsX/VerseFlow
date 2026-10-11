@@ -7,7 +7,7 @@ import { prosody } from "@/lib/rhyme/prosody";
 import type { ProjectTree } from "@/lib/types";
 import { useWriter } from "./context";
 
-/** bars the server drafts per call (DRAFT_CHUNK in src/lib/server/ai.ts) */
+/** bars the server drafts per call (DRAFT_CHUNK in src/lib/server/ai.ts) — used for the call count label */
 const DRAFT_CHUNK = 8;
 
 type SectionT = ProjectTree["sections"][number];
@@ -43,18 +43,24 @@ export function SectionWorkflow({ section }: { section: SectionT }) {
     setBusy(action === "keepAll" ? "keep" : action);
     if (action === "keepAll") await w.mutate(`/api/sections/${section.id}`, { action });
     else {
-      // the server writes ~8 bars per call; keep going until the section is done (drafts appear after each call)
-      const total = action === "fill" ? open : replace;
-      let left = total;
-      setProgress({ done: 0, total });
-      for (let i = 0; i < Math.ceil(total / DRAFT_CHUNK) + 2 && left > 0; i++) {
-        const res = await w.mutate(`/api/sections/${section.id}`, { action });
-        if (!res) break;
-        const next = Number(res.headers.get("x-remaining") ?? 0);
-        if (!(next < left)) break;
-        left = next;
-        setProgress({ done: total - left, total });
-      }
+      // the server splits the section into chunks of ~8 bars; all chunks are drafted at the same time
+      // (one call each) and each chunk's drafts show up as soon as it is done
+      const plan = await w.mutate(`/api/sections/${section.id}`, { action: "draftPlan", mode: action });
+      let parts: number[][] = [];
+      try {
+        parts = JSON.parse(plan?.headers.get("x-parts") ?? "[]");
+      } catch {}
+      const total = parts.reduce((n, p) => n + p.length, 0);
+      let done = 0;
+      setProgress({ done, total });
+      await Promise.all(
+        parts.map(async (indices) => {
+          const res = await w.mutate(`/api/sections/${section.id}`, { action, indices });
+          if (res) setProgress({ done: (done += indices.length), total });
+        }),
+      );
+      // responses can arrive out of order: reload once so the newest state wins
+      if (parts.length > 1) await w.mutate(`/api/projects/${w.tree.project.id}`, undefined, "GET");
       setProgress(null);
     }
     setBusy(null);
