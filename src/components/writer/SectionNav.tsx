@@ -15,7 +15,7 @@ export function SectionLink({ section }: { section: { id: string; name: string; 
       className="truncate rounded px-2 py-1 text-sm hover:bg-panel-2"
       onClick={() => player.cueSection(section.id)}
     >
-      {sectionArtists(w.tree.project, section).map((a) => (
+      {sectionArtists(w.tree, section).map((a) => (
         <span key={a.id} className="mr-1 inline-block h-2 w-2 rounded-full align-middle" style={{ background: a.color }} title={a.name} />
       ))}
       {section.name} <span className="text-xs text-muted">{section.lines.length}</span>
@@ -85,7 +85,7 @@ export function SectionNav() {
             }}
           >
             {playingId === s.id ? "♪ " : ""}
-            {sectionArtists(w.tree.project, s).map((a) => (
+            {sectionArtists(w.tree, s).map((a) => (
               <span key={a.id} className="mr-1 inline-block h-2 w-2 rounded-full align-middle ring-1 ring-white/60" style={{ background: a.color }} title={a.name} />
             ))}
             {s.name}

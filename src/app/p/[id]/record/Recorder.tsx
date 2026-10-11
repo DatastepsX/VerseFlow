@@ -184,8 +184,8 @@ export function Recorder({ tree }: { tree: ProjectTree }) {
           );
           if (!lines.length) return null;
           const g = Math.max(1, s.group_size);
-          const who = sectionArtists(tree.project, s);
-          const mine = !me || s.artists?.includes(me);
+          const who = sectionArtists(tree, s);
+          const mine = !me || who.some((a) => a.id === me);
           return (
             <section key={s.id} id={`rec-${s.id}`} className={`mb-[1.4em] scroll-mt-16 transition-opacity ${mine ? "" : "opacity-30"}`}>
               <h2 className="mb-[0.4em] text-[0.5em] font-bold uppercase tracking-[0.2em] text-[#8b7bff]">

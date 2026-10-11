@@ -69,7 +69,7 @@ function FollowingText({ approvedOnly }: { approvedOnly: boolean }) {
         <div key={section.id}>
           <div id={`ft-sec-${section.id}`} className={`mb-2 text-xs font-bold uppercase tracking-widest ${pos?.sectionId === section.id ? "text-accent" : "text-muted"}`}>
             {section.name}
-            {sectionArtists(tree.project, section).map((a) => (
+            {sectionArtists(tree, section).map((a) => (
               <span key={a.id} className="ml-1.5">
                 <ArtistChip artist={a} small />
               </span>

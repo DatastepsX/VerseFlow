@@ -1,17 +1,18 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ARTIST_COLORS, projectArtists, sectionArtists } from "@/lib/artists";
+import { ARTIST_COLORS, artistsFrom, projectArtists, sectionArtists } from "@/lib/artists";
 import type { Artist, ProjectTree } from "@/lib/types";
 import { useWriter } from "./context";
 
 type SectionT = ProjectTree["sections"][number];
 
-export function ArtistChip({ artist, small }: { artist: Pick<Artist, "name" | "color">; small?: boolean }) {
+/** carried = performed by the section before (shown lighter, outlined) */
+export function ArtistChip({ artist, small, carried }: { artist: Pick<Artist, "name" | "color">; small?: boolean; carried?: boolean }) {
   return (
     <span
-      className={`inline-flex max-w-[9rem] items-center gap-1 truncate rounded-full font-semibold normal-case tracking-normal text-white ${small ? "px-1.5 py-0 text-[10px]" : "px-2 py-0.5 text-[11px]"}`}
-      style={{ background: artist.color }}
+      className={`inline-flex max-w-[9rem] items-center gap-1 truncate rounded-full border-2 font-semibold normal-case tracking-normal ${carried ? "bg-transparent" : "text-white"} ${small ? "px-1.5 py-0 text-[10px]" : "px-2 py-0.5 text-[11px]"}`}
+      style={carried ? { borderColor: artist.color, color: artist.color } : { background: artist.color, borderColor: artist.color }}
     >
       {artist.name}
     </span>
@@ -23,7 +24,9 @@ export function SectionArtists({ section }: { section: SectionT }) {
   const w = useWriter();
   const pid = w.tree.project.id;
   const all = projectArtists(w.tree.project);
-  const mine = sectionArtists(w.tree.project, section);
+  const mine = sectionArtists(w.tree, section);
+  // no own performers: they carry on from the section before
+  const from = artistsFrom(w.tree, section);
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const box = useRef<HTMLDivElement>(null);
@@ -55,11 +58,20 @@ export function SectionArtists({ section }: { section: SectionT }) {
   return (
     <div ref={box} className="relative flex min-w-0 items-center gap-1">
       <button className="flex min-w-0 items-center gap-1" onClick={() => setOpen((o) => !o)} title="Who performs this section">
-        {mine.length ? mine.map((a) => <ArtistChip key={a.id} artist={a} />) : <span className="btn-ghost px-1 py-0.5 text-xs text-muted">🎤 who?</span>}
+        {mine.length ? (
+          mine.map((a) => <ArtistChip key={a.id} artist={a} carried={!!from} />)
+        ) : (
+          <span className="btn-ghost px-1 py-0.5 text-xs text-muted">🎤 who?</span>
+        )}
       </button>
       {open && (
         <div className="absolute right-0 top-full z-30 mt-1 w-60 max-w-[calc(100vw-2rem)] rounded-lg border border-line bg-panel p-2 text-sm shadow-lg">
           <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted">Performed by</div>
+          {from && current.length === 0 && (
+            <p className="mb-1 text-xs text-muted">
+              Continues from <strong>{from}</strong>. Tick someone to change it from here on.
+            </p>
+          )}
           {all.length === 0 && <p className="mb-1 text-xs text-muted">No performers yet — add the first one.</p>}
           {all.map((a) => (
             <label key={a.id} className="flex cursor-pointer items-center gap-2 rounded px-1 py-1 hover:bg-panel-2">
@@ -94,7 +106,7 @@ export function ArtistsEditor() {
   const all = projectArtists(w.tree.project);
   const [name, setName] = useState("");
   const update = (artistId: string, patch: Record<string, string>) => void w.mutate(`/api/projects/${pid}`, { action: "updateArtist", artistId, ...patch });
-  const parts = (id: string) => w.tree.sections.filter((s) => s.artists?.includes(id)).map((s) => s.name);
+  const parts = (id: string) => w.tree.sections.filter((s) => sectionArtists(w.tree, s).some((a) => a.id === id)).map((s) => s.name);
   return (
     <div className="space-y-2">
       <label className="label">Performers</label>

@@ -7,10 +7,43 @@ export function projectArtists(project: Pick<Project, "settings">): Artist[] {
   return project.settings?.artists ?? [];
 }
 
-/** the performers of a section, in the project's order */
-export function sectionArtists(project: Pick<Project, "settings">, section: Pick<Section, "artists">): Artist[] {
-  const ids = new Set(section.artists ?? []);
-  return projectArtists(project).filter((a) => ids.has(a.id));
+type TreeLike = {
+  project: Pick<Project, "settings">;
+  /** in song order */
+  sections: Pick<Section, "id" | "name" | "artists">[];
+};
+
+const cache = new WeakMap<object, Map<string, { artists: Artist[]; from: string | null }>>();
+
+/**
+ * Performers carry on: a section without its own performers is performed by
+ * whoever performed the section before it, until a section gets new ones.
+ */
+function resolve(tree: TreeLike) {
+  const hit = cache.get(tree.sections);
+  if (hit) return hit;
+  const all = projectArtists(tree.project);
+  const map = new Map<string, { artists: Artist[]; from: string | null }>();
+  let last: { artists: Artist[]; name: string } | null = null;
+  for (const s of tree.sections) {
+    const own = all.filter((a) => (s.artists ?? []).includes(a.id));
+    if (own.length) {
+      last = { artists: own, name: s.name };
+      map.set(s.id, { artists: own, from: null });
+    } else map.set(s.id, { artists: last?.artists ?? [], from: last?.name ?? null });
+  }
+  cache.set(tree.sections, map);
+  return map;
+}
+
+/** who performs a section (its own performers, or carried on from the section before) */
+export function sectionArtists(tree: TreeLike, section: Pick<Section, "id">): Artist[] {
+  return resolve(tree).get(section.id)?.artists ?? [];
+}
+
+/** the section a section's performers carry on from (null when it has its own, or none) */
+export function artistsFrom(tree: TreeLike, section: Pick<Section, "id">): string | null {
+  return resolve(tree).get(section.id)?.from ?? null;
 }
 
 /** "Marco & Anna", "Marco, Anna & Luca" */
@@ -20,8 +53,8 @@ export function artistNames(artists: Pick<Artist, "name">[]) {
 }
 
 /** for AI prompts: who performs the section and how */
-export function performedBy(project: Pick<Project, "settings">, section: Pick<Section, "artists">) {
-  const a = sectionArtists(project, section);
+export function performedBy(tree: TreeLike, section: Pick<Section, "id">) {
+  const a = sectionArtists(tree, section);
   if (!a.length) return "";
   return `\nPerformed by: ${a.map((x) => (x.notes ? `${x.name} (${x.notes})` : x.name)).join(", ")} — write in their voice${a.length > 1 ? "s" : ""}`;
 }

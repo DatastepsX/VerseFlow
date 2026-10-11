@@ -50,7 +50,7 @@ export function fullText(tree: ProjectTree, opts: { approvedOnly?: boolean; mark
   if (opts.markdown) parts.push(`# ${tree.project.title}`);
   for (const { section: s, groups } of fullTextSections(tree, opts)) {
     const text = groups.map((g) => g.map((l) => (opts.markdown ? `${l.text}  ` : l.text)).join("\n")).join("\n\n");
-    const who = artistNames(sectionArtists(tree.project, s));
+    const who = artistNames(sectionArtists(tree, s));
     const head = opts.markdown ? `## ${s.name}${who ? ` — ${who}` : ""}` : `${s.name.toUpperCase()}${who ? ` (${who})` : ""}`;
     parts.push(`${head}\n\n${text}`);
   }

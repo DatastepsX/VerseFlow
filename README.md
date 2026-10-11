@@ -31,7 +31,8 @@ Product spec: see the original `verseflow_product_spec.md` (Phase 1 + core of Ph
   created from the lyrics start on beat changes too.
 - **Performers** (`src/lib/artists.ts`, `Artists.tsx`): a song's singers / rappers (name, colour, voice/style note) in
   `projects.settings.artists`; sections list who performs them (`sections.artists`, several allowed — e.g. a chorus
-  sung by two). 🎤 next to a section name assigns them; Settings → Performers renames / recolours / removes. Shown
+  sung by two). 🎤 next to a section name assigns them, and they carry on to the following sections until a section gets
+  new ones (carried performers show outlined); Settings → Performers renames / recolours / removes. Shown
   in the section chips, Full text and exports (“CHORUS (Marco & Anna)”), and Record mode can show one performer's
   parts with the others dimmed. AI prompts write each section in its performers' voice.
 - **Start from existing text** (`src/lib/text-import.ts`): paste lyrics or a poem in the new-project form —
