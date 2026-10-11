@@ -18,6 +18,8 @@ interface PlayerApi {
   toggle: () => void;
   seek: (t: number) => void;
   playSection: (sectionId: string) => void;
+  /** move the playhead to a section's start without changing play/pause */
+  cueSection: (sectionId: string) => void;
   /** current playhead time (read on demand, not reactive) */
   now: () => number;
   /** current time snapped to the nearest bar line */
@@ -131,6 +133,15 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     [seek],
   );
 
+  const cueSection = useCallback(
+    (sectionId: string) => {
+      const tr = treeRef.current;
+      const r = sectionRanges(tr.sections, tr.audio).get(sectionId);
+      if (r) seek(r.start);
+    },
+    [seek],
+  );
+
   const now = useCallback(() => audioRef.current?.currentTime ?? 0, []);
   const snappedNow = useCallback(() => {
     const a = treeRef.current.audio;
@@ -187,12 +198,13 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       toggle,
       seek,
       playSection,
+      cueSection,
       now,
       snappedNow,
       upload,
       status,
     }),
-    [audioMeta, src, filename, playing, position, loopId, toggle, seek, playSection, now, snappedNow, upload, status],
+    [audioMeta, src, filename, playing, position, loopId, toggle, seek, playSection, cueSection, now, snappedNow, upload, status],
   );
 
   return (

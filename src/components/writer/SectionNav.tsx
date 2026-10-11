@@ -4,8 +4,22 @@ import { useEffect, useRef, useState } from "react";
 import { useWriter } from "./context";
 import { usePlayer } from "./Player";
 
+/** desktop outline entry: scrolls to the section and moves the beat to its start */
+export function SectionLink({ section }: { section: { id: string; name: string; lines: unknown[] } }) {
+  const player = usePlayer();
+  return (
+    <a
+      href={`#section-${section.id}`}
+      className="truncate rounded px-2 py-1 text-sm hover:bg-panel-2"
+      onClick={() => player.cueSection(section.id)}
+    >
+      {section.name} <span className="text-xs text-muted">{section.lines.length}</span>
+    </a>
+  );
+}
+
 /**
- * Sticky row of section chips (phones/tablets): tap to jump to a section.
+ * Sticky row of section chips (phones/tablets): tap to jump to a section — the beat moves there too.
  * The section in view is highlighted; ♪ marks the one the beat is playing.
  */
 export function SectionNav() {
@@ -62,6 +76,7 @@ export function SectionNav() {
             onClick={() => {
               document.getElementById(`section-${s.id}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
               setInView(s.id);
+              player.cueSection(s.id);
             }}
           >
             {playingId === s.id ? "♪ " : ""}

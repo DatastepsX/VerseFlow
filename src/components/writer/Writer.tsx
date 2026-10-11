@@ -7,7 +7,7 @@ import { WriterContext, type GenerateOptions, type WriterApi } from "./context";
 import { BarsPanel, FullTextPanel, HistoryPanel, ProjectSettingsPanel, RhymePanel } from "./Panels";
 import { PlayerProvider, UploadBeatButton } from "./Player";
 import { SectionBlock } from "./SectionBlock";
-import { SectionNav } from "./SectionNav";
+import { SectionLink, SectionNav } from "./SectionNav";
 
 type Tab = "full" | "bars" | "rhymes" | "history" | "settings";
 type MobileView = "write" | Tab;
@@ -223,9 +223,7 @@ export function Writer({ initial, aiEnabled }: { initial: ProjectTree; aiEnabled
           <nav className="sticky top-14 hidden h-[calc(100dvh-3.5rem)] w-44 shrink-0 flex-col gap-0.5 overflow-auto border-r border-line p-3 lg:flex">
             <span className="label">Structure</span>
             {tree.sections.map((s) => (
-              <a key={s.id} href={`#section-${s.id}`} className="truncate rounded px-2 py-1 text-sm hover:bg-panel-2">
-                {s.name} <span className="text-xs text-muted">{s.lines.length}</span>
-              </a>
+              <SectionLink key={s.id} section={s} />
             ))}
             {addSectionButton}
           </nav>
