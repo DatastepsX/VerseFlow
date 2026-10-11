@@ -192,7 +192,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       upload,
       status,
     }),
-    [audioMeta, src, playing, position, loopId, toggle, seek, playSection, now, snappedNow, upload, status],
+    [audioMeta, src, filename, playing, position, loopId, toggle, seek, playSection, now, snappedNow, upload, status],
   );
 
   return (

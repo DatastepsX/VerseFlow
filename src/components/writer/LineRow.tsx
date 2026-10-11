@@ -3,7 +3,10 @@
 import { useEffect, useRef, useState } from "react";
 import { analyzeLine, compareLines, type RhymeMatch } from "@/lib/rhyme/analyze";
 import type { Alternative, Line } from "@/lib/types";
+import { prosody } from "@/lib/rhyme/prosody";
+import { rhythmReference } from "@/lib/suggest";
 import { BankPicker } from "./Bank";
+import { LengthControls } from "./LengthControls";
 import { useWriter } from "./context";
 import { AI_ACTIONS, isLocked, letterColor, STATUS_META } from "./util";
 
@@ -73,6 +76,9 @@ export function LineRow({ line, number, letter, partnerText, partnerNumber, targ
   const match = a && partnerText?.trim() ? compareLines(a, analyzeLine(partnerText, w.lang)) : null;
   const meta = STATUS_META[line.status];
   const rhythm = line.kind === "rhythm_ref";
+  const sectionRhythmRef = w.tree.sections.find((x) => x.id === line.section_id)?.lines.find((l) => l.kind === "rhythm_ref" && l.text.trim())?.text;
+  const refText = selected && !rhythm ? rhythmReference(sectionTexts, index, sectionRhythmRef) : null;
+  const refProsody = refText ? prosody(refText, w.lang) : null;
   const sylOff = a && targetSyllables && !rhythm ? Math.abs(a.syllables - targetSyllables) : 0;
 
   const saveEdit = async () => {
@@ -174,7 +180,8 @@ export function LineRow({ line, number, letter, partnerText, partnerNumber, targ
           </div>
 
           {editing ? (
-            <div className="flex gap-1.5">
+            <div className="flex flex-wrap items-center gap-1.5">
+              {!rhythm && <LengthControls text={draft} lang={w.lang} reference={refProsody} onChange={setDraft} />}
               <button className="btn-primary" onClick={() => void saveEdit()}>
                 Save
               </button>
@@ -189,7 +196,17 @@ export function LineRow({ line, number, letter, partnerText, partnerNumber, targ
               </button>
             </div>
           ) : (
-            <div className="flex flex-wrap gap-1.5">
+            <div className="flex flex-wrap items-center gap-1.5">
+              {!rhythm && line.text.trim() && (
+                <LengthControls
+                  text={line.text}
+                  lang={w.lang}
+                  reference={refProsody}
+                  onChange={(t) =>
+                    void w.mutate(`/api/lines/${line.id}`, { text: t, status: isLocked(line) ? "APPROVED_EDITED" : line.status, action: "length" }, "PATCH")
+                  }
+                />
+              )}
               {!isLocked(line) && line.text.trim() && !rhythm && (
                 <button className="btn border-ok/40 text-ok" onClick={() => void setStatus("APPROVED", "approve")}>
                   ✓ Use

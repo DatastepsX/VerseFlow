@@ -3,11 +3,13 @@
 import { useEffect, useState } from "react";
 import { analyzeLine, compareLines, lastWord, rhymeScheme } from "@/lib/rhyme/analyze";
 import { rhymePartners } from "@/lib/scheme";
-import { suggestForSlot } from "@/lib/suggest";
+import { prosody } from "@/lib/rhyme/prosody";
+import { rhythmReference, suggestForSlot } from "@/lib/suggest";
 import type { ProjectTree } from "@/lib/types";
 import { useWriter } from "./context";
 import { sectionRanges, fmtTime } from "@/lib/audio/song-map";
 import { BankPicker } from "./Bank";
+import { LengthControls } from "./LengthControls";
 import { usePlayer } from "./Player";
 import { LineRow, RhymeBadge } from "./LineRow";
 
@@ -121,7 +123,7 @@ export function SectionBlock({ section, index, total }: { section: SectionT; ind
         ))}
       </div>
 
-      <Composer section={section} texts={texts} targetSyl={targetSyl} offset={offset} live={liveLine !== null && liveLine >= lines.length} />
+      <Composer section={section} texts={texts} offset={offset} live={liveLine !== null && liveLine >= lines.length} />
     </section>
   );
 }
@@ -129,13 +131,11 @@ export function SectionBlock({ section, index, total }: { section: SectionT; ind
 function Composer({
   section,
   texts,
-  targetSyl,
   offset,
   live,
 }: {
   section: SectionT;
   texts: string[];
-  targetSyl: number | null;
   offset: number;
   live: boolean;
 }) {
@@ -154,6 +154,9 @@ function Composer({
   const match = a && pa ? compareLines(a, pa) : null;
   const startsGroup = nextIdx % g === 0 && g > 1;
   const written = texts.filter((t) => t.trim()).length;
+  const rhythmRefLine = section.lines.find((l) => l.kind === "rhythm_ref" && l.text.trim())?.text;
+  const refText = rhythmReference(texts, nextIdx, rhythmRefLine);
+  const refProsody = refText ? prosody(refText, w.lang) : null;
   const bankSize = w.tree.bank.filter((b) => b.section_id === section.id).length;
   // bars already generated anywhere in the project that fit this slot (free)
   const reusable = suggestForSlot({
@@ -217,11 +220,15 @@ function Composer({
         </button>
       </div>
       <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 pl-8 text-xs text-muted">
-        {a && (
-          <span className={targetSyl && Math.abs(a.syllables - targetSyl) >= 3 ? "text-warn" : ""}>
-            {a.syllables} syl{targetSyl ? ` / ≈${targetSyl}` : ""}
-          </span>
-        )}
+        <LengthControls
+          text={text}
+          lang={w.lang}
+          reference={refProsody}
+          onChange={(t) => {
+            setText(t);
+            setBankId(null);
+          }}
+        />
         {pa && (
           <span className="flex items-center gap-1">
             rhyme with “{lastWord(partnerText)}” (-{pa.rhymeKey}) {match && <RhymeBadge match={match} />}
