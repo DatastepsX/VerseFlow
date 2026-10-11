@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { analyzeLine, compareLines, lastWord, rhymeScheme } from "@/lib/rhyme/analyze";
 import { rhymePartners } from "@/lib/scheme";
 import type { ProjectTree } from "@/lib/types";
@@ -152,6 +152,14 @@ function Composer({
   const a = text.trim() ? analyzeLine(text, w.lang) : null;
   const match = a && pa ? compareLines(a, pa) : null;
   const startsGroup = nextIdx % g === 0 && g > 1;
+  const written = texts.filter((t) => t.trim()).length;
+  const bankSize = w.tree.bank.filter((b) => b.section_id === section.id).length;
+  const { autoFillBank } = w;
+
+  // after the first two lines (rhythm + length are set), stock the bank once automatically
+  useEffect(() => {
+    if (written >= 2 && bankSize === 0) autoFillBank(section.id);
+  }, [written, bankSize, autoFillBank, section.id]);
 
   const add = async (t = text.trim(), fromBank = bankId) => {
     if (!t || busy) return;
@@ -211,7 +219,7 @@ function Composer({
           <input type="checkbox" checked={asDraft} onChange={(e) => setAsDraft(e.target.checked)} /> add as draft
         </label>
       </div>
-      {(w.aiEnabled || w.tree.bank.some((b) => b.section_id === section.id)) && (
+      {written >= 1 && (
         <div className="mt-2 border-t border-line pl-8 pt-2">
           <BankPicker
             sectionId={section.id}
@@ -219,7 +227,7 @@ function Composer({
             texts={texts}
             groupSize={g}
             scheme={section.rhyme_scheme}
-            title={pa ? "Next bar from your bank" : "Start the next " + (g === 2 ? "couplet" : g > 2 ? "group" : "line")}
+            title={`Options for bar ${offset + nextIdx + 1}${pa ? ` · rhymes with “${lastWord(partnerText)}”` : ""}`}
             onUse={(b) => void add(b.text, b.id)}
             onEdit={(b) => {
               setText(b.text);

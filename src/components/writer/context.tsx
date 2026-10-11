@@ -27,6 +27,8 @@ export interface WriterApi {
   filling: Set<string>;
   /** one AI call that stocks a section's suggestion bank */
   fillBank: (sectionId: string, targets?: string[]) => Promise<void>;
+  /** fill the bank once, automatically, when a section's first lines are written */
+  autoFillBank: (sectionId: string) => void;
   aiEnabled: boolean;
 }
 

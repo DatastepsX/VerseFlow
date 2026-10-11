@@ -45,15 +45,18 @@ export function BankPicker({
     skip,
   });
   const filling = w.filling.has(sectionId);
+  const written = texts.filter((t) => t.trim()).length;
   const fillLabel = partnerText && matches === 0 ? `✨ Get bars rhyming with “${lastWord(partnerText)}”` : available ? "✨ Refill bank" : "✨ Fill suggestion bank";
 
   return (
     <div className="space-y-1.5">
       <div className="flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-wide text-muted">
-        <span>{title}</span>
-        <span className="normal-case tracking-normal">
-          {available ? `${matches} fitting · ${available} in bank · free` : "bank is empty"}
-        </span>
+        <span className="font-semibold text-fg">{title}</span>
+        {available > 0 && (
+          <span className="normal-case tracking-normal">
+            {matches} fitting · {available} in bank · free
+          </span>
+        )}
         {matches > 3 && (
           <button className="btn-ghost px-1 py-0 text-[11px] normal-case" onClick={() => setSkip((s) => s + 3)}>
             ↻ others
@@ -62,8 +65,8 @@ export function BankPicker({
       </div>
 
       {suggestions.map((s) => (
-        <div key={s.line.id} className="group/b flex items-baseline gap-2 rounded-md bg-panel-2 px-2 py-1.5">
-          <button className="min-w-0 flex-1 text-left text-[15px] leading-snug hover:text-accent" onClick={() => onUse(s.line)} title="Use this bar">
+        <div key={s.line.id} className="group/b flex items-baseline gap-2 rounded-md border border-line bg-panel-2 px-2.5 py-2 hover:border-accent">
+          <button className="min-w-0 flex-1 text-left text-[16px] leading-snug hover:text-accent" onClick={() => onUse(s.line)} title="Use this bar">
             {s.line.text}
           </button>
           <span
@@ -93,20 +96,37 @@ export function BankPicker({
         </div>
       ))}
 
+      {!w.aiEnabled && available === 0 && (
+        <p className="rounded-md bg-warn-soft px-2.5 py-2 text-xs text-warn">
+          Bar options are written by Claude. Add <code>ANTHROPIC_API_KEY</code> in Vercel → verseflow → Settings → Environment Variables
+          and redeploy — after that, options appear here automatically once a section has two lines.
+        </p>
+      )}
+
+      {filling && (
+        <p className="animate-pulse rounded-md bg-accent-soft px-2.5 py-2 text-sm text-accent">
+          ✨ Writing ~40 bars that fit your lines (1 AI call)…
+        </p>
+      )}
+
+      {w.aiEnabled && !filling && available === 0 && written < 2 && (
+        <p className="text-xs text-muted">Write a second line (or start now) — then options for the next bars appear here.</p>
+      )}
+
       {available > 0 && suggestions.length === 0 && (
         <p className="text-xs text-muted">
           {partnerText ? `Nothing in the bank rhymes with “${lastWord(partnerText)}” yet.` : "No fitting bars left in the bank."}
         </p>
       )}
 
-      {w.aiEnabled && (suggestions.length < 3 || available < 6) && (
+      {w.aiEnabled && !filling && (suggestions.length < 3 || available < 6) && (
         <button
           className="btn px-2 py-1 text-xs"
           disabled={filling}
           onClick={() => void w.fillBank(sectionId, partnerText && matches === 0 ? [partnerText] : [])}
           title="One AI call writes ~30–40 bars for this section; afterwards suggestions are free"
         >
-          {filling ? "Writing bars… (1 AI call)" : `${fillLabel} · 1 AI call`}
+          {available === 0 ? "✨ Show options now" : fillLabel} · 1 AI call
         </button>
       )}
     </div>

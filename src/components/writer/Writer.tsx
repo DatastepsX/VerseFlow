@@ -85,6 +85,17 @@ export function Writer({ initial, aiEnabled }: { initial: ProjectTree; aiEnabled
     [mutate],
   );
 
+  // fill a section's bank automatically once its first lines set rhythm and length — at most once per section per visit
+  const autoFilled = useRef(new Set<string>());
+  const autoFillBank = useCallback(
+    (sectionId: string) => {
+      if (!aiEnabled || autoFilled.current.has(sectionId)) return;
+      autoFilled.current.add(sectionId);
+      void fillBank(sectionId);
+    },
+    [aiEnabled, fillBank],
+  );
+
   const lookupRhyme = useCallback((text: string) => {
     setRhymeQuery(text);
     setTab("rhymes");
@@ -113,9 +124,10 @@ export function Writer({ initial, aiEnabled }: { initial: ProjectTree; aiEnabled
       lookupRhyme,
       filling,
       fillBank,
+      autoFillBank,
       aiEnabled,
     }),
-    [tree, mutate, selectedId, generating, generate, lookupRhyme, filling, fillBank, aiEnabled, showError],
+    [tree, mutate, selectedId, generating, generate, lookupRhyme, filling, fillBank, autoFillBank, aiEnabled, showError],
   );
 
   useEffect(() => {
