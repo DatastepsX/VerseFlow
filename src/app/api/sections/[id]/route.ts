@@ -9,11 +9,10 @@ export const maxDuration = 300;
 
 export async function PATCH(req: Request, ctx: RouteContext<"/api/sections/[id]">) {
   return handle(async () => {
-    const b = await body(req);
-    const projectId = await updateSection(
-      (await ctx.params).id,
-      pick<Section>(b, ["name", "group_size", "story_beat", "intensity", "rhyme_scheme", "notes", "audio_start", "bars_per_line", "pattern"]),
-    );
+    const b = await body<Record<string, unknown>>(req);
+    const patch = pick<Section>(b, ["name", "group_size", "story_beat", "intensity", "rhyme_scheme", "notes", "audio_start", "bars_per_line", "pattern"]);
+    if (Array.isArray(b.artists)) patch.artists = b.artists.filter((x): x is string => typeof x === "string").slice(0, 12);
+    const projectId = await updateSection((await ctx.params).id, patch);
     return treeResponse(projectId);
   });
 }

@@ -9,6 +9,8 @@ import { prosody } from "@/lib/rhyme/prosody";
 import { download, fullText, fullTextSections } from "./util";
 import { useFollow } from "./follow";
 import { NowPlaying } from "./NowPlaying";
+import { ArtistChip, ArtistsEditor } from "./Artists";
+import { sectionArtists } from "@/lib/artists";
 import { usePlayer } from "./Player";
 
 export function FullTextPanel() {
@@ -67,6 +69,11 @@ function FollowingText({ approvedOnly }: { approvedOnly: boolean }) {
         <div key={section.id}>
           <div id={`ft-sec-${section.id}`} className={`mb-2 text-xs font-bold uppercase tracking-widest ${pos?.sectionId === section.id ? "text-accent" : "text-muted"}`}>
             {section.name}
+            {sectionArtists(tree.project, section).map((a) => (
+              <span key={a.id} className="ml-1.5">
+                <ArtistChip artist={a} small />
+              </span>
+            ))}
           </div>
           <div className="space-y-3">
             {groups.map((g, i) => (
@@ -282,7 +289,12 @@ export function ProjectSettingsPanel({ onClose }: { onClose: () => void }) {
 
   const save = async () => {
     const { title, type, language, concept, ...settings } = form;
-    await w.mutate(`/api/projects/${p.id}`, { title, type, language, concept: concept || null, settings }, "PATCH");
+    // performers are edited live (their own actions): keep the current list, not the one from when the panel opened
+    await w.mutate(
+      `/api/projects/${p.id}`,
+      { title, type, language, concept: concept || null, settings: { ...settings, artists: w.tree.project.settings?.artists } },
+      "PATCH",
+    );
     onClose();
   };
 
@@ -348,6 +360,7 @@ export function ProjectSettingsPanel({ onClose }: { onClose: () => void }) {
           <input type="checkbox" checked={!!form.simpleLanguage} onChange={(e) => set("simpleLanguage", e.target.checked)} /> Simple wording
         </label>
       </div>
+      <ArtistsEditor />
       <div className="flex justify-between gap-2 pt-2">
         <button
           className="btn text-xs"

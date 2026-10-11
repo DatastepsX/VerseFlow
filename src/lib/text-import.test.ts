@@ -45,3 +45,12 @@ test("a long prose line is split at sentence ends; normal lines stay as they are
   ]);
   assert.deepEqual(parseText("Ciao. Come stai?")[0].lines, ["Ciao. Come stai?"]);
 });
+
+test("a lyric line that starts with a section word is not a heading", () => {
+  const out = parseText("[Chorus]\nRitornello uno\nBridge over the water\n\nStrofa 2\nRiga\n\nRAP x2\nBarra");
+  assert.deepEqual(out, [
+    { name: "Chorus", lines: ["Ritornello uno", "Bridge over the water"] },
+    { name: "Strofa 2", lines: ["Riga"] },
+    { name: "Rap", lines: ["Barra"] },
+  ]);
+});

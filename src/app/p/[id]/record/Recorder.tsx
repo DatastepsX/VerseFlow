@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { buildTimeline, positionIn } from "@/lib/audio/timeline";
+import { projectArtists, sectionArtists } from "@/lib/artists";
 import type { ProjectTree } from "@/lib/types";
 
 function usePref<T>(key: string, initial: T): [T, (v: T) => void] {
@@ -40,6 +41,9 @@ export function Recorder({ tree }: { tree: ProjectTree }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [beatUrl, setBeatUrl] = useState<string | null>(null);
   const [beatPlaying, setBeatPlaying] = useState(false);
+  // a performer sees their own parts bright and the others' dimmed (to know where they come in)
+  const [me, setMe] = useState("");
+  const artists = projectArtists(tree.project);
   const [live, setLive] = useState<{ sectionId: string; lineIndex: number | null } | null>(null);
   useEffect(() => {
     if (!tree.audio) return;
@@ -149,6 +153,16 @@ export function Recorder({ tree }: { tree: ProjectTree }) {
           speed
           <input type="range" min={5} max={120} value={speed} onChange={(e) => setSpeed(Number(e.target.value))} />
         </label>
+        {artists.length > 0 && (
+          <select className="rounded bg-[#222] px-2 py-1" value={me} onChange={(e) => setMe(e.target.value)} title="Show my parts">
+            <option value="">All parts</option>
+            {artists.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.name}&apos;s parts
+              </option>
+            ))}
+          </select>
+        )}
         {beatUrl && (
           <button className="rounded bg-[#e0730b] px-3 py-1 font-semibold" onClick={toggleBeat} title="Play the beat; the current line follows it (space)">
             {beatPlaying ? "❚❚ Beat" : "▶ Beat"}
@@ -170,9 +184,18 @@ export function Recorder({ tree }: { tree: ProjectTree }) {
           );
           if (!lines.length) return null;
           const g = Math.max(1, s.group_size);
+          const who = sectionArtists(tree.project, s);
+          const mine = !me || s.artists?.includes(me);
           return (
-            <section key={s.id} id={`rec-${s.id}`} className="mb-[1.4em] scroll-mt-16">
-              <h2 className="mb-[0.4em] text-[0.5em] font-bold uppercase tracking-[0.2em] text-[#8b7bff]">{s.name}</h2>
+            <section key={s.id} id={`rec-${s.id}`} className={`mb-[1.4em] scroll-mt-16 transition-opacity ${mine ? "" : "opacity-30"}`}>
+              <h2 className="mb-[0.4em] text-[0.5em] font-bold uppercase tracking-[0.2em] text-[#8b7bff]">
+                {s.name}
+                {who.map((a) => (
+                  <span key={a.id} className="ml-[0.6em] normal-case tracking-normal" style={{ color: a.color }}>
+                    ● {a.name}
+                  </span>
+                ))}
+              </h2>
               {lines.map((l, i) => {
                 n++;
                 const k = s.lines.indexOf(l); // index on the beat (bar position) within the section

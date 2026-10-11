@@ -3,16 +3,21 @@
 import { useEffect, useRef, useState } from "react";
 import { useWriter } from "./context";
 import { usePlayer } from "./Player";
+import { sectionArtists } from "@/lib/artists";
 
 /** desktop outline entry: scrolls to the section and moves the beat to its start */
-export function SectionLink({ section }: { section: { id: string; name: string; lines: unknown[] } }) {
+export function SectionLink({ section }: { section: { id: string; name: string; lines: unknown[]; artists: string[] } }) {
   const player = usePlayer();
+  const w = useWriter();
   return (
     <a
       href={`#section-${section.id}`}
       className="truncate rounded px-2 py-1 text-sm hover:bg-panel-2"
       onClick={() => player.cueSection(section.id)}
     >
+      {sectionArtists(w.tree.project, section).map((a) => (
+        <span key={a.id} className="mr-1 inline-block h-2 w-2 rounded-full align-middle" style={{ background: a.color }} title={a.name} />
+      ))}
       {section.name} <span className="text-xs text-muted">{section.lines.length}</span>
     </a>
   );
@@ -80,6 +85,9 @@ export function SectionNav() {
             }}
           >
             {playingId === s.id ? "♪ " : ""}
+            {sectionArtists(w.tree.project, s).map((a) => (
+              <span key={a.id} className="mr-1 inline-block h-2 w-2 rounded-full align-middle ring-1 ring-white/60" style={{ background: a.color }} title={a.name} />
+            ))}
             {s.name}
             <span className="ml-1 font-normal opacity-70">{s.lines.length}</span>
           </button>

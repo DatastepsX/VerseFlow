@@ -25,7 +25,9 @@ function headingName(line: string): string | null {
   const colon = t.match(/^(.{2,30}):$/);
   if (colon && HEADING_WORDS.test(colon[1])) return clean(colon[1]);
   // a short line that is only a section word (+ number / repeat mark)
-  if (t.length <= 30 && HEADING_WORDS.test(t) && /^[\p{L}\s\-]+\s*\d*\s*(\(?x\d\)?)?$/iu.test(t)) return clean(t);
+  // (only the word, with an optional number / roman numeral / repeat mark — "Ritornello uno sole" is a lyric line)
+  const bare = t.match(HEADING_WORDS);
+  if (bare && /^\s*(\d+|[ivx]+)?\s*(\(?x\d+\)?)?\s*$/i.test(t.slice(bare[0].length))) return clean(t);
   return null;
 }
 

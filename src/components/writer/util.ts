@@ -1,3 +1,4 @@
+import { artistNames, sectionArtists } from "@/lib/artists";
 import type { Line, LineStatus, ProjectTree } from "@/lib/types";
 
 export const STATUS_META: Record<LineStatus, { label: string; bar: string; chip: string }> = {
@@ -49,7 +50,9 @@ export function fullText(tree: ProjectTree, opts: { approvedOnly?: boolean; mark
   if (opts.markdown) parts.push(`# ${tree.project.title}`);
   for (const { section: s, groups } of fullTextSections(tree, opts)) {
     const text = groups.map((g) => g.map((l) => (opts.markdown ? `${l.text}  ` : l.text)).join("\n")).join("\n\n");
-    parts.push(`${opts.markdown ? "## " + s.name : s.name.toUpperCase()}\n\n${text}`);
+    const who = artistNames(sectionArtists(tree.project, s));
+    const head = opts.markdown ? `## ${s.name}${who ? ` — ${who}` : ""}` : `${s.name.toUpperCase()}${who ? ` (${who})` : ""}`;
+    parts.push(`${head}\n\n${text}`);
   }
   return parts.join("\n\n\n");
 }

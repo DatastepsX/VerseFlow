@@ -14,6 +14,7 @@ import { SectionWorkflow } from "./SectionWorkflow";
 import { LengthControls } from "./LengthControls";
 import { usePlayer } from "./Player";
 import { useFollow } from "./follow";
+import { SectionArtists } from "./Artists";
 import { LineRow, RhymeBadge } from "./LineRow";
 
 type SectionT = ProjectTree["sections"][number];
@@ -58,6 +59,7 @@ export function SectionBlock({ section, index, total }: { section: SectionT; ind
           }}
           onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
         />
+        <SectionArtists section={section} />
         {section.story_beat && <span className="hidden truncate text-xs text-muted sm:inline">{section.story_beat}</span>}
         {section.intensity ? <span className="text-xs text-muted">⚡{section.intensity}</span> : null}
         {w.tree.audio && range && (

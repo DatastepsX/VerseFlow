@@ -546,6 +546,7 @@ async function insertSnapshot(projectId: string, tree: { sections: (Section & { 
           audio_start: s.audio_start ?? null,
           bars_per_line: s.bars_per_line ?? 1,
           pattern: s.pattern ?? null,
+          artists: s.artists ?? [],
         })
         .select("id")
         .single(),
@@ -865,6 +866,7 @@ export async function splitSection(lineId: string, name: string, start: number |
         name: name.trim() || "New section",
         group_size: section.group_size,
         bars_per_line: section.bars_per_line,
+        artists: section.artists ?? [],
         audio_start: section.audio_start !== null ? start : null,
         position: section.position + 1,
       })
@@ -931,4 +933,42 @@ export async function applyPolish(sectionId: string, slots: { index: number; opt
   );
   if (rows.length) check(await db().from("alternatives").insert(rows));
   await touch(section.project_id);
+}
+
+// ---------- performers ----------
+
+async function projectSettings(projectId: string) {
+  const p = check(await db().from("projects").select("settings").eq("id", projectId).single()) as { settings: ProjectSettings | null };
+  return p.settings ?? {};
+}
+
+export async function addArtist(projectId: string, name: string, color: string) {
+  const settings = await projectSettings(projectId);
+  const artist = { id: crypto.randomUUID().slice(0, 8), name: name.trim().slice(0, 40) || "Artist", color };
+  await updateProject(projectId, { settings: { ...settings, artists: [...(settings.artists ?? []), artist] } });
+  return artist;
+}
+
+export async function updateArtist(projectId: string, id: string, patch: { name?: string; notes?: string; color?: string }) {
+  const settings = await projectSettings(projectId);
+  const artists = (settings.artists ?? []).map((a) =>
+    a.id === id
+      ? {
+          ...a,
+          ...(patch.name?.trim() ? { name: patch.name.trim().slice(0, 40) } : {}),
+          ...(patch.notes !== undefined ? { notes: patch.notes.trim().slice(0, 200) || undefined } : {}),
+          ...(patch.color ? { color: patch.color } : {}),
+        }
+      : a,
+  );
+  await updateProject(projectId, { settings: { ...settings, artists } });
+}
+
+/** removes the performer and takes them off every section */
+export async function removeArtist(projectId: string, id: string) {
+  const settings = await projectSettings(projectId);
+  await updateProject(projectId, { settings: { ...settings, artists: (settings.artists ?? []).filter((a) => a.id !== id) } });
+  const secs = check(await db().from("sections").select("id, artists").eq("project_id", projectId)) as { id: string; artists: string[] }[];
+  for (const s of secs)
+    if (s.artists?.includes(id)) check(await db().from("sections").update({ artists: s.artists.filter((x) => x !== id) }).eq("id", s.id));
 }

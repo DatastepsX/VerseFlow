@@ -37,7 +37,18 @@ export const LANGUAGES: { value: string; label: string }[] = [
   { value: "fr", label: "Français" },
 ];
 
+/** a performer of the song (singer, rapper, featured artist…) */
+export interface Artist {
+  id: string;
+  name: string;
+  color: string;
+  /** voice / style, used by the AI when it writes their parts */
+  notes?: string;
+}
+
 export interface ProjectSettings {
+  /** the performers; sections list the ids of who performs them */
+  artists?: Artist[];
   genre?: string;
   mood?: string;
   style?: string;
@@ -79,6 +90,8 @@ export interface Section {
   bars_per_line: number;
   /** rhythm template for this section (1–2 lines, not part of the lyrics) */
   pattern: string | null;
+  /** ids of the performers (project settings → artists) */
+  artists: string[];
 }
 
 export interface AudioTrack {

@@ -5,6 +5,9 @@ import {
   redo,
   getTree,
   importSections,
+  addArtist,
+  removeArtist,
+  updateArtist,
   saveVersion,
   setLineTimes,
   undo,
@@ -40,7 +43,7 @@ export const maxDuration = 300;
 export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]">) {
   return handle(async () => {
     const { id } = await ctx.params;
-    const b = await body<{ action: string; name?: string; group_size?: number; label?: string; audio_start?: number | null; times?: { id: string; at: number | null }[]; text?: string }>(req);
+    const b = await body<{ action: string; name?: string; group_size?: number; label?: string; audio_start?: number | null; times?: { id: string; at: number | null }[]; text?: string; artistId?: string; color?: string; notes?: string }>(req);
     switch (b.action) {
       case "undo":
         await undo(id);
@@ -61,6 +64,21 @@ export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]">
             .filter((x) => typeof x?.id === "string" && (x.at === null || Number.isFinite(x.at)))
             .slice(0, 200),
         );
+        break;
+      case "addArtist": {
+        // returns the tree; x-artist-id = the new performer (e.g. to assign it right away)
+        const a = await addArtist(id, b.name ?? "", b.color ?? "#7e3af2");
+        const res = await treeResponse(id);
+        res.headers.set("x-artist-id", a.id);
+        return res;
+      }
+      case "updateArtist":
+        if (!b.artistId) return Response.json({ error: "artistId required" }, { status: 400 });
+        await updateArtist(id, b.artistId, { name: b.name, notes: b.notes, color: b.color });
+        break;
+      case "removeArtist":
+        if (!b.artistId) return Response.json({ error: "artistId required" }, { status: 400 });
+        await removeArtist(id, b.artistId);
         break;
       case "importText": {
         // pasted text added as new sections at the end of the project
