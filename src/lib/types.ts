@@ -47,6 +47,8 @@ export interface Artist {
 }
 
 export interface ProjectSettings {
+  /** recording layers (Lead, Double, Ad-libs…) */
+  lanes?: string[];
   /** the performers; sections list the ids of who performs them */
   artists?: Artist[];
   genre?: string;
@@ -153,6 +155,24 @@ export interface ProjectTree {
   bank: BankLine[];
   usage: AiUsage;
   audio: AudioTrack | null;
+  /** recorded vocal takes */
+  takes: Take[];
+}
+
+/** a recorded vocal take of a section on one layer (Lead, Double, Ad-libs…) */
+export interface Take {
+  id: string;
+  section_id: string | null;
+  lane: string;
+  take_no: number;
+  /** where the recording starts on the beat (seconds, latency-compensated) */
+  start_at: number;
+  duration: number;
+  sample_rate: number;
+  peaks: number[] | null;
+  /** the take used for playback and exports (one per section + layer) */
+  chosen: boolean;
+  created_at: string;
 }
 
 export interface LineEvent {

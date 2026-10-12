@@ -9,6 +9,7 @@ import {
   removeArtist,
   updateArtist,
   saveVersion,
+  setLanes,
   setLineTimes,
   undo,
   updateProject,
@@ -43,7 +44,7 @@ export const maxDuration = 300;
 export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]">) {
   return handle(async () => {
     const { id } = await ctx.params;
-    const b = await body<{ action: string; name?: string; group_size?: number; label?: string; audio_start?: number | null; times?: { id: string; at: number | null }[]; text?: string; artistId?: string; color?: string; notes?: string }>(req);
+    const b = await body<{ action: string; name?: string; group_size?: number; label?: string; audio_start?: number | null; times?: { id: string; at: number | null }[]; text?: string; artistId?: string; color?: string; notes?: string; lanes?: string[] }>(req);
     switch (b.action) {
       case "undo":
         await undo(id);
@@ -79,6 +80,9 @@ export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]">
       case "removeArtist":
         if (!b.artistId) return Response.json({ error: "artistId required" }, { status: 400 });
         await removeArtist(id, b.artistId);
+        break;
+      case "setLanes":
+        await setLanes(id, Array.isArray(b.lanes) ? b.lanes.filter((x) => typeof x === "string") : []);
         break;
       case "importText": {
         // pasted text added as new sections at the end of the project

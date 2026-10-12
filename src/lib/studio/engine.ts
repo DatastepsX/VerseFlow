@@ -1,0 +1,227 @@
+"use client";
+
+import { measureLatency, songTimeOfFrame } from "./timing";
+
+/**
+ * The studio's audio engine (browser): the beat, other takes and the
+ * recorder all run on one AudioContext clock, so a take lands on the beat
+ * to the sample. Song position s plays at clock time `base + s`.
+ *
+ * Input is taken raw (no echo cancellation / noise suppression / auto gain)
+ * from the chosen device; monitoring is left to the audio interface (direct
+ * monitoring) — the browser would add delay.
+ */
+
+export interface PlayLayer {
+  buffer: AudioBuffer;
+  /** song position where the buffer starts */
+  at: number;
+  gain?: number;
+}
+
+export interface Recording {
+  samples: Float32Array;
+  sampleRate: number;
+  /** song position of samples[0] (latency removed) */
+  startAt: number;
+}
+
+export class StudioEngine {
+  ctx: AudioContext;
+  private stream: MediaStream | null = null;
+  private source: MediaStreamAudioSourceNode | null = null;
+  private recorder: AudioWorkletNode | null = null;
+  private analyser: AnalyserNode | null = null;
+  private playing: AudioScheduledSourceNode[] = [];
+  private chunks: { frame: number; channels: Float32Array[] }[] = [];
+  private onDone: (() => void) | null = null;
+  base = 0;
+  /** what the hardware reports (output + input), used until calibrated */
+  reportedLatency = 0;
+
+  constructor() {
+    const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    this.ctx = new Ctx({ latencyHint: "interactive" });
+  }
+
+  get armed() {
+    return !!this.recorder;
+  }
+
+  /** needs a click (browsers allow audio + microphone only after a user gesture) */
+  async arm(deviceId?: string) {
+    await this.ctx.resume();
+    this.disarm();
+    this.stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        deviceId: deviceId ? { exact: deviceId } : undefined,
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
+        channelCount: { ideal: 2 },
+      },
+    });
+    await this.ctx.audioWorklet.addModule("/recorder-worklet.js");
+    this.source = this.ctx.createMediaStreamSource(this.stream);
+    this.recorder = new AudioWorkletNode(this.ctx, "vf-recorder", { numberOfInputs: 1, numberOfOutputs: 1, channelCountMode: "explicit", channelCount: 2 });
+    this.analyser = this.ctx.createAnalyser();
+    this.analyser.fftSize = 1024;
+    // the recorder must be pulled by the graph to run: route it to a silent output
+    const mute = this.ctx.createGain();
+    mute.gain.value = 0;
+    this.source.connect(this.recorder).connect(mute).connect(this.ctx.destination);
+    this.source.connect(this.analyser);
+    this.recorder.port.onmessage = (e) => {
+      if (e.data?.done) this.onDone?.();
+      else if (e.data?.channels) this.chunks.push(e.data);
+    };
+    const track = this.stream.getAudioTracks()[0];
+    const inLat = (track?.getSettings() as { latency?: number }).latency ?? 0;
+    const ctx = this.ctx as AudioContext & { outputLatency?: number };
+    this.reportedLatency = (ctx.baseLatency ?? 0) + (ctx.outputLatency ?? 0) + inLat;
+    return track?.label ?? "Microphone";
+  }
+
+  disarm() {
+    this.stream?.getTracks().forEach((t) => t.stop());
+    this.source?.disconnect();
+    this.recorder?.disconnect();
+    this.stream = null;
+    this.source = null;
+    this.recorder = null;
+  }
+
+  async inputs() {
+    const all = await navigator.mediaDevices.enumerateDevices();
+    return all.filter((d) => d.kind === "audioinput").map((d) => ({ id: d.deviceId, label: d.label || "Input" }));
+  }
+
+  /** input level 0..1 (peak of the last few ms) */
+  level() {
+    if (!this.analyser) return 0;
+    const a = new Float32Array(this.analyser.fftSize);
+    this.analyser.getFloatTimeDomainData(a);
+    let m = 0;
+    for (const v of a) m = Math.max(m, Math.abs(v));
+    return m;
+  }
+
+  async decode(data: ArrayBuffer) {
+    return this.ctx.decodeAudioData(data);
+  }
+
+  /** current song position while playing */
+  position() {
+    return this.ctx.currentTime - this.base;
+  }
+
+  private click(when: number, accent: boolean) {
+    const o = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    o.frequency.value = accent ? 1600 : 1000;
+    g.gain.setValueAtTime(0.0001, when);
+    g.gain.exponentialRampToValueAtTime(0.6, when + 0.002);
+    g.gain.exponentialRampToValueAtTime(0.0001, when + 0.05);
+    o.connect(g).connect(this.ctx.destination);
+    o.start(when);
+    o.stop(when + 0.06);
+    this.playing.push(o);
+  }
+
+  /**
+   * Plays from song position `from`: the beat and layers (each from where it
+   * starts), plus metronome clicks at the given song positions. Returns the
+   * clock base (song position s plays at base + s).
+   */
+  play(from: number, opts: { beat: AudioBuffer | null; layers?: PlayLayer[]; clicks?: { at: number; accent: boolean }[]; beatGain?: number }) {
+    this.stop();
+    const start = this.ctx.currentTime + 0.12;
+    this.base = start - from;
+    const schedule = (buffer: AudioBuffer, at: number, gainValue: number) => {
+      const offset = Math.max(0, from - at);
+      if (offset >= buffer.duration) return;
+      const src = this.ctx.createBufferSource();
+      src.buffer = buffer;
+      const g = this.ctx.createGain();
+      g.gain.value = gainValue;
+      src.connect(g).connect(this.ctx.destination);
+      src.start(this.base + Math.max(at, from), offset);
+      this.playing.push(src);
+    };
+    if (opts.beat) schedule(opts.beat, 0, opts.beatGain ?? 1);
+    for (const l of opts.layers ?? []) schedule(l.buffer, l.at, l.gain ?? 1);
+    for (const c of opts.clicks ?? []) if (c.at >= from) this.click(this.base + c.at, c.accent);
+    return this.base;
+  }
+
+  stop() {
+    for (const s of this.playing) {
+      try {
+        s.stop();
+      } catch {}
+    }
+    this.playing = [];
+  }
+
+  /** start recording now (call right after play()) */
+  startRecording() {
+    if (!this.recorder) throw new Error("Arm the studio first.");
+    this.chunks = [];
+    this.recorder.port.postMessage("start");
+  }
+
+  /**
+   * Stops recording and playback. `channel` 0 / 1 = interface input 1 / 2,
+   * -1 = both mixed. The result starts at song position max(keepFrom, 0).
+   */
+  async stopRecording(latency: number, channel: number, keepFrom: number): Promise<Recording | null> {
+    if (!this.recorder) return null;
+    const done = new Promise<void>((r) => (this.onDone = r));
+    this.recorder.port.postMessage("stop");
+    await Promise.race([done, new Promise((r) => setTimeout(r, 1500))]);
+    this.stop();
+    const chunks = this.chunks;
+    this.chunks = [];
+    if (!chunks.length) return null;
+    const sr = this.ctx.sampleRate;
+    const total = chunks.reduce((n, c) => n + c.channels[0].length, 0);
+    const mono = new Float32Array(total);
+    let o = 0;
+    for (const c of chunks) {
+      const a = c.channels[Math.min(Math.max(0, channel), c.channels.length - 1)];
+      const b = channel < 0 && c.channels.length > 1 ? c.channels[1] : null;
+      for (let i = 0; i < a.length; i++) mono[o + i] = b ? (a[i] + b[i]) / 2 : a[i];
+      o += a.length;
+    }
+    const first = songTimeOfFrame(chunks[0].frame, sr, this.base, latency);
+    // drop what was recorded before the take window (and before the song starts)
+    const from = Math.max(0, keepFrom);
+    const skip = Math.max(0, Math.round((from - first) * sr));
+    if (skip >= mono.length) return null;
+    return { samples: mono.subarray(skip), sampleRate: sr, startAt: first + skip / sr };
+  }
+
+  /**
+   * Latency calibration: plays clicks and records them back (hold the
+   * headphones to the mic, or loop an output into an input). Returns the
+   * round-trip delay in seconds, or null when the clicks weren't heard.
+   */
+  async calibrate(channel: number): Promise<number | null> {
+    if (!this.recorder) throw new Error("Arm the studio first.");
+    const clicks = Array.from({ length: 6 }, (_, i) => ({ at: 0.4 + i * 0.5, accent: false }));
+    this.play(0, { beat: null, clicks });
+    const base = this.base;
+    this.startRecording();
+    await new Promise((r) => setTimeout(r, (0.4 + 6 * 0.5 + 0.5) * 1000));
+    const rec = await this.stopRecording(0, channel, -10);
+    if (!rec) return null;
+    // stopRecording returns song time with latency 0 = clock time - base
+    return measureLatency(rec.samples, rec.sampleRate, rec.startAt + base, clicks.map((c) => base + c.at));
+  }
+
+  close() {
+    this.stop();
+    this.disarm();
+    void this.ctx.close();
+  }
+}

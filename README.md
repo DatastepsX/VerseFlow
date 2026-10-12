@@ -29,6 +29,13 @@ Product spec: see the original `verseflow_product_spec.md` (Phase 1 + core of Ph
   (bar-synchronous timbre/harmony self-similarity). Typing the BPM or ÷2/×2 refits the grid; “🧲 Snap sections to
   the beat” also moves every section start onto the nearest beat change (≤ ~1 bar / 2.5 s) or bar line. Sections
   created from the lyrics start on beat changes too.
+- **Studio — record takes** (`/p/[id]/studio`, Mac + audio interface; `src/lib/studio/`): record vocals per section
+  over the beat on layers (Lead, Double, Ad-libs, + your own), any number of takes, ★ the one to use. One audio
+  clock drives beat, other layers and the recorder (AudioWorklet, raw input: no echo cancellation / noise
+  suppression / auto gain), so takes land on the beat to the sample; count-in (0–2 bars, optional click), auto-stop
+  a bar after the section, latency compensation (reported by the hardware or measured with “Calibrate”: clicks
+  played and recorded back). Takes are 24-bit WAVs in storage (`takes` table, `start_at` = where they start on the
+  beat). Lyrics follow the beat while recording. Keys: R = record the first layer, Space = play / stop.
 - **Performers** (`src/lib/artists.ts`, `Artists.tsx`): a song's singers / rappers (name, colour, voice/style note) in
   `projects.settings.artists`; sections list who performs them (`sections.artists`, several allowed — e.g. a chorus
   sung by two). 🎤 next to a section name assigns them, and they carry on to the following sections until a section gets

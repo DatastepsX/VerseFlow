@@ -213,6 +213,12 @@ export function Writer({ initial, aiEnabled }: { initial: ProjectTree; aiEnabled
             Settings
           </button>
           <UploadBeatButton />
+          {tree.audio && (
+            // recording takes over the beat (Mac + audio interface)
+            <Link href={`/p/${pid}/studio`} className="btn hidden sm:inline-flex" title="Record vocal takes over the beat">
+              🎚 Studio
+            </Link>
+          )}
           <Link href={`/p/${pid}/record`} className="btn">
             🎙 Record
           </Link>

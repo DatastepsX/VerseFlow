@@ -16,8 +16,10 @@ import type {
   ProjectType,
   ProjectVersion,
   Section,
+  Take,
 } from "@/lib/types";
 
+const TAKE_COLS = "id, section_id, lane, take_no, start_at, duration, sample_rate, peaks, chosen, created_at";
 const LINE_COLS = "id, project_id, section_id, position, text, status, kind, note, audio_at, updated_at";
 const SNAPSHOT_FIELDS = ["text", "status", "kind", "note", "deleted"] as const;
 
@@ -82,7 +84,7 @@ export async function createProject(input: {
 }
 
 export async function getTree(projectId: string): Promise<ProjectTree> {
-  const [p, s, l, a, b, u, au] = await Promise.all([
+  const [p, s, l, a, b, u, au, tk] = await Promise.all([
     db().from("projects").select("*").eq("id", projectId).maybeSingle(),
     db().from("sections").select("*").eq("project_id", projectId).order("position"),
     db().from("lines").select(LINE_COLS).eq("project_id", projectId).eq("deleted", false).order("position"),
@@ -105,6 +107,7 @@ export async function getTree(projectId: string): Promise<ProjectTree> {
       .select("filename, duration, bpm, beat_offset, beats_per_bar, changes")
       .eq("project_id", projectId)
       .maybeSingle(),
+    db().from("takes").select(TAKE_COLS).eq("project_id", projectId).order("created_at"),
   ]);
   const project = check(p) as Project | null;
   if (!project) throw new NotFound("Project not found");
@@ -132,6 +135,7 @@ export async function getTree(projectId: string): Promise<ProjectTree> {
     bank,
     usage,
     audio: check(au) as AudioTrack | null,
+    takes: check(tk) as Take[],
   };
 }
 
@@ -148,7 +152,7 @@ export async function updateProject(
 
 export async function deleteProject(id: string) {
   // the uploaded beats live in storage under the project's folder: remove them too
-  const { data: files } = await db().storage.from(BUCKET).list(id);
+  const { data: files } = await db().storage.from(BUCKET).list(id, { limit: 1000 });
   if (files?.length) await db().storage.from(BUCKET).remove(files.map((f) => `${id}/${f.name}`));
   check(await db().from("projects").delete().eq("id", id));
 }
@@ -996,4 +1000,93 @@ export async function removeArtist(projectId: string, id: string) {
   const secs = check(await db().from("sections").select("id, artists").eq("project_id", projectId)) as { id: string; artists: string[] }[];
   for (const s of secs)
     if (s.artists?.includes(id)) check(await db().from("sections").update({ artists: s.artists.filter((x) => x !== id) }).eq("id", s.id));
+}
+
+// ---------- recorded takes ----------
+
+export async function takeUploadUrl(projectId: string) {
+  // top level of the project's folder: removed with the project
+  const path = `${projectId}/take-${crypto.randomUUID()}.wav`;
+  const { data, error } = await db().storage.from(BUCKET).createSignedUploadUrl(path);
+  if (error || !data) throw new Error(error?.message ?? "Could not create upload URL");
+  return { path, signedUrl: data.signedUrl };
+}
+
+/** a new take becomes the chosen one of its section + layer (the latest is usually the keeper) */
+export async function saveTake(
+  projectId: string,
+  t: { path: string; section_id: string; lane: string; start_at: number; duration: number; sample_rate: number; peaks: number[] },
+) {
+  if (!t.path.startsWith(`${projectId}/take-`)) throw new Error("Invalid take path");
+  const prev = check(
+    await db().from("takes").select("take_no").eq("project_id", projectId).eq("section_id", t.section_id).eq("lane", t.lane),
+  ) as { take_no: number }[];
+  check(await db().from("takes").update({ chosen: false }).eq("project_id", projectId).eq("section_id", t.section_id).eq("lane", t.lane));
+  const row = check(
+    await db()
+      .from("takes")
+      .insert({ ...t, project_id: projectId, take_no: Math.max(0, ...prev.map((x) => x.take_no)) + 1, chosen: true })
+      .select("id")
+      .single(),
+  ) as { id: string };
+  await touch(projectId);
+  return row.id;
+}
+
+async function getTake(id: string) {
+  const t = check(await db().from("takes").select("id, project_id, section_id, lane, path, chosen").eq("id", id).maybeSingle()) as {
+    id: string;
+    project_id: string;
+    section_id: string | null;
+    lane: string;
+    path: string;
+    chosen: boolean;
+  } | null;
+  if (!t) throw new NotFound("Take not found");
+  return t;
+}
+
+export async function chooseTake(id: string) {
+  const t = await getTake(id);
+  let q = db().from("takes").update({ chosen: false }).eq("project_id", t.project_id).eq("lane", t.lane);
+  q = t.section_id ? q.eq("section_id", t.section_id) : q.is("section_id", null);
+  check(await q);
+  check(await db().from("takes").update({ chosen: true }).eq("id", id));
+  return t.project_id;
+}
+
+/** deletes the take and its file; when it was the chosen one, the latest remaining take is chosen */
+export async function deleteTake(id: string) {
+  const t = await getTake(id);
+  check(await db().from("takes").delete().eq("id", id));
+  await db().storage.from(BUCKET).remove([t.path]);
+  if (t.chosen) {
+    let q = db().from("takes").select("id").eq("project_id", t.project_id).eq("lane", t.lane);
+    q = t.section_id ? q.eq("section_id", t.section_id) : q.is("section_id", null);
+    const rest = check(await q.order("created_at", { ascending: false }).limit(1)) as { id: string }[];
+    if (rest[0]) check(await db().from("takes").update({ chosen: true }).eq("id", rest[0].id));
+  }
+  return t.project_id;
+}
+
+/** short-lived download URLs for takes of the project */
+export async function takeUrls(projectId: string, ids: string[]) {
+  const rows = check(await db().from("takes").select("id, path").eq("project_id", projectId).in("id", ids.slice(0, 200))) as {
+    id: string;
+    path: string;
+  }[];
+  const out: Record<string, string> = {};
+  if (!rows.length) return out;
+  const { data } = await db().storage.from(BUCKET).createSignedUrls(rows.map((r) => r.path), 60 * 60);
+  rows.forEach((r, i) => {
+    const u = data?.[i]?.signedUrl;
+    if (u) out[r.id] = u;
+  });
+  return out;
+}
+
+export async function setLanes(projectId: string, lanes: string[]) {
+  const settings = await projectSettings(projectId);
+  const clean = [...new Set(lanes.map((l) => l.trim().slice(0, 30)).filter(Boolean))].slice(0, 12);
+  await updateProject(projectId, { settings: { ...settings, lanes: clean.length ? clean : undefined } });
 }
