@@ -83,6 +83,8 @@ export function Studio({ initialTree }: { initialTree: ProjectTree }) {
   const stopAt = useRef<number | null>(null);
   const recordingLane = useRef<string | null>(null);
   const [lyricSize, setLyricSize] = usePref<number>("vf.studio.size", 30);
+  // phones: the setup (input, count-in, latency) folds away
+  const [setupOpen, setSetupOpen] = useState(false);
 
   // what the hardware reports until the writer calibrates
   const [reported, setReported] = useState(0);
@@ -343,20 +345,37 @@ export function Studio({ initialTree }: { initialTree: ProjectTree }) {
   const performers = section ? sectionArtists(tree, section) : [];
 
   return (
-    <div className="flex min-h-dvh flex-col bg-[#0b0b0d] text-[#e8e8e8]">
-      {/* top bar: input, latency, count-in */}
-      <header className="flex flex-wrap items-center gap-2 border-b border-[#222] px-4 py-2 text-sm">
+    <div className="flex h-dvh flex-col overflow-hidden bg-[#0b0b0d] text-[#e8e8e8]">
+      {/* top bar: input, latency, count-in (folded on phones) */}
+      <header className="flex shrink-0 flex-wrap items-center gap-2 border-b border-[#222] px-3 py-2 text-sm md:px-4">
         <Link href={`/p/${pid}`} className="text-[#8b7bff]">
-          ← Write
+          ←<span className="hidden md:inline"> Write</span>
         </Link>
-        <strong className="mr-2">{tree.project.title}</strong>
-        <span className="rounded bg-[#1a1a1f] px-2 py-0.5 font-mono text-xs">
-          {audio.bpm} BPM · {fmtTime(now > 0 ? now : 0)}
+        {/* basis-0: the title shrinks (truncates) instead of pushing the buttons onto a second row */}
+        <strong className="min-w-0 shrink grow basis-0 truncate">{tree.project.title}</strong>
+        <span className="shrink-0 rounded bg-[#1a1a1f] px-2 py-0.5 font-mono text-xs">
+          {audio.bpm}<span className="hidden sm:inline"> BPM</span> · {fmtTime(now > 0 ? now : 0)}
         </span>
-        <span className="ml-auto" />
-        {armed ? (
-          <span className="flex items-center gap-2 text-xs">
-            <span className="text-[#4ade80]">● Armed</span>
+        {armed && (
+          <span className="flex items-center gap-1.5 text-xs md:hidden">
+            <span className="text-[#4ade80]">●</span>
+            <span className="h-2 w-10 overflow-hidden rounded bg-[#222]">
+              <span className="block h-full bg-[#4ade80]" style={{ width: `${Math.min(100, level * 100)}%` }} />
+            </span>
+          </span>
+        )}
+        {!armed && (
+          <button className="shrink-0 rounded bg-[#e0730b] px-3 py-1 font-semibold" onClick={() => void arm()}>
+            🎙 Arm<span className="hidden md:inline"> studio</span>
+          </button>
+        )}
+        <button className="rounded bg-[#1a1a1f] px-2 py-1 md:hidden" onClick={() => setSetupOpen((o) => !o)} aria-label="Setup">
+          ⚙
+        </button>
+        <div className={`${setupOpen ? "flex" : "hidden"} w-full flex-wrap items-center gap-2 md:flex md:w-auto`}>
+        {armed && (
+          <span className="flex flex-wrap items-center gap-2 text-xs">
+            <span className="hidden text-[#4ade80] md:inline">● Armed</span>
             <select className="max-w-48 rounded bg-[#1a1a1f] px-1 py-0.5" value={deviceId} onChange={(e) => setDeviceId(e.target.value)} onBlur={() => void arm()}>
               <option value="">Default input</option>
               {inputs.map((d) => (
@@ -377,10 +396,6 @@ export function Studio({ initialTree }: { initialTree: ProjectTree }) {
               />
             </span>
           </span>
-        ) : (
-          <button className="rounded bg-[#e0730b] px-3 py-1 font-semibold" onClick={() => void arm()}>
-            🎙 Arm studio
-          </button>
         )}
         <label className="flex items-center gap-1 text-xs">
           Count-in
@@ -409,18 +424,41 @@ export function Studio({ initialTree }: { initialTree: ProjectTree }) {
             {status.kind === "calibrating" ? "Listening…" : "Calibrate"}
           </button>
         </span>
+        </div>
       </header>
       {error && <p className="bg-[#3b1111] px-4 py-1.5 text-sm text-[#fca5a5]">{error}</p>}
       {!armed && (
-        <p className="bg-[#1a1408] px-4 py-1.5 text-xs text-[#fbbf24]">
-          Click “Arm studio” once: the browser needs a click to use the microphone. Use wired headphones and your interface&apos;s direct
-          monitoring; set the latency once with “Calibrate” (hold the headphones to the mic).
+        <p className="shrink-0 bg-[#1a1408] px-3 py-1.5 text-xs text-[#fbbf24] md:px-4">
+          Tap “Arm” once: the browser needs a tap to use the microphone.
+          <span className="hidden md:inline">
+            {" "}
+            Use wired headphones and your interface&apos;s direct monitoring; set the latency once with “Calibrate” (hold the headphones to the
+            mic).
+          </span>
         </p>
       )}
 
+      {/* sections (phones: swipeable chips) */}
+      <div className="flex shrink-0 gap-1.5 overflow-x-auto border-b border-[#222] px-3 py-2 md:hidden [scrollbar-width:none]">
+        {sections.map((s) => {
+          const n = tree.takes.filter((t) => t.section_id === s.id).length;
+          return (
+            <button
+              key={s.id}
+              disabled={busy}
+              className={`shrink-0 rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-wide ${s.id === sectionId ? "bg-[#6d4aff] text-white" : "bg-[#1a1a1f] text-[#ccc]"}`}
+              onClick={() => setSectionId(s.id)}
+            >
+              {s.name}
+              {n ? <span className="ml-1 font-normal opacity-70">{n}</span> : null}
+            </button>
+          );
+        })}
+      </div>
+
       <div className="flex min-h-0 flex-1">
         {/* sections */}
-        <nav className="w-48 shrink-0 overflow-auto border-r border-[#222] p-2">
+        <nav className="hidden w-48 shrink-0 overflow-auto border-r border-[#222] p-2 md:block">
           {sections.length === 0 && <p className="p-2 text-xs text-[#888]">Anchor sections on the beat first (⚓ in the player).</p>}
           {sections.map((s) => {
             const r = ranges.get(s.id)!;
@@ -445,8 +483,8 @@ export function Studio({ initialTree }: { initialTree: ProjectTree }) {
           {section && range ? (
             <>
               {/* transport + status */}
-              <div className="flex flex-wrap items-center gap-2 border-b border-[#222] px-4 py-2">
-                <h2 className="text-lg font-bold uppercase tracking-widest">{section.name}</h2>
+              <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-[#222] px-3 py-2 md:px-4">
+                <h2 className="text-base font-bold uppercase tracking-widest md:text-lg">{section.name}</h2>
                 {performers.map((a) => (
                   <span key={a.id} className="text-sm" style={{ color: a.color }}>
                     ● {a.name}
@@ -469,7 +507,7 @@ export function Studio({ initialTree }: { initialTree: ProjectTree }) {
               </div>
 
               {/* lyrics, following the beat */}
-              <div className="min-h-0 flex-1 overflow-auto px-6 py-4" style={{ fontSize: lyricSize, lineHeight: 1.3 }}>
+              <div className="min-h-0 flex-1 overflow-auto px-4 py-3 md:px-6 md:py-4" style={{ fontSize: `min(${lyricSize}px, 7vw)`, lineHeight: 1.3 }}>
                 {lyricLines.length === 0 && <p className="text-base text-[#666]">No lyrics in this section yet.</p>}
                 {lyricLines.map((l) => {
                   const k = section.lines.indexOf(l);
@@ -482,10 +520,10 @@ export function Studio({ initialTree }: { initialTree: ProjectTree }) {
               </div>
 
               {/* layers and takes */}
-              <div className="border-t border-[#222] bg-[#111114] px-4 py-3">
+              <div className="max-h-[45%] shrink-0 overflow-auto border-t border-[#222] bg-[#111114] px-3 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] md:px-4 md:py-3">
                 <div className="mb-2 flex items-center gap-2 text-xs text-[#888]">
                   <span className="font-semibold uppercase tracking-wide">Layers</span>
-                  <span>R = record {lanes[0]} · Space = play / stop</span>
+                  <span className="hidden md:inline">R = record {lanes[0]} · Space = play / stop</span>
                   <span className="ml-auto flex items-center gap-1">
                     lyrics
                     <button className="rounded bg-[#1a1a1f] px-1.5" onClick={() => setLyricSize(Math.max(16, lyricSize - 4))}>
@@ -503,7 +541,7 @@ export function Studio({ initialTree }: { initialTree: ProjectTree }) {
                     return (
                       <div key={lane} className="flex items-center gap-2">
                         <button
-                          className={`w-28 shrink-0 rounded px-2 py-1.5 text-left text-sm font-semibold disabled:opacity-40 ${isRec ? "animate-pulse bg-[#dc2626] text-white" : "bg-[#2a1515] text-[#fca5a5] hover:bg-[#3b1a1a]"}`}
+                          className={`w-24 shrink-0 rounded px-2 py-1.5 text-left text-sm font-semibold md:w-28 disabled:opacity-40 ${isRec ? "animate-pulse bg-[#dc2626] text-white" : "bg-[#2a1515] text-[#fca5a5] hover:bg-[#3b1a1a]"}`}
                           disabled={busy || !beatReady}
                           onClick={() => void record(lane)}
                           title={`Record a new ${lane} take of ${section.name}`}
