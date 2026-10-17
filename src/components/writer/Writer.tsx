@@ -75,9 +75,9 @@ export function Writer({ initial, aiEnabled }: { initial: ProjectTree; aiEnabled
 
   const [filling, setFilling] = useState<Set<string>>(new Set());
   const fillBank = useCallback(
-    async (sectionId: string, targets: string[] = []) => {
+    async (sectionId: string, targets: string[] = [], replace = false) => {
       setFilling((s) => new Set(s).add(sectionId));
-      await mutate(`/api/sections/${sectionId}`, { action: "fillBank", targets });
+      await mutate(`/api/sections/${sectionId}`, { action: "fillBank", targets, replace });
       setFilling((s) => {
         const n = new Set(s);
         n.delete(sectionId);

@@ -419,7 +419,7 @@ const DRAFT_EFFORT = (process.env.AI_DRAFT_EFFORT || "low") as "low" | "medium" 
  * `open` = bar indices to write, `chunks` = those split into whole line
  * groups of about DRAFT_CHUNK bars (couplets stay together), one call each.
  */
-export type DraftMode = "fill" | "replace" | "polish";
+export type DraftMode = "fill" | "replace" | "polish" | "refit";
 
 const LOCKED = new Set(["APPROVED", "APPROVED_EDITED"]);
 
@@ -432,6 +432,8 @@ export function draftPlan(tree: ProjectTree, sectionId: string, mode: DraftMode)
     const l = lyrics[k];
     // polish: every written line that isn't approved yet gets improved versions (its text stays)
     if (mode === "polish") return !!l && !!l.text.trim() && !LOCKED.has(l.status) && l.status !== "DECLINED";
+    // refit (the pattern changed): every written line — approved ones get the new versions as options only
+    if (mode === "refit") return !!l && !!l.text.trim() && l.status !== "DECLINED";
     if (!l || !l.text.trim()) return mode === "fill" || !!l;
     return NEEDS.has(l.status);
   };
@@ -466,7 +468,9 @@ export async function draftSection(tree: ProjectTree, sectionId: string, mode: D
   if (!slots.length) return { slots: [] as DraftSlot[], remaining: 0 };
   const g = Math.max(1, section.group_size);
   const slotSet = new Set(slots);
-  const polish = mode === "polish";
+  const refit = mode === "refit";
+  // polish / refit: the lines keep their text in the prompt (they are rewritten, not written from scratch)
+  const polish = mode === "polish" || refit;
   // polish: lines improved in another call are context like any other written line
   const later = polish ? new Set<number>() : new Set(open.filter((k) => !slotSet.has(k)));
 
@@ -505,7 +509,7 @@ export async function draftSection(tree: ProjectTree, sectionId: string, mode: D
   const listing = texts
     .map((t, k) =>
       polish
-        ? `${k > 0 && k % g === 0 ? "\n" : ""}${k + 1}. ${slotSet.has(k) ? "[IMPROVE]" : "[KEEP]"} ${t}`
+        ? `${k > 0 && k % g === 0 ? "\n" : ""}${k + 1}. ${slotSet.has(k) ? (refit ? "[REFIT]" : "[IMPROVE]") : "[KEEP]"} ${t}`
         : `${k > 0 && k % g === 0 ? "\n" : ""}${k + 1}. ${slotSet.has(k) ? "[OPEN]" : later.has(k) ? "[LATER]" : "[KEEP]"} ${slotSet.has(k) || later.has(k) ? "" : t}`,
     )
     .join("\n");
@@ -523,7 +527,9 @@ ${st.genre ? `Genre: ${st.genre}\n` : ""}${st.style ? `Style / references: ${st.
 ${others ? `REST OF THE SONG (context — stay consistent with it)\n${others}\n\n` : ""}SECTION: ${section.name}${section.story_beat ? `\nStory beat: ${section.story_beat}` : ""}${section.intensity ? `\nIntensity: ${section.intensity}/10` : ""}${section.notes ? `\nNotes: ${section.notes}` : ""}${performedBy(tree, section)}
 Lines grouped in ${g === 2 ? "couplets" : g === 1 ? "single lines" : `groups of ${g}`}. ${
     polish
-      ? "The writer's own text. [KEEP] lines stay as they are; write improved versions of the [IMPROVE] lines."
+      ? refit
+        ? "The writer's text. The section's rhythm pattern has CHANGED (see the template below): rewrite the [REFIT] lines to fit it."
+        : "The writer's own text. [KEEP] lines stay as they are; write improved versions of the [IMPROVE] lines."
       : "[KEEP] lines are fixed — never change them; write only the [OPEN] lines. [LATER] lines are written separately — skip them, but leave room for the text to continue there."
   }
 ${listing}
@@ -533,13 +539,15 @@ ${rhymeRules ? `RHYMES\n${rhymeRules}` : ""}
 
 TASK
 ${
-  polish
+  refit
+    ? `For every [REFIT] line write 3 versions that follow the NEW rhythm template exactly — its number of syllables (±1) and where the stresses fall — while keeping what the line says, its place in the story and its rhyme with its partner line. Change words, add or drop filler, reorder phrases as needed. The first version stays closest to the original wording.`
+    : polish
     ? `For every [IMPROVE] line write 3 improved versions of it. Keep what the line says and its place in the story, keep its rhyme and roughly its length (±2 syllables, unless the writer's direction asks otherwise), but make it stronger: more vivid images, fresher and more natural wording, smoother flow, no filler. The 3 versions should differ: one close to the original, one bolder, one in between.`
     : "For every [OPEN] line write 3 different options. Each option must follow the rhythm template, respect its rhyme rule, and connect naturally with the lines before and after it (the section must read as one coherent text that fits the rest of the song). Vary images and wording between options."
 }
 ${instruction ? `Writer's direction: ${instruction}` : ""}
 ${rejected.size ? `Rejected before — do not repeat or closely paraphrase:\n${[...rejected].slice(0, 40).map((t) => `- ${t}`).join("\n")}` : ""}
-Return one entry per ${polish ? "[IMPROVE]" : "[OPEN]"} line, "line" = its number.`;
+Return one entry per ${refit ? "[REFIT]" : polish ? "[IMPROVE]" : "[OPEN]"} line, "line" = its number.`;
 
   const parsed = await callJson<{ slots: { line: number; options: string[] }[] }>(project.id, `section_${mode}`, prompt, DRAFT_SCHEMA, SYSTEM, DRAFT_EFFORT);
   const drafted = parsed.slots

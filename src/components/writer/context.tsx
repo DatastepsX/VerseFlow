@@ -28,7 +28,8 @@ export interface WriterApi {
   /** sections whose bank is being filled */
   filling: Set<string>;
   /** one AI call that stocks a section's suggestion bank */
-  fillBank: (sectionId: string, targets?: string[]) => Promise<void>;
+  /** replace = the section's unused suggestions are removed first (a fresh set) */
+  fillBank: (sectionId: string, targets?: string[], replace?: boolean) => Promise<void>;
   aiEnabled: boolean;
   /** how the song rhymes as written (1 = couplets, 2 = alternating): decides for sections too short to tell */
   songRhyme: 1 | 2 | null;

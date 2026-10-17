@@ -45,6 +45,12 @@ Product spec: see the original `verseflow_product_spec.md` (Phase 1 + core of Ph
 - **Start from existing text** (`src/lib/text-import.ts`): paste lyrics or a poem in the new-project form —
   `[Verse 1]` / `Chorus:` / `## Hook` headings or blank lines between stanzas become sections (a repeated stanza is the
   chorus); lines come in as drafts. Pasting several lines into “Write the next line…” adds them all.
+- **New pattern → adapt the lines** (refit draft mode): after a section's pattern changes, “♩ Adapt N lines” rewrites
+  every line to the new syllables / stresses keeping meaning and rhyme (1 call per ~8 lines, parallel). Drafts take the
+  new version and keep the old one as an option (↻); approved lines are never changed — they get the versions as
+  options. “♩ fit lines” next to the pattern does the same any time.
+- **Remove / renew suggestions**: a line's options box has “🗑 Remove all”; the next-bar suggestions have “✨ New
+  suggestions · 1 call” (replaces the unused set) and “🗑 Clear suggestions” (free).
 - **✨ Polish N lines** (section panel, 1 call per ~8 lines, parallel): 3 improved versions of every line not yet
   approved, stored as options (↻ on the line) — the text itself is never replaced.
 - **New project with its song**: the new-project form takes the MP3 (title from the file name); optionally it reads

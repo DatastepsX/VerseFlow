@@ -6,6 +6,7 @@ import { patternReference } from "@/lib/pattern";
 import { coupletsForSlot, suggestForSlot } from "@/lib/suggest";
 import type { BankLine } from "@/lib/types";
 import { useWriter } from "./context";
+import { Spinner } from "./Spinner";
 
 /**
  * Suggestions for one slot (the next line, or an existing line to replace),
@@ -35,6 +36,7 @@ export function BankPicker({
   title?: string;
 }) {
   const w = useWriter();
+  const [clearing, setClearing] = useState(false);
   const [skip, setSkip] = useState(0);
   // the whole project's bank: bars generated for other sections are reused (no new API call)
   const bank = w.tree.bank;
@@ -234,6 +236,33 @@ export function BankPicker({
               : fillLabel}{" "}
           · 1 AI call
         </button>
+      )}
+
+      {!filling && available > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5 border-t border-line pt-1.5">
+          {w.aiEnabled && (
+            <button
+              className="btn px-2 py-1 text-xs"
+              onClick={() => void w.fillBank(sectionId, partnerText ? [partnerText] : [], true)}
+              title="Removes the unused suggestions of this section and writes a fresh set that fits your lines"
+            >
+              ✨ New suggestions · 1 call
+            </button>
+          )}
+          <button
+            className="btn-ghost px-2 py-1 text-xs text-bad"
+            disabled={clearing}
+            title="Remove all unused suggestions of this section (free)"
+            onClick={async () => {
+              if (!window.confirm(`Remove all ${available} unused suggestions of this section?`)) return;
+              setClearing(true);
+              await w.mutate(`/api/sections/${sectionId}`, { action: "clearBank" });
+              setClearing(false);
+            }}
+          >
+            {clearing ? <Spinner /> : "🗑"} Clear suggestions
+          </button>
+        </div>
       )}
     </div>
   );

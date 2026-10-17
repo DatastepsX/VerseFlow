@@ -471,6 +471,7 @@ function Alternatives({
   const w = useWriter();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [text, setText] = useState("");
+  const [clearing, setClearing] = useState(false);
   const busy = w.generating.has(line.id);
   const partner = partnerText?.trim() ? analyzeLine(partnerText, w.lang) : null;
 
@@ -560,12 +561,16 @@ function Alternatives({
           </button>
         )}
         <button
-          className="btn-ghost text-xs"
-          onClick={() => {
-            for (const alt of line.alternatives) void w.mutate(`/api/alternatives/${alt.id}`, { action: "reject" });
+          className="btn-ghost text-xs text-bad"
+          disabled={clearing}
+          title="Remove all these options (free) — then ask for new ones if you like"
+          onClick={async () => {
+            setClearing(true);
+            await w.mutate(`/api/lines/${line.id}`, { action: "clearAlternatives" });
+            setClearing(false);
           }}
         >
-          Dismiss all
+          {clearing ? <Spinner /> : "🗑"} Remove all
         </button>
       </div>
     </div>

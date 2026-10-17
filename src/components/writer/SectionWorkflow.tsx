@@ -29,7 +29,9 @@ export function SectionWorkflow({ section }: { section: SectionT }) {
   const pattern = sectionPattern(section);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
-  const [busy, setBusy] = useState<null | "fill" | "replace" | "polish" | "keep">(null);
+  const [busy, setBusy] = useState<null | "fill" | "replace" | "polish" | "refit" | "keep">(null);
+  // after the pattern changed: offer to adapt the written lines to it
+  const [refitOffer, setRefitOffer] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
 
   const lyric = section.lines.filter((l) => l.kind === "lyric");
@@ -43,8 +45,10 @@ export function SectionWorkflow({ section }: { section: SectionT }) {
     (l) => l.text.trim() && l.status !== "APPROVED" && l.status !== "APPROVED_EDITED" && l.status !== "DECLINED",
   ).length;
   const others = w.tree.sections.filter((s) => s.id !== section.id && sectionPattern(s).length);
+  // every written line can be adapted to a new pattern (approved ones only get options)
+  const refittable = lyric.filter((l) => l.text.trim() && l.status !== "DECLINED").length;
 
-  const run = async (action: "fill" | "replace" | "polish" | "keepAll") => {
+  const run = async (action: "fill" | "replace" | "polish" | "refit" | "keepAll") => {
     setBusy(action === "keepAll" ? "keep" : action);
     if (action === "keepAll") await w.mutate(`/api/sections/${section.id}`, { action });
     else {
@@ -55,7 +59,7 @@ export function SectionWorkflow({ section }: { section: SectionT }) {
       try {
         parts = JSON.parse(plan?.headers.get("x-parts") ?? "[]");
       } catch {}
-      const total = parts.reduce((n, p) => n + p.length, 0) || (action === "polish" ? polishable : 0);
+      const total = parts.reduce((n, p) => n + p.length, 0) || (action === "polish" ? polishable : action === "refit" ? refittable : 0);
       let done = 0;
       setProgress({ done, total });
       await Promise.all(
@@ -74,8 +78,10 @@ export function SectionWorkflow({ section }: { section: SectionT }) {
   const callLabel = (n: number) => (calls(n) === 1 ? "1 call" : `${calls(n)} calls`);
   const working = progress ? ` ${progress.done}/${progress.total}…` : "…";
   const savePattern = async (text: string) => {
-    await w.mutate(`/api/sections/${section.id}`, { pattern: text.trim() || null }, "PATCH");
+    const changed = text.trim() !== pattern.join("\n").trim();
+    const res = await w.mutate(`/api/sections/${section.id}`, { pattern: text.trim() || null }, "PATCH");
     setEditing(false);
+    if (res && changed && text.trim() && refittable > 0 && w.aiEnabled) setRefitOffer(true);
   };
 
   return (
@@ -150,6 +156,16 @@ export function SectionWorkflow({ section }: { section: SectionT }) {
           >
             ✎
           </button>
+          {w.aiEnabled && refittable > 0 && (
+            <button
+              className="btn-ghost px-1.5 text-xs"
+              disabled={!!busy}
+              title={`Adapt the ${refittable} written lines to this pattern · ${callLabel(refittable)}`}
+              onClick={() => setRefitOffer(true)}
+            >
+              ♩ fit lines
+            </button>
+          )}
         </div>
       ) : (
         <div className="flex flex-wrap items-center gap-2">
@@ -163,6 +179,37 @@ export function SectionWorkflow({ section }: { section: SectionT }) {
           >
             ♩ Set pattern
           </button>
+        </div>
+      )}
+
+      {/* the pattern changed: adapt the existing lines */}
+      {!editing && (refitOffer || busy === "refit") && (
+        <div className="flex flex-wrap items-center gap-1.5 rounded-md bg-accent-soft px-2 py-1.5 text-xs">
+          <span className="mr-1">
+            New pattern — adapt the {refittable} existing line{refittable === 1 ? "" : "s"} to it? Drafts are rewritten (the old version stays under ↻),
+            approved lines get the new versions as options.
+          </span>
+          <button
+            className="btn-primary px-2 py-1 text-xs"
+            disabled={!!busy}
+            onClick={() => {
+              setRefitOffer(false);
+              void run("refit");
+            }}
+          >
+            {busy === "refit" ? (
+              <>
+                <Spinner /> {`Adapting${working}`}
+              </>
+            ) : (
+              `♩ Adapt ${refittable} lines · ${callLabel(refittable)}`
+            )}
+          </button>
+          {busy !== "refit" && (
+            <button className="btn-ghost px-2 py-1 text-xs" onClick={() => setRefitOffer(false)}>
+              Not now
+            </button>
+          )}
         </div>
       )}
 

@@ -1,5 +1,5 @@
 import { draftPlan, draftSection, fillBank, fitLine } from "@/lib/server/ai";
-import { addLine, appendLines, applyDraft, applyPolish, clearBank, deleteSection, getTree, insertBank, mergeIntoPrevious, moveSection, setBankState, updateLine, updateSection } from "@/lib/server/repo";
+import { addLine, appendLines, applyDraft, applyPolish, applyRefit, clearBank, deleteSection, getTree, insertBank, mergeIntoPrevious, moveSection, setBankState, updateLine, updateSection } from "@/lib/server/repo";
 import { rhymePartners } from "@/lib/scheme";
 import { db } from "@/lib/server/db";
 import { body, handle, pick, treeResponse } from "@/lib/server/http";
@@ -38,7 +38,7 @@ export async function POST(req: Request, ctx: RouteContext<"/api/sections/[id]">
       replace?: boolean;
       reference?: string;
       lines?: { text: string; status?: LineStatus; bankId?: string }[];
-      mode?: "fill" | "replace" | "polish";
+      mode?: "fill" | "replace" | "polish" | "refit";
       indices?: number[];
     }>(req);
     if (b.action === "addLine") {
@@ -52,7 +52,7 @@ export async function POST(req: Request, ctx: RouteContext<"/api/sections/[id]">
       // no AI call: creates the section's missing bars (fill) and returns the chunks (x-parts) the client then
       // drafts in parallel — one call each — so a 40-bar section takes about as long as 8 bars
       const s = await sectionProject(id);
-      const mode = b.mode === "replace" || b.mode === "polish" ? b.mode : "fill";
+      const mode = b.mode === "replace" || b.mode === "polish" || b.mode === "refit" ? b.mode : "fill";
       const plan = draftPlan(await getTree(s), id, mode);
       if (plan.n > plan.lyricCount)
         await appendLines(id, Array.from({ length: plan.n - plan.lyricCount }, () => ({ text: "", status: "OPEN" as LineStatus })));
@@ -60,13 +60,14 @@ export async function POST(req: Request, ctx: RouteContext<"/api/sections/[id]">
       res.headers.set("x-parts", JSON.stringify(plan.chunks));
       return res;
     }
-    if (b.action === "fill" || b.action === "replace" || b.action === "polish") {
+    if (b.action === "fill" || b.action === "replace" || b.action === "polish" || b.action === "refit") {
       // one AI call for a chunk of ~8 bars (b.indices, else the first chunk): open bars (fill) or the bars marked ✕
       // (replace), from the section's pattern. x-remaining = open bars not written by this call.
       const s = await sectionProject(id);
       const only = Array.isArray(b.indices) ? b.indices.filter((k) => Number.isInteger(k)).slice(0, 16) : undefined;
       const { slots, remaining } = await draftSection(await getTree(s), id, b.action, b.instruction?.slice(0, 500), only);
       if (b.action === "polish") await applyPolish(id, slots);
+      else if (b.action === "refit") await applyRefit(id, slots);
       else await applyDraft(id, slots);
       const res = await treeResponse(s);
       res.headers.set("x-remaining", String(slots.length ? remaining : 0));
@@ -118,6 +119,12 @@ export async function POST(req: Request, ctx: RouteContext<"/api/sections/[id]">
     }
     if (b.action === "move") return treeResponse(await moveSection(id, b.dir === -1 ? -1 : 1));
     if (b.action === "mergePrevious") return treeResponse(await mergeIntoPrevious(id));
+    if (b.action === "clearBank") {
+      // removes the section's unused suggestions (free)
+      const s = await sectionProject(id);
+      await clearBank(id);
+      return treeResponse(s);
+    }
     return Response.json({ error: "Unknown action" }, { status: 400 });
   });
 }

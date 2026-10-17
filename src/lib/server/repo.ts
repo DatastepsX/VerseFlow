@@ -1090,3 +1090,47 @@ export async function setLanes(projectId: string, lanes: string[]) {
   const clean = [...new Set(lanes.map((l) => l.trim().slice(0, 30)).filter(Boolean))].slice(0, 12);
   await updateProject(projectId, { settings: { ...settings, lanes: clean.length ? clean : undefined } });
 }
+
+/**
+ * Lines rewritten for a new section pattern. Drafts take the first version
+ * (their old text stays as an option under ↻, the other versions too);
+ * approved lines are never changed — they get the versions as options.
+ * Older pending options are dropped: they were written for the old pattern.
+ */
+export async function applyRefit(sectionId: string, slots: { index: number; options: string[] }[]) {
+  if (!slots.length) return;
+  const section = check(await db().from("sections").select("id, project_id").eq("id", sectionId).single()) as Section;
+  const lyric = (
+    check(await db().from("lines").select("id, kind, text, status").eq("section_id", sectionId).eq("deleted", false).order("position")) as {
+      id: string;
+      kind: string;
+      text: string;
+      status: LineStatus;
+    }[]
+  ).filter((l) => l.kind === "lyric");
+  const rows: Record<string, unknown>[] = [];
+  for (const x of slots) {
+    const l = lyric[x.index];
+    if (!l || !x.options.length) continue;
+    await db().from("alternatives").update({ state: "rejected" }).eq("line_id", l.id).eq("state", "pending");
+    const locked = l.status === "APPROVED" || l.status === "APPROVED_EDITED";
+    const fresh = x.options.filter((o) => o.trim() && o.trim() !== l.text.trim());
+    if (locked || !fresh.length) {
+      for (const text of fresh) rows.push({ line_id: l.id, project_id: section.project_id, text, source: "ai", state: "pending", instruction: "new pattern" });
+      continue;
+    }
+    await updateLine(l.id, { text: fresh[0], status: "SUGGESTED" }, "refit");
+    rows.push({ line_id: l.id, project_id: section.project_id, text: l.text, source: "user", state: "pending", instruction: "before the new pattern" });
+    for (const text of fresh.slice(1)) rows.push({ line_id: l.id, project_id: section.project_id, text, source: "ai", state: "pending", instruction: "new pattern" });
+  }
+  if (rows.length) check(await db().from("alternatives").insert(rows));
+  await touch(section.project_id);
+}
+
+/** removes every pending option of a line (they stay in its history as rejected) */
+export async function clearAlternatives(lineId: string) {
+  const line = await getLine(lineId);
+  check(await db().from("alternatives").update({ state: "rejected" }).eq("line_id", lineId).eq("state", "pending"));
+  await touch(line.project_id);
+  return line.project_id;
+}
