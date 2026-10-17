@@ -36,6 +36,11 @@ Product spec: see the original `verseflow_product_spec.md` (Phase 1 + core of Ph
   a bar after the section, latency compensation (reported by the hardware or measured with “Calibrate”: clicks
   played and recorded back). Takes are 24-bit WAVs in storage (`takes` table, `start_at` = where they start on the
   beat). Lyrics follow the beat while recording. Keys: R = record the first layer, Space = play / stop.
+- **Phone remote** (`/p/[id]/remote`; on phones 🎚 opens it): controls the studio running on the Mac (sound card +
+  mic stay there) — section ◀ ▶, layer (+ new layer for doubles), ● REC, ■ Stop, ▶ play section / a take, ↻ Retake
+  (replaces the last take; while recording: restarts), ✕ Discard last take, ★ Keep, count-in; the lyrics follow the
+  beat. Commands and the studio's state go through the API with long-polling (`/api/projects/[id]/remote`, tables
+  `studio_commands` / `studio_state`), so the phone needs no direct connection; the studio window just stays open.
 - **Performers** (`src/lib/artists.ts`, `Artists.tsx`): a song's singers / rappers (name, colour, voice/style note) in
   `projects.settings.artists`; sections list who performs them (`sections.artists`, several allowed — e.g. a chorus
   sung by two). 🎤 next to a section name assigns them, and they carry on to the following sections until a section gets

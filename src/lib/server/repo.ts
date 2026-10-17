@@ -1134,3 +1134,41 @@ export async function clearAlternatives(lineId: string) {
   await touch(line.project_id);
   return line.project_id;
 }
+
+// ---------- phone remote ⇄ studio ----------
+
+export async function postRemoteCommand(projectId: string, cmd: unknown) {
+  check(await db().from("studio_commands").insert({ project_id: projectId, cmd }));
+  // keep the queue short: commands older than an hour are useless
+  await db()
+    .from("studio_commands")
+    .delete()
+    .eq("project_id", projectId)
+    .lt("created_at", new Date(Date.now() - 3600_000).toISOString());
+}
+
+/** commands after `after` (id); after < 0 → only the latest id (to start listening from now) */
+export async function remoteCommandsAfter(projectId: string, after: number) {
+  if (after < 0) {
+    const last = check(
+      await db().from("studio_commands").select("id").eq("project_id", projectId).order("id", { ascending: false }).limit(1),
+    ) as { id: number }[];
+    return { last: last[0]?.id ?? 0, cmds: [] as { id: number; cmd: unknown }[] };
+  }
+  const rows = check(
+    await db().from("studio_commands").select("id, cmd").eq("project_id", projectId).gt("id", after).order("id").limit(50),
+  ) as { id: number; cmd: unknown }[];
+  return { last: rows.length ? rows[rows.length - 1].id : after, cmds: rows };
+}
+
+export async function putRemoteState(projectId: string, state: unknown) {
+  check(await db().from("studio_state").upsert({ project_id: projectId, state, updated_at: new Date().toISOString() }));
+}
+
+export async function getRemoteState(projectId: string) {
+  const row = check(await db().from("studio_state").select("state, updated_at").eq("project_id", projectId).maybeSingle()) as {
+    state: unknown;
+    updated_at: string;
+  } | null;
+  return row ? { state: row.state, at: new Date(row.updated_at).getTime() } : null;
+}

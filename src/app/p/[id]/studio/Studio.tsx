@@ -6,6 +6,7 @@ import { sectionArtists } from "@/lib/artists";
 import { barLength, fmtTime, sectionRanges } from "@/lib/audio/song-map";
 import { buildTimeline, positionIn } from "@/lib/audio/timeline";
 import { StudioEngine, type PlayLayer } from "@/lib/studio/engine";
+import { lastTake, type RemoteCmd, type RemoteState } from "@/lib/studio/remote";
 import { takeWindow } from "@/lib/studio/timing";
 import { encodeWav, peaksOf } from "@/lib/studio/wav";
 import type { ProjectTree, Take } from "@/lib/types";
@@ -217,12 +218,19 @@ export function Studio({ initialTree }: { initialTree: ProjectTree }) {
     setStatus(countIn > 0 ? { kind: "countin", lane } : { kind: "recording", lane, take: takesOf(lane).length + 1 });
   };
 
-  const stop = async () => {
+  /** discard = a recording in progress is thrown away (retake while recording) */
+  const stop = async (opts: { discard?: boolean } = {}) => {
     const e = engine.current;
     if (!e) return;
     stopAt.current = null;
     const lane = recordingLane.current;
     recordingLane.current = null;
+    if (lane && opts.discard) {
+      await e.stopRecording(latency, channel, 0);
+      setStatus({ kind: "idle" });
+      setPos(null);
+      return;
+    }
     if (!lane || !range || !bar || !section) {
       e.stop();
       setStatus({ kind: "idle" });
@@ -284,10 +292,15 @@ export function Studio({ initialTree }: { initialTree: ProjectTree }) {
     }
   };
 
-  // clock: playhead, lyrics follow, auto-stop, input meter
+  // clock: playhead, lyrics follow, auto-stop, input meter. A timer (not animation frames): it keeps
+  // running when the studio window is in the background — e.g. while the phone remote drives it
+  const tickRef = useRef<() => void>(() => {});
   useEffect(() => {
-    let raf = 0;
-    const tick = () => {
+    const id = setInterval(() => tickRef.current(), 40);
+    return () => clearInterval(id);
+  }, []);
+  useEffect(() => {
+    tickRef.current = () => {
       const e = engine.current;
       if (e) {
         if (status.kind === "playing" || status.kind === "countin" || status.kind === "recording") {
@@ -304,14 +317,128 @@ export function Studio({ initialTree }: { initialTree: ProjectTree }) {
         }
         if (e.armed) setLevel(e.level());
       }
-      raf = requestAnimationFrame(tick);
     };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
   });
 
   const busy = status.kind !== "idle";
   const recording = status.kind === "recording" || status.kind === "countin";
+
+  // ---- phone remote: run its commands, publish this studio's state ----
+  const [remoteNote, setRemoteNote] = useState<string | null>(null);
+  const remoteRun = useRef<(c: RemoteCmd) => Promise<void>>(async () => {});
+  useEffect(() => {
+    remoteRun.current = async (c: RemoteCmd) => {
+      const label: Record<string, string> = {
+        select: "section",
+        record: "record",
+        retake: "retake",
+        discardLast: "discard",
+        choose: "keep take",
+        play: "play",
+        playTake: "play take",
+        stop: "stop",
+        addLane: "new layer",
+        countIn: "count-in",
+      };
+      setRemoteNote(`📱 ${label[c.t] ?? c.t}`);
+      setTimeout(() => setRemoteNote(null), 2500);
+      const sectionTakes = tree.takes.filter((t) => t.section_id === sectionId);
+      switch (c.t) {
+        case "select":
+          if (!busy && tree.sections.some((x) => x.id === c.sectionId)) setSectionId(c.sectionId);
+          break;
+        case "record":
+          if (!busy) await record(c.lane);
+          break;
+        case "retake": {
+          // while recording: throw the running take away and start again; otherwise replace the last take
+          if (recordingLane.current) await stop({ discard: true });
+          else {
+            if (busy) await stop();
+            const last = lastTake(sectionTakes, c.lane);
+            if (last) await api(`/api/takes/${last.id}`, undefined, "DELETE").catch(() => {});
+          }
+          await record(c.lane);
+          break;
+        }
+        case "discardLast": {
+          if (busy) return;
+          const last = lastTake(sectionTakes, c.lane);
+          if (last) await api(`/api/takes/${last.id}`, undefined, "DELETE").catch((e: Error) => setError(e.message));
+          break;
+        }
+        case "choose":
+          await api(`/api/takes/${c.takeId}`, undefined, "PATCH").catch((e: Error) => setError(e.message));
+          break;
+        case "play":
+          if (!busy) await play();
+          break;
+        case "playTake": {
+          const t = tree.takes.find((x) => x.id === c.takeId);
+          if (t && !busy) await play({ take: t, label: `${t.lane} take ${t.take_no}` });
+          break;
+        }
+        case "stop":
+          if (busy) await stop();
+          break;
+        case "addLane":
+          if (c.name.trim() && !lanes.includes(c.name.trim())) await api(`/api/projects/${pid}`, { action: "setLanes", lanes: [...lanes, c.name.trim()] });
+          break;
+        case "countIn":
+          setCountIn(Math.max(0, Math.min(2, Math.round(c.bars))));
+          break;
+      }
+    };
+  });
+  useEffect(() => {
+    let alive = true;
+    let after = -1;
+    (async () => {
+      while (alive) {
+        try {
+          const r = (await fetch(`/api/projects/${pid}/remote?cmds&after=${after}`).then((x) => x.json())) as {
+            last?: number;
+            cmds?: { id: number; cmd: RemoteCmd }[];
+          };
+          if (typeof r.last === "number") after = r.last;
+          for (const c of r.cmds ?? []) if (alive) await remoteRun.current(c.cmd);
+        } catch {
+          await new Promise((res) => setTimeout(res, 2000));
+        }
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [pid]);
+  const remoteState: RemoteState = {
+    armed: !!armed,
+    beatReady,
+    sectionId,
+    status: status.kind,
+    statusLane: "lane" in status ? status.lane : null,
+    statusLabel: status.kind === "playing" ? status.label : status.kind === "recording" ? `take ${status.take}` : "",
+    lineIndex: pos?.sectionId === sectionId ? (pos?.lineIndex ?? null) : null,
+    sections: sections.map((x) => ({ id: x.id, name: x.name, takes: tree.takes.filter((t) => t.section_id === x.id).length })),
+    lanes,
+    takes: tree.takes
+      .filter((t) => t.section_id === sectionId)
+      .map((t) => ({ id: t.id, lane: t.lane, take_no: t.take_no, chosen: t.chosen, duration: t.duration })),
+    countIn,
+    error,
+  };
+  const stateJson = JSON.stringify(remoteState);
+  const lastSent = useRef("");
+  useEffect(() => {
+    // changes go out at once; an unchanged state is re-sent every 3 s so the phone knows the studio is there
+    const send = () => {
+      lastSent.current = stateJson;
+      void fetch(`/api/projects/${pid}/remote`, { method: "POST", headers: { "content-type": "application/json" }, body: `{"state":${stateJson}}` }).catch(() => {});
+    };
+    if (stateJson !== lastSent.current) send();
+    const id = setInterval(send, 3000);
+    return () => clearInterval(id);
+  }, [stateJson, pid]);
 
   // keyboard: space = play / stop, R = record the first layer
   useEffect(() => {
@@ -353,6 +480,7 @@ export function Studio({ initialTree }: { initialTree: ProjectTree }) {
         </Link>
         {/* basis-0: the title shrinks (truncates) instead of pushing the buttons onto a second row */}
         <strong className="min-w-0 shrink grow basis-0 truncate">{tree.project.title}</strong>
+        {remoteNote && <span className="shrink-0 rounded bg-[#6d4aff] px-2 py-0.5 text-xs font-semibold text-white">{remoteNote}</span>}
         <span className="shrink-0 rounded bg-[#1a1a1f] px-2 py-0.5 font-mono text-xs">
           {audio.bpm}<span className="hidden sm:inline"> BPM</span> · {fmtTime(now > 0 ? now : 0)}
         </span>
@@ -427,6 +555,12 @@ export function Studio({ initialTree }: { initialTree: ProjectTree }) {
         </div>
       </header>
       {error && <p className="bg-[#3b1111] px-4 py-1.5 text-sm text-[#fca5a5]">{error}</p>}
+      <p className="shrink-0 bg-[#16132a] px-3 py-1.5 text-xs text-[#c4b5fd] md:hidden">
+        On a phone? Use it as the remote for the studio on your Mac:{" "}
+        <Link href={`/p/${pid}/remote`} className="font-semibold underline">
+          open 📱 Remote
+        </Link>
+      </p>
       {!armed && (
         <p className="shrink-0 bg-[#1a1408] px-3 py-1.5 text-xs text-[#fbbf24] md:px-4">
           Tap “Arm” once: the browser needs a tap to use the microphone.

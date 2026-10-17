@@ -215,9 +215,15 @@ export function Writer({ initial, aiEnabled }: { initial: ProjectTree; aiEnabled
           <UploadBeatButton />
           {tree.audio && (
             // recording takes over the beat (Mac + audio interface; also reachable on the phone)
-            <Link href={`/p/${pid}/studio`} className="btn px-2.5 sm:px-3" title="Studio — record vocal takes over the beat">
-              🎚<span className="hidden sm:inline"> Studio</span>
-            </Link>
+            <>
+              {/* phones: the remote for the studio running on the Mac; larger screens: the studio itself */}
+              <Link href={`/p/${pid}/remote`} className="btn px-2.5 md:hidden" title="Remote — control the studio on your Mac">
+                🎚<span className="hidden sm:inline"> Remote</span>
+              </Link>
+              <Link href={`/p/${pid}/studio`} className="btn hidden px-3 md:inline-flex" title="Studio — record vocal takes over the beat">
+                🎚 Studio
+              </Link>
+            </>
           )}
           <Link href={`/p/${pid}/record`} className="btn px-2.5 sm:px-3" title="Record mode — big lyrics that follow the beat">
             🎙<span className="hidden sm:inline"> Record</span>
