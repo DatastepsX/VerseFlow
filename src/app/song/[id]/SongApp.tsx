@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { fmtTime } from "@/lib/audio/song-map";
 import { buildTimeline, positionIn } from "@/lib/audio/timeline";
-import { MAX_BEAT_BYTES, uploadBeat } from "@/lib/client/beat";
+import { BEAT_ACCEPT, MAX_BEAT_BYTES, uploadBeat } from "@/lib/client/beat";
 import { processFlow, type FlowStep } from "@/lib/flow/pipeline";
 import { prosody } from "@/lib/rhyme/prosody";
 import { StudioEngine } from "@/lib/studio/engine";
@@ -633,7 +633,7 @@ function BeatUpload({ pid, onDone }: { pid: string; onDone: (t: ProjectTree) => 
         <span className="text-xs text-muted">MP3 or any audio file, up to 50 MB</span>
         <input
           type="file"
-          accept="audio/*"
+          accept={BEAT_ACCEPT}
           className="hidden"
           disabled={!!status}
           onChange={async (e) => {

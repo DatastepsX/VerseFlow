@@ -2,7 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { decodeAudio } from "@/lib/audio/analyze-file";
-import { uploadBeat } from "@/lib/client/beat";
+import { BEAT_ACCEPT, uploadBeat } from "@/lib/client/beat";
 import { barLength, fmtTime, sectionRanges } from "@/lib/audio/song-map";
 import { buildTimeline, lineStart as timelineLineStart, positionIn, type Timeline } from "@/lib/audio/timeline";
 import { analyseBeat } from "@/lib/audio/structure";
@@ -579,7 +579,7 @@ function PlayerBar({ peaks, audioRef }: { peaks: number[]; audioRef: React.RefOb
             </span>
             <label className="btn-ghost cursor-pointer px-1 text-xs">
               Replace
-              <input type="file" accept="audio/*" className="hidden" onChange={(e) => e.target.files?.[0] && void p.upload(e.target.files[0])} />
+              <input type="file" accept={BEAT_ACCEPT} className="hidden" onChange={(e) => e.target.files?.[0] && void p.upload(e.target.files[0])} />
             </label>
             <button
               className="btn-ghost px-1 text-xs text-bad"
@@ -610,7 +610,7 @@ export function UploadBeatButton() {
   return (
     <label className="btn cursor-pointer" title="Upload a beat (MP3, WAV, M4A…) to detect BPM and anchor sections">
       {p.status ?? "🎵 Beat"}
-      <input type="file" accept="audio/*,.mp3,.wav,.m4a" className="hidden" onChange={(e) => e.target.files?.[0] && void p.upload(e.target.files[0])} />
+      <input type="file" accept={BEAT_ACCEPT} className="hidden" onChange={(e) => e.target.files?.[0] && void p.upload(e.target.files[0])} />
     </label>
   );
 }

@@ -3,6 +3,8 @@
 import { analyzeAudio } from "@/lib/audio/analyze-file";
 
 export const MAX_BEAT_BYTES = 50 * 1024 * 1024;
+/** file picker filter: iOS greys out MP3s in Files for a bare "audio/*", so it lists the extensions (each maps to its file type) */
+export const BEAT_ACCEPT = ".mp3,.m4a,.wav,.aac,.aif,.aiff,.flac,.ogg,.caf";
 
 /**
  * Analyses a song/beat in the browser (tempo, bar 1, beat changes), uploads

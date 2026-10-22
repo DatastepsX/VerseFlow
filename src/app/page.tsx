@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { api } from "@/lib/client/api";
-import { MAX_BEAT_BYTES, uploadBeat } from "@/lib/client/beat";
+import { BEAT_ACCEPT, MAX_BEAT_BYTES, uploadBeat } from "@/lib/client/beat";
 import { LANGUAGES, PROJECT_TYPES, type Project, type ProjectType } from "@/lib/types";
 
 type ProjectRow = Pick<Project, "id" | "title" | "type" | "language" | "updated_at">;
@@ -133,7 +133,7 @@ export default function Home() {
               </span>
               <input
                 type="file"
-                accept="audio/*"
+                accept={BEAT_ACCEPT}
                 className="hidden"
                 onChange={(e) => {
                   const f = e.target.files?.[0] ?? null;
