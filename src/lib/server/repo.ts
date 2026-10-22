@@ -20,7 +20,7 @@ import type {
 } from "@/lib/types";
 
 const TAKE_COLS = "id, section_id, lane, take_no, start_at, duration, sample_rate, peaks, chosen, created_at";
-const LINE_COLS = "id, project_id, section_id, position, text, status, kind, note, audio_at, updated_at";
+const LINE_COLS = "id, project_id, section_id, position, text, status, kind, note, audio_at, flow, updated_at";
 const SNAPSHOT_FIELDS = ["text", "status", "kind", "note", "deleted"] as const;
 
 export class NotFound extends Error {}
@@ -1015,13 +1015,21 @@ export async function takeUploadUrl(projectId: string) {
 /** a new take becomes the chosen one of its section + layer (the latest is usually the keeper) */
 export async function saveTake(
   projectId: string,
-  t: { path: string; section_id: string; lane: string; start_at: number; duration: number; sample_rate: number; peaks: number[] },
+  t: { path: string; section_id: string | null; lane: string; start_at: number; duration: number; sample_rate: number; peaks: number[] },
 ) {
   if (!t.path.startsWith(`${projectId}/take-`)) throw new Error("Invalid take path");
-  const prev = check(
-    await db().from("takes").select("take_no").eq("project_id", projectId).eq("section_id", t.section_id).eq("lane", t.lane),
-  ) as { take_no: number }[];
-  check(await db().from("takes").update({ chosen: false }).eq("project_id", projectId).eq("section_id", t.section_id).eq("lane", t.lane));
+  // a take without a section (the whole-song flow take) is grouped by its layer alone
+  let prevQ = db().from("takes").select("take_no").eq("project_id", projectId).eq("lane", t.lane);
+  let unchoose = db().from("takes").update({ chosen: false }).eq("project_id", projectId).eq("lane", t.lane);
+  if (t.section_id) {
+    prevQ = prevQ.eq("section_id", t.section_id);
+    unchoose = unchoose.eq("section_id", t.section_id);
+  } else {
+    prevQ = prevQ.is("section_id", null);
+    unchoose = unchoose.is("section_id", null);
+  }
+  const prev = check(await prevQ) as { take_no: number }[];
+  check(await unchoose);
   const row = check(
     await db()
       .from("takes")
@@ -1171,4 +1179,86 @@ export async function getRemoteState(projectId: string) {
     updated_at: string;
   } | null;
   return row ? { state: row.state, at: new Date(row.updated_at).getTime() } : null;
+}
+
+// ---------- flow: the song from the writer's sung flow ----------
+
+/**
+ * Replaces the song's sections + lines with one line per sung bar of a flow
+ * take (empty, waiting for suggestions), each knowing its rhythm and the
+ * words sung there. Silences of a few bars split sections. A version is
+ * saved first when there was text.
+ */
+export async function buildFlowSong(
+  projectId: string,
+  lines: { start: number; sungAt: number; syllables: number; stress: number[]; held: boolean; words: string }[],
+) {
+  const tree = await getTree(projectId);
+  if (tree.sections.some((s) => s.lines.some((l) => l.text.trim()))) await saveVersion(projectId, "Before the new flow");
+  if (tree.sections.length) check(await db().from("sections").delete().in("id", tree.sections.map((s) => s.id)));
+  const sorted = [...lines].sort((a, b) => a.start - b.start);
+  const steps = sorted.slice(1).map((l, i) => l.start - sorted[i].start).sort((a, b) => a - b);
+  const step = steps.length ? steps[Math.floor(steps.length / 2)] : 2;
+  // sections: a gap of more than ~2 lines without singing starts a new one
+  const groups: (typeof sorted)[] = [];
+  for (const [i, l] of sorted.entries()) {
+    if (!i || l.start - sorted[i - 1].start > step * 2.6) groups.push([]);
+    groups[groups.length - 1].push(l);
+  }
+  const secRows = check(
+    await db()
+      .from("sections")
+      .insert(groups.map((g, i) => ({ project_id: projectId, name: `Part ${i + 1}`, group_size: 2, position: i + 1, audio_start: g[0].start })))
+      .select("id, position"),
+  ) as { id: string; position: number }[];
+  const idAt = new Map(secRows.map((r) => [r.position, r.id]));
+  const rows = groups.flatMap((g, i) =>
+    g.map((l, k) => ({
+      project_id: projectId,
+      section_id: idAt.get(i + 1)!,
+      position: k + 1,
+      text: "",
+      status: "OPEN" as LineStatus,
+      kind: "lyric",
+      audio_at: Math.round(Math.max(g[0].start, Math.min(l.sungAt, l.start + step)) * 1000) / 1000,
+      flow: { syllables: l.syllables, stress: l.stress.slice(0, 24), held: !!l.held, words: (l.words ?? "").slice(0, 200) },
+    })),
+  );
+  if (rows.length) {
+    const inserted = check(await db().from("lines").insert(rows).select(LINE_COLS)) as Line[];
+    await db().from("line_events").delete().eq("project_id", projectId).eq("undone", true);
+    check(
+      await db()
+        .from("line_events")
+        .insert(inserted.map((line) => ({ project_id: projectId, line_id: line.id, action: "create", before: { deleted: true }, after: snap({ ...line, deleted: false }) }))),
+    );
+  }
+  await touch(projectId);
+}
+
+/**
+ * Suggestions for lines (first = the line's text unless the writer approved
+ * it; the others under ↻). Older pending options are dropped.
+ */
+export async function applyFlowOptions(projectId: string, items: { id: string; options: string[] }[]) {
+  const ids = items.map((x) => x.id);
+  if (!ids.length) return;
+  const current = check(await db().from("lines").select("id, text, status").eq("project_id", projectId).in("id", ids)) as {
+    id: string;
+    text: string;
+    status: LineStatus;
+  }[];
+  const byId = new Map(current.map((l) => [l.id, l]));
+  check(await db().from("alternatives").update({ state: "rejected" }).in("line_id", ids).eq("state", "pending"));
+  const alts: Record<string, unknown>[] = [];
+  for (const x of items) {
+    const l = byId.get(x.id);
+    if (!l || !x.options.length) continue;
+    const locked = l.status === "APPROVED" || l.status === "APPROVED_EDITED";
+    const opts = x.options.filter((o) => o.trim() && o.trim() !== l.text.trim());
+    if (!locked && opts.length) await updateLine(l.id, { text: opts[0], status: "SUGGESTED" }, "flow");
+    for (const text of locked ? opts : opts.slice(1)) alts.push({ line_id: l.id, project_id: projectId, text, source: "ai", state: "pending" });
+  }
+  if (alts.length) check(await db().from("alternatives").insert(alts));
+  await touch(projectId);
 }

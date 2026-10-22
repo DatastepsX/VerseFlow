@@ -118,6 +118,8 @@ export interface Line {
   note: string | null;
   /** where the line starts in the beat (s): synced from the vocals or tapped; null = estimated */
   audio_at: number | null;
+  /** the rhythm the writer sang for this line in a flow take */
+  flow: LineFlow | null;
   updated_at: string;
 }
 
@@ -189,4 +191,15 @@ export interface ProjectVersion {
   id: string;
   label: string;
   created_at: string;
+}
+
+/** what the writer sang in a line's place while recording the flow */
+export interface LineFlow {
+  syllables: number;
+  /** stressed syllables, 1-based */
+  stress: number[];
+  /** the last note is held */
+  held: boolean;
+  /** recognised words ("" = only "na-na") */
+  words: string;
 }

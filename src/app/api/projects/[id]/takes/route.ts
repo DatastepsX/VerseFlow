@@ -30,11 +30,11 @@ export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]/t
     if (b.action === "uploadUrl") return Response.json(await takeUploadUrl(id));
     if (b.action === "save") {
       const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
-      if (!b.path || !b.section_id || num(b.start_at) === null || !num(b.duration) || !num(b.sample_rate))
-        return Response.json({ error: "path, section_id, start_at, duration and sample_rate required" }, { status: 400 });
+      if (!b.path || num(b.start_at) === null || !num(b.duration) || !num(b.sample_rate))
+        return Response.json({ error: "path, start_at, duration and sample_rate required" }, { status: 400 });
       const takeId = await saveTake(id, {
         path: b.path,
-        section_id: b.section_id,
+        section_id: b.section_id ?? null,
         lane: (b.lane ?? "Lead").trim().slice(0, 30) || "Lead",
         start_at: num(b.start_at)!,
         duration: num(b.duration)!,

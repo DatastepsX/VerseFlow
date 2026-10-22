@@ -1,5 +1,6 @@
 import "server-only";
 import { performedBy } from "@/lib/artists";
+import { adjustLength } from "@/lib/rhyme/fit";
 import { songRhymeDistance } from "@/lib/scheme";
 import Anthropic from "@anthropic-ai/sdk";
 import { analyzeLine, lastWord } from "@/lib/rhyme/analyze";
@@ -554,4 +555,115 @@ Return one entry per ${refit ? "[REFIT]" : polish ? "[IMPROVE]" : "[OPEN]"} line
     .map((x) => ({ index: x.line - 1, options: x.options.map((o) => o.trim()).filter(Boolean).slice(0, 3) }))
     .filter((x) => slotSet.has(x.index) && x.options.length);
   return { slots: drafted, remaining: later.size };
+}
+
+/* ---------- flow: suggestions from the writer's sung rhythm ---------- */
+
+/**
+ * 3 options for each of the given lines, written to the rhythm the writer
+ * sang there (syllables, stresses, held last note), about what the writer
+ * sang (recognised words → topic and mood, kept where they fit), rhyming
+ * in couplets. Every option is checked with the syllable counter and nudged
+ * onto the target length; the best fitting comes first.
+ */
+export async function flowSuggest(tree: ProjectTree, lineIds: string[]) {
+  if (!aiConfigured()) throw new AiUnavailable("AI is not configured yet (ANTHROPIC_API_KEY missing).");
+  const { project } = tree;
+  const lang = project.language;
+  const want = new Set(lineIds);
+  const all = tree.sections.flatMap((s) => s.lines.filter((l) => l.kind === "lyric").map((l, k) => ({ l, s, k })));
+  const num = new Map(all.map((x, i) => [x.l.id, i + 1]));
+  const targets = all.filter((x) => want.has(x.l.id));
+  if (!targets.length) return [] as { id: string; options: string[] }[];
+
+  const sang = all.map((x, i) => `${i + 1}. ${x.l.flow?.words?.trim() || "(na-na)"}`).join("\n");
+  const listing = tree.sections
+    .map((s) => {
+      const lyric = s.lines.filter((l) => l.kind === "lyric");
+      const rows = lyric.map((l) => {
+        const n = num.get(l.id)!;
+        const f = l.flow;
+        const rhythm = f ? `${f.syllables} syllables ${patternOf(f)}` : "free";
+        const chosen = (l.status === "APPROVED" || l.status === "APPROVED_EDITED") && l.text.trim() ? ` — written: “${l.text}”` : "";
+        return `${n}. ${want.has(l.id) ? "[WRITE]" : "[KEEP]"} rhythm: ${rhythm}; sang: ${f?.words?.trim() ? `“${f.words}”` : "(na-na)"}${chosen}`;
+      });
+      return `${s.name}${performedBy(tree, s)}:\n${rows.join("\n")}`;
+    })
+    .join("\n\n");
+  // couplets: lines 1+2, 3+4… of each section rhyme
+  const rhymes: string[] = [];
+  for (const s of tree.sections) {
+    const lyric = s.lines.filter((l) => l.kind === "lyric");
+    for (let k = 0; k + 1 < lyric.length; k += 2) {
+      const [a, b] = [lyric[k], lyric[k + 1]];
+      if (!want.has(a.id) && !want.has(b.id)) continue;
+      const fixed = !want.has(a.id) ? a : !want.has(b.id) ? b : null;
+      rhymes.push(
+        fixed?.text.trim()
+          ? `Line ${num.get(want.has(a.id) ? a.id : b.id)} must rhyme with line ${num.get(fixed.id)} “${fixed.text}” (-${analyzeLine(fixed.text, lang).rhymeKey}).`
+          : `Lines ${num.get(a.id)} and ${num.get(b.id)} rhyme with each other (option i with option i).`,
+      );
+    }
+  }
+  const st = project.settings ?? {};
+  const prompt = `PROJECT
+Title: ${project.title}
+Language: ${langName(lang)}
+${st.genre ? `Genre: ${st.genre}\n` : ""}${st.style ? `Style: ${st.style}\n` : ""}${project.concept ? `Story / concept: ${project.concept}\n` : ""}
+WHAT THE WRITER SANG over the beat to find the flow (recognised words per line; "(na-na)" = sounds without words):
+${sang}
+
+From these words, work out the song's topic, mood and imagery (e.g. love, longing, the night…) — the lyrics must be about that. Words or phrases the writer sang are their raw material: keep them where they fit.
+
+THE SONG (rhythm per line: DUM = stressed syllable, ~ = the last note is held)
+${listing}
+
+${rhymes.length ? `RHYMES\n${rhymes.join("\n")}\n` : ""}
+TASK
+For every [WRITE] line write 3 options. Each option must:
+- have exactly the line's number of syllables (sung syllables, ±1) with the stressed syllables on the DUM positions — it must fit the rhythm the writer sang;
+- end on an open, singable vowel when the last note is held (~);
+- respect its rhyme rule and continue the lines around it, so the song reads as one coherent text about the writer's topic.
+When the writer sang real words in a line, the FIRST option keeps them (completed and corrected into a full line); the others may go further. Make the 3 options clearly different.
+Return one entry per [WRITE] line, "line" = its number.`;
+
+  const parsed = await callJson<{ slots: { line: number; options: string[] }[] }>(project.id, "flow_suggest", prompt, DRAFT_SCHEMA, SYSTEM, DRAFT_EFFORT);
+  const byNum = new Map(all.map((x, i) => [i + 1, x.l]));
+  return parsed.slots
+    .map((slot) => {
+      const line = byNum.get(slot.line);
+      if (!line || !want.has(line.id)) return null;
+      const target = line.flow?.syllables ?? null;
+      const fitted = slot.options
+        .map((o) => o.trim())
+        .filter(Boolean)
+        .slice(0, 3)
+        .map((o, i) => {
+          let text = o;
+          // nudge a near miss onto the sung length (fillers / small cuts)
+          if (target) {
+            for (let step = 0; step < 3; step++) {
+              const d = prosody(text, lang).syllables - target;
+              if (Math.abs(d) <= 1) break;
+              const next = adjustLength(text, lang, d > 0 ? -1 : 1);
+              if (!next) break;
+              text = next;
+            }
+          }
+          const off = target ? Math.abs(prosody(text, lang).syllables - target) : 0;
+          return { text, off, i };
+        })
+        // best fit first; the writer's own words (first option) win ties
+        .sort((a, b) => Math.min(a.off, 2) - Math.min(b.off, 2) || a.i - b.i)
+        .map((x) => x.text);
+      return { id: line.id, options: fitted };
+    })
+    .filter((x): x is { id: string; options: string[] } => !!x && x.options.length > 0);
+}
+
+function patternOf(f: { syllables: number; stress: number[]; held: boolean }) {
+  const s = new Set(f.stress);
+  const parts = Array.from({ length: f.syllables }, (_, i) => (s.has(i + 1) ? "DUM" : "da"));
+  if (f.held && parts.length) parts[parts.length - 1] += "~";
+  return parts.join("-");
 }

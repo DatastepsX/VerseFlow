@@ -103,3 +103,36 @@ export function vocalTimes(tree: ProjectTree, words: TimedWord[]) {
   }
   return times;
 }
+
+/**
+ * One ElevenLabs Scribe call on a recorded take (the writer's flow): the
+ * words sung, with timing (seconds from the start of the take). "Na-na"
+ * parts come back as filler or nothing. Not stored — the flow lines keep
+ * what matters.
+ */
+export async function transcribeTake(projectId: string, takeId: string, language: string): Promise<TimedWord[]> {
+  const key = process.env.ELEVENLABS_API_KEY;
+  if (!key) throw new AiUnavailable("Word recognition is not configured yet (ELEVENLABS_API_KEY missing).");
+  const take = check(await db().from("takes").select("path").eq("id", takeId).eq("project_id", projectId).maybeSingle()) as {
+    path: string;
+  } | null;
+  if (!take) throw new Error("Take not found");
+  const { data: signed, error } = await db().storage.from("beats").createSignedUrl(take.path, 15 * 60);
+  if (error || !signed) throw new Error(error?.message ?? "Could not share the recording with the transcriber");
+  const form = new FormData();
+  form.append("model_id", MODEL);
+  form.append("source_url", signed.signedUrl);
+  form.append("timestamps_granularity", "word");
+  form.append("tag_audio_events", "false");
+  if (language) form.append("language_code", language);
+  const res = await fetch("https://api.elevenlabs.io/v1/speech-to-text", { method: "POST", headers: { "xi-api-key": key }, body: form });
+  const body = (await res.json().catch(() => ({}))) as { words?: ScribeWord[]; audio_duration_secs?: number | null; detail?: unknown };
+  if (!res.ok) {
+    const detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail ?? res.statusText);
+    throw new Error(`Word recognition failed (${res.status}): ${detail.slice(0, 300)}`);
+  }
+  await db()
+    .from("ai_calls")
+    .insert({ project_id: projectId, kind: "transcribe_flow", model: MODEL, audio_seconds: body.audio_duration_secs ?? 0 });
+  return cleanWords(body.words ?? []);
+}

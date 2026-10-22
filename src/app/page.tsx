@@ -9,23 +9,25 @@ import { LANGUAGES, PROJECT_TYPES, type Project, type ProjectType } from "@/lib/
 
 type ProjectRow = Pick<Project, "id" | "title" | "type" | "language" | "updated_at">;
 
-export default function Dashboard() {
+/**
+ * Home: your songs, and a new song in three taps — name, language, beat.
+ * The song opens in the app view (/song/[id]): record the flow, get lyrics.
+ */
+export default function Home() {
   const router = useRouter();
   const [projects, setProjects] = useState<ProjectRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [creating, setCreating] = useState(false);
+  const [sheet, setSheet] = useState(false);
+  const [more, setMore] = useState(false);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
-  const [song, setSong] = useState<File | null>(null);
-  const [readLyrics, setReadLyrics] = useState(true);
+  const [beat, setBeat] = useState<File | null>(null);
   const [form, setForm] = useState({
     title: "",
-    type: "song" as ProjectType,
     language: "it",
+    type: "song" as ProjectType,
     concept: "",
     genre: "",
-    style: "",
-    simpleLanguage: true,
     text: "",
   });
 
@@ -33,95 +35,102 @@ export default function Dashboard() {
     api<ProjectRow[]>("/api/projects").then(setProjects, (e: Error) => setError(e.message));
   }, []);
 
-  async function create(e: React.FormEvent) {
+  const create = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!beat && !form.text.trim()) {
+      setError("Choose your beat first.");
+      return;
+    }
     setBusy(true);
+    setError(null);
     try {
+      setStatus("Creating the song…");
       const p = await api<Project>("/api/projects", {
         body: {
-          title: form.title || "Untitled",
+          title: form.title.trim() || beat?.name.replace(/\.[^.]+$/, "").replace(/[_-]+/g, " ").trim() || "New song",
           type: form.type,
           language: form.language,
-          concept: form.concept || null,
-          settings: { genre: form.genre || undefined, style: form.style || undefined, simpleLanguage: form.simpleLanguage },
-          text: form.text || undefined,
+          concept: form.concept.trim() || null,
+          settings: { genre: form.genre.trim() || undefined, simpleLanguage: true },
+          text: form.text.trim() || undefined,
         },
       });
-      if (song) {
+      if (beat) {
         try {
-          await api(`/api/projects/${p.id}/audio`, { body: await uploadBeat(p.id, song, setStatus) });
-          if (readLyrics && form.text.trim()) {
-            // pasted text + song: keep the text, time its lines to the vocals
-            setStatus("Reading the lyrics from the song… (up to a minute)");
-            await api(`/api/projects/${p.id}/lyrics`, { body: { action: "transcribe", autoSections: true } });
-            setStatus("Syncing your lines to the vocals…");
-            await api(`/api/projects/${p.id}/lyrics`, { body: { action: "sync" } });
-          } else if (readLyrics) {
-            // 1 ElevenLabs call, then the song is rebuilt from its vocals (sections + lines, free)
-            setStatus("Reading the lyrics from the song… (up to a minute)");
-            await api(`/api/projects/${p.id}/lyrics`, { body: { action: "transcribe", autoSections: true } });
-            setStatus("Building the sections…");
-            await api(`/api/projects/${p.id}/lyrics`, { body: { action: "rebuild" } });
-          }
+          await api(`/api/projects/${p.id}/audio`, { body: await uploadBeat(p.id, beat, setStatus) });
         } catch (err) {
-          // the project exists already: open it and say what is missing
-          window.alert(`The project was created, but: ${(err as Error).message}`);
+          window.alert(`The song was created, but the beat: ${(err as Error).message}`);
         }
       }
-      router.push(`/p/${p.id}`);
+      router.push(`/song/${p.id}`);
     } catch (err) {
       setError((err as Error).message);
       setBusy(false);
       setStatus(null);
     }
-  }
+  };
 
   return (
-    <main className="mx-auto w-full max-w-3xl px-4 py-8 sm:py-12">
-      <header className="mb-8 flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">VerseFlow</h1>
-          <p className="text-sm text-muted">Write line by line. Keep what you approve.</p>
-        </div>
-        {!creating && (
-          <button className="btn-primary" onClick={() => setCreating(true)}>
-            + New project
-          </button>
-        )}
+    <main className="mx-auto flex min-h-dvh w-full max-w-lg flex-col px-4 pb-28 pt-[max(1.5rem,env(safe-area-inset-top))]">
+      <header className="mb-6">
+        <h1 className="text-3xl font-extrabold tracking-tight">VerseFlow</h1>
+        <p className="mt-1 text-sm text-muted">Upload a beat · sing your flow · get your lyrics</p>
       </header>
 
-      {error && <p className="mb-4 rounded-md bg-bad-soft px-3 py-2 text-sm text-bad">{error}</p>}
+      {error && !sheet && <p className="mb-4 rounded-xl bg-bad-soft px-3 py-2 text-sm text-bad">{error}</p>}
 
-      {creating && (
-        <form onSubmit={create} className="mb-8 space-y-4 rounded-xl border border-line bg-panel p-5">
-          <h2 className="font-semibold">New project</h2>
-          <div>
-            <label className="label">Title</label>
-            <input
-              className="input"
-              autoFocus
-              value={form.title}
-              placeholder="Cold Heart"
-              onChange={(e) => setForm({ ...form, title: e.target.value })}
-            />
-          </div>
-          <div>
-            <label className="label">Song / beat (optional)</label>
-            <label className="flex cursor-pointer items-center gap-2 rounded-md border border-dashed border-line px-3 py-2.5 text-sm hover:bg-panel-2">
-              <span>🎵</span>
-              <span className={`min-w-0 flex-1 truncate ${song ? "" : "text-muted"}`}>{song ? song.name : "Choose an MP3 / audio file (max 50 MB)"}</span>
-              {song && (
-                <button
-                  type="button"
-                  className="btn-ghost px-1 text-xs"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    setSong(null);
-                  }}
-                >
-                  ✕
-                </button>
-              )}
+      {projects === null && !error && <p className="text-sm text-muted">Loading…</p>}
+      {projects?.length === 0 && (
+        <button
+          className="flex flex-col items-center gap-2 rounded-2xl border-2 border-dashed border-line px-6 py-12 text-center"
+          onClick={() => setSheet(true)}
+        >
+          <span className="text-4xl">🎵</span>
+          <span className="font-semibold">Start your first song</span>
+          <span className="text-sm text-muted">Upload a beat, sing or rap over it, and get lyrics that fit your flow.</span>
+        </button>
+      )}
+      <ul className="space-y-2.5">
+        {projects?.map((p) => (
+          <li key={p.id}>
+            <Link href={`/song/${p.id}`} className="flex items-center gap-3 rounded-2xl border border-line bg-panel px-4 py-3.5 shadow-sm active:scale-[0.99]">
+              <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-accent-soft text-xl">🎤</span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate font-semibold">{p.title}</span>
+                <span className="text-xs text-muted">
+                  {PROJECT_TYPES.find((t) => t.value === p.type)?.label} · {p.language.toUpperCase()} · {new Date(p.updated_at).toLocaleDateString()}
+                </span>
+              </span>
+              <span className="text-muted">›</span>
+            </Link>
+          </li>
+        ))}
+      </ul>
+
+      {/* new song */}
+      <button
+        className="fixed bottom-[max(1.25rem,env(safe-area-inset-bottom))] left-1/2 z-20 -translate-x-1/2 rounded-full bg-accent px-7 py-4 text-base font-bold text-white shadow-xl active:scale-95"
+        onClick={() => setSheet(true)}
+      >
+        ＋ New song
+      </button>
+
+      {sheet && (
+        <div className="fixed inset-0 z-40 flex items-end justify-center bg-black/40" onClick={() => !busy && setSheet(false)}>
+          <form
+            onSubmit={create}
+            onClick={(e) => e.stopPropagation()}
+            className="max-h-[92dvh] w-full max-w-lg space-y-4 overflow-auto rounded-t-3xl bg-panel px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-3"
+          >
+            <div className="mx-auto h-1.5 w-10 rounded-full bg-line" />
+            <h2 className="text-xl font-bold">New song</h2>
+
+            <label className="flex cursor-pointer items-center gap-3 rounded-2xl border-2 border-dashed border-accent/50 bg-accent-soft/40 px-4 py-4">
+              <span className="text-3xl">🎵</span>
+              <span className="min-w-0 flex-1">
+                <span className="block font-semibold">{beat ? beat.name : "Choose your beat"}</span>
+                <span className="text-xs text-muted">{beat ? `${(beat.size / 1024 / 1024).toFixed(1)} MB` : "MP3 or any audio file, up to 50 MB"}</span>
+              </span>
               <input
                 type="file"
                 accept="audio/*"
@@ -132,116 +141,86 @@ export default function Dashboard() {
                     setError("The file is larger than 50 MB.");
                     return;
                   }
-                  setSong(f);
-                  // the song's name as title when none is typed yet
-                  if (f && !form.title.trim()) setForm({ ...form, title: f.name.replace(/\.[^.]+$/, "").replace(/[_-]+/g, " ").trim() });
+                  setError(null);
+                  setBeat(f);
                 }}
               />
             </label>
-            {song && (
-              <label className="mt-2 flex items-center gap-2 text-sm">
-                <input type="checkbox" checked={readLyrics} onChange={(e) => setReadLyrics(e.target.checked)} />
-                <span>
-                  {form.text.trim()
-                    ? "Has vocals: read them and time my lines to the singing · 1 call"
-                    : "Has vocals: read the lyrics and build the sections (verse, chorus, rap…) · 1 call"}
-                </span>
-              </label>
-            )}
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="label">Type</label>
-              <select className="input" value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value as ProjectType })}>
-                {PROJECT_TYPES.map((t) => (
-                  <option key={t.value} value={t.value}>
-                    {t.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="label">Language</label>
-              <select className="input" value={form.language} onChange={(e) => setForm({ ...form, language: e.target.value })}>
-                {LANGUAGES.map((l) => (
-                  <option key={l.value} value={l.value}>
-                    {l.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-          <div>
-            <label className="label">Existing text (optional)</label>
-            <textarea
-              className="input min-h-28 font-[inherit]"
-              value={form.text}
-              placeholder={"Paste lyrics or a poem to work on.\n[Verse 1] / [Chorus] headings or blank lines between stanzas become sections."}
-              onChange={(e) => setForm({ ...form, text: e.target.value })}
-            />
-            {form.text.trim() && (
-              <p className="mt-1 text-xs text-muted">
-                {form.text.split("\n").filter((l) => l.trim()).length} lines — imported as drafts you can keep ✓, replace ✕ or polish with AI.
-              </p>
-            )}
-          </div>
-          <div>
-            <label className="label">Story / concept (optional)</label>
-            <textarea
-              className="input min-h-24"
-              value={form.concept}
-              placeholder="A man is left by the woman he loves. It starts softly, remembering the good parts…"
-              onChange={(e) => setForm({ ...form, concept: e.target.value })}
-            />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="label">Genre</label>
-              <input className="input" value={form.genre} placeholder="Italian rap" onChange={(e) => setForm({ ...form, genre: e.target.value })} />
-            </div>
-            <div>
-              <label className="label">Style / references</label>
-              <input className="input" value={form.style} placeholder="modern, emotional" onChange={(e) => setForm({ ...form, style: e.target.value })} />
-            </div>
-          </div>
-          <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={form.simpleLanguage} onChange={(e) => setForm({ ...form, simpleLanguage: e.target.checked })} />
-            Prefer simple, modern wording
-          </label>
-          <div className="flex items-center justify-end gap-2">
-            {status && <span className="mr-auto text-sm text-muted">{status}</span>}
-            <button type="button" className="btn" disabled={busy} onClick={() => setCreating(false)}>
-              Cancel
-            </button>
-            <button className="btn-primary" disabled={busy}>
-              {busy ? "Creating…" : "Create writing structure"}
-            </button>
-          </div>
-        </form>
-      )}
 
-      <section>
-        <h2 className="label mb-3">My projects</h2>
-        {projects === null && !error && <p className="text-sm text-muted">Loading…</p>}
-        {projects?.length === 0 && !creating && (
-          <div className="rounded-xl border border-dashed border-line p-8 text-center text-sm text-muted">
-            No projects yet. Create your first song or text.
-          </div>
-        )}
-        <ul className="divide-y divide-line overflow-hidden rounded-xl border border-line bg-panel">
-          {projects?.map((p) => (
-            <li key={p.id}>
-              <Link href={`/p/${p.id}`} className="flex items-center justify-between px-4 py-3 hover:bg-panel-2">
-                <span className="font-medium">{p.title}</span>
-                <span className="text-xs text-muted">
-                  {PROJECT_TYPES.find((t) => t.value === p.type)?.label} · {p.language.toUpperCase()} ·{" "}
-                  {new Date(p.updated_at).toLocaleDateString()}
-                </span>
-              </Link>
-            </li>
-          ))}
-        </ul>
-      </section>
+            <div>
+              <label className="label">Name</label>
+              <input
+                className="input text-base"
+                value={form.title}
+                placeholder={beat ? beat.name.replace(/\.[^.]+$/, "") : "My new song"}
+                onChange={(e) => setForm({ ...form, title: e.target.value })}
+              />
+            </div>
+            <div>
+              <label className="label">Language of the lyrics</label>
+              <div className="flex flex-wrap gap-1.5">
+                {LANGUAGES.map((l) => (
+                  <button
+                    type="button"
+                    key={l.value}
+                    className={`rounded-full px-3.5 py-2 text-sm font-medium ${form.language === l.value ? "bg-accent text-white" : "bg-panel-2"}`}
+                    onClick={() => setForm({ ...form, language: l.value })}
+                  >
+                    {l.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <button type="button" className="text-sm text-muted underline" onClick={() => setMore((m) => !m)}>
+              {more ? "Fewer options" : "More options"}
+            </button>
+            {more && (
+              <div className="space-y-3">
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="label">Type</label>
+                    <select className="input" value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value as ProjectType })}>
+                      {PROJECT_TYPES.map((t) => (
+                        <option key={t.value} value={t.value}>
+                          {t.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="label">Genre</label>
+                    <input className="input" value={form.genre} placeholder="Italian rap" onChange={(e) => setForm({ ...form, genre: e.target.value })} />
+                  </div>
+                </div>
+                <div>
+                  <label className="label">What is the song about? (optional)</label>
+                  <textarea
+                    className="input min-h-20"
+                    value={form.concept}
+                    placeholder="Your flow decides the topic too — add a story here if you have one."
+                    onChange={(e) => setForm({ ...form, concept: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <label className="label">Existing lyrics (optional)</label>
+                  <textarea
+                    className="input min-h-20"
+                    value={form.text}
+                    placeholder="Paste lyrics you already have ([Verse 1], [Chorus]…)."
+                    onChange={(e) => setForm({ ...form, text: e.target.value })}
+                  />
+                </div>
+              </div>
+            )}
+
+            {error && <p className="rounded-xl bg-bad-soft px-3 py-2 text-sm text-bad">{error}</p>}
+            <button className="btn-primary w-full justify-center rounded-2xl py-3.5 text-base" disabled={busy}>
+              {busy ? (status ?? "Creating…") : "Create song"}
+            </button>
+          </form>
+        </div>
+      )}
     </main>
   );
 }

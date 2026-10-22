@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { measureLatency, songTimeOfFrame, takeWindow } from "./timing";
-import { encodeWav, peaksOf } from "./wav";
+import { encodeWav, peaksOf, resample } from "./wav";
 
 test("24-bit WAV header and samples", () => {
   const wav = encodeWav([Float32Array.from([0, 1, -1, 0.5])], 48000);
@@ -39,4 +39,11 @@ test("latency calibration finds the clicks", () => {
   const m = measureLatency(rec, sr, recStart, clicks);
   assert.ok(m !== null && Math.abs(m - lat) < 0.001, String(m));
   assert.equal(measureLatency(new Float32Array(sr), sr, 0, clicks), null);
+});
+
+test("resampling keeps the duration and a tone's level", () => {
+  const x = Float32Array.from({ length: 48000 }, (_, i) => Math.sin((2 * Math.PI * 200 * i) / 48000));
+  const y = resample(x, 48000, 16000);
+  assert.equal(y.length, 16000);
+  assert.ok(Math.max(...y) > 0.9 && Math.max(...y) <= 1);
 });

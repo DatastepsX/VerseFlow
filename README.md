@@ -6,7 +6,26 @@ Approved lines are never changed by the AI.
 
 Product spec: see the original `verseflow_product_spec.md` (Phase 1 + core of Phase 2/3 are implemented).
 
-## What works today
+## The app (mobile, `/` → `/song/[id]`)
+
+The home screen is a simple, app-like flow for the phone:
+
+1. **＋ New song** → choose the beat (name, language; more options are tucked away).
+2. **Record your flow**: the beat plays and you sing or rap anything over it (headphones recommended; without them,
+   echo cancellation is used). The recording is analysed in the browser (`src/lib/flow`):
+   - syllable onsets, strength and length come from the vocal energy envelope (`detectSyllables`);
+   - the syllables are laid out on the bar grid, one line per sung bar or two bars when the bars are short (`flowLines`);
+     each line stores its sung rhythm in `lines.flow` (syllables, stresses, held last note, recognised words);
+   - the take is saved as a 16 kHz WAV (lane "Flow") and the words are recognised by ElevenLabs Scribe (1 call);
+     if that fails, the lyrics follow the rhythm alone.
+3. **A first version of the song**: 3 options per line, written to the sung rhythm and about what you sang
+   (`flowSuggest`, 1 AI call per 8 lines, all running in parallel).
+4. **Bar by bar**: ✓ keep · ↻ next option (free) · ✨ 3 new options (1 call) · ✎ edit · 🗑 remove. The player plays the
+   beat with your flow and highlights the line being sung; tap a line to hear its bar.
+
+The full editor (`/p/[id]`), the Studio and the phone remote are still there under **More → Advanced**.
+
+## What works today (full editor)
 
 - **Projects** (song, rap, poem, speech, …) with language, concept and style settings
 - **Sections** (Part I, Hook, Bridge…) with grouping (single lines / couplets / quatrains), rhyme scheme, story beat, intensity, notes

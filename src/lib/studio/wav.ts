@@ -53,3 +53,24 @@ export function peaksOf(samples: Float32Array, buckets = 160): number[] {
   }
   return out;
 }
+
+/** linear resampling (e.g. a phone recording to 16 kHz for analysis / speech recognition) */
+export function resample(samples: Float32Array, from: number, to: number): Float32Array {
+  if (from === to) return samples;
+  const ratio = from / to;
+  const out = new Float32Array(Math.floor(samples.length / ratio));
+  // average over the source span when shrinking (simple anti-aliasing)
+  const span = Math.max(1, Math.floor(ratio));
+  for (let i = 0; i < out.length; i++) {
+    const pos = i * ratio;
+    const j = Math.floor(pos);
+    let acc = 0;
+    let n = 0;
+    for (let k = 0; k < span && j + k < samples.length; k++) {
+      acc += samples[j + k];
+      n++;
+    }
+    out[i] = n ? acc / n : 0;
+  }
+  return out;
+}

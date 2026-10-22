@@ -49,15 +49,20 @@ export class StudioEngine {
   }
 
   /** needs a click (browsers allow audio + microphone only after a user gesture) */
-  async arm(deviceId?: string) {
+  /**
+   * voiceProcessing: the browser's echo cancellation / noise suppression / auto gain — for a flow
+   * recorded without headphones (the beat from the speaker is mostly removed); studio takes stay raw
+   */
+  async arm(deviceId?: string, opts: { voiceProcessing?: boolean } = {}) {
     await this.ctx.resume();
     this.disarm();
+    const vp = !!opts.voiceProcessing;
     this.stream = await navigator.mediaDevices.getUserMedia({
       audio: {
         deviceId: deviceId ? { exact: deviceId } : undefined,
-        echoCancellation: false,
-        noiseSuppression: false,
-        autoGainControl: false,
+        echoCancellation: vp,
+        noiseSuppression: vp,
+        autoGainControl: vp,
         channelCount: { ideal: 2 },
       },
     });
