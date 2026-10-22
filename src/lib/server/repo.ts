@@ -1192,7 +1192,7 @@ export async function getRemoteState(projectId: string) {
  */
 export async function buildFlowSong(
   projectId: string,
-  lines: { start: number; sungAt: number; end?: number; syllables: number; stress: number[]; held: boolean; words: string; times?: number[] }[],
+  lines: { start: number; sungAt: number; end?: number; syllables: number; stress: number[]; held: boolean; words: string; times?: number[]; pair?: 0 | 1 | 2 }[],
   source: "flow" | "vocals" = "flow",
 ) {
   const tree = await getTree(projectId);
@@ -1205,7 +1205,8 @@ export async function buildFlowSong(
   // sections: a gap of more than ~2 lines without singing starts a new one
   const groups: (typeof sorted)[] = [];
   for (const [i, l] of sorted.entries()) {
-    if (!i || l.start - sorted[i - 1].start > step * 2.6) groups.push([]);
+    // a new section after a long break — never between the two lines of a couplet
+    if (!i || (l.start - sorted[i - 1].start > step * 2.6 && l.pair !== 2)) groups.push([]);
     groups[groups.length - 1].push(l);
   }
   const secRows = check(
@@ -1225,7 +1226,7 @@ export async function buildFlowSong(
       status: (source === "vocals" && l.words?.trim() ? "SUGGESTED" : "OPEN") as LineStatus,
       kind: "lyric",
       audio_at: Math.round(Math.max(g[0].start, Math.min(l.sungAt, l.start + step)) * 1000) / 1000,
-      flow: { syllables: l.syllables, stress: l.stress.slice(0, 24), held: !!l.held, words: (l.words ?? "").slice(0, 200), source, times: l.times ?? [], end: l.end },
+      flow: { syllables: l.syllables, stress: l.stress.slice(0, 24), held: !!l.held, words: (l.words ?? "").slice(0, 200), source, times: l.times ?? [], end: l.end, pair: l.pair },
     })),
   );
   if (rows.length) {

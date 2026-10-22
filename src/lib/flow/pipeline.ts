@@ -3,7 +3,7 @@
 import type { TimedWord } from "@/lib/audio/lyrics";
 import type { Recording } from "@/lib/studio/engine";
 import { encodeWav, peaksOf, resample } from "@/lib/studio/wav";
-import type { ProjectTree } from "@/lib/types";
+import type { Line, ProjectTree } from "@/lib/types";
 import { flowLines } from "./lines";
 import { detectSyllables } from "./syllables";
 import { vocalLines } from "./vocals";
@@ -16,6 +16,21 @@ async function post<T>(url: string, body: unknown): Promise<T> {
   const data = (await res.json().catch(() => ({}))) as T & { error?: string };
   if (!res.ok) throw new Error(data.error ?? `Request failed (${res.status})`);
   return data;
+}
+
+/** ~FLOW_CHUNK lines per AI call, never splitting a couplet (both lines are written together, rhyming) */
+export function chunkLines(lines: Pick<Line, "id" | "flow">[]): string[][] {
+  const chunks: string[][] = [];
+  let cur: string[] = [];
+  lines.forEach((l, k) => {
+    cur.push(l.id);
+    if (cur.length >= FLOW_CHUNK && !(l.flow?.pair === 1 && lines[k + 1]?.flow?.pair === 2)) {
+      chunks.push(cur);
+      cur = [];
+    }
+  });
+  if (cur.length) chunks.push(cur);
+  return chunks;
 }
 
 export type FlowStep = "rhythm" | "upload" | "words" | "song" | "suggest";
@@ -114,11 +129,7 @@ async function suggestAll(
   onStep: (step: FlowStep, progress?: { done: number; total: number }) => void,
   onTree: (t: ProjectTree) => void,
 ) {
-  const chunks: string[][] = [];
-  for (const s of t.sections) {
-    const ids = s.lines.filter((l) => l.kind === "lyric").map((l) => l.id);
-    for (let i = 0; i < ids.length; i += FLOW_CHUNK) chunks.push(ids.slice(i, i + FLOW_CHUNK));
-  }
+  const chunks = t.sections.flatMap((s) => chunkLines(s.lines.filter((l) => l.kind === "lyric")));
   const total = chunks.reduce((n, c) => n + c.length, 0);
   let done = 0;
   onStep("suggest", { done, total });

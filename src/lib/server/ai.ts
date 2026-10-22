@@ -598,12 +598,16 @@ export async function flowSuggest(tree: ProjectTree, lineIds: string[]) {
       return `${s.name}${performedBy(tree, s)}:\n${rows.join("\n")}`;
     })
     .join("\n\n");
-  // couplets: lines 1+2, 3+4… of each section rhyme
+  // couplets: as sung (a line ends on its rhyme — flow.pair), else lines 1+2, 3+4… of each section
   const rhymes: string[] = [];
   for (const s of tree.sections) {
     const lyric = s.lines.filter((l) => l.kind === "lyric");
-    for (let k = 0; k + 1 < lyric.length; k += 2) {
-      const [a, b] = [lyric[k], lyric[k + 1]];
+    const sung = lyric.some((l) => l.flow?.pair !== undefined);
+    const couplets: [Line, Line][] = [];
+    for (let k = 0; k + 1 < lyric.length; k++) {
+      if (sung ? lyric[k].flow?.pair === 1 && lyric[k + 1].flow?.pair === 2 : k % 2 === 0) couplets.push([lyric[k], lyric[k + 1]]);
+    }
+    for (const [a, b] of couplets) {
       if (!want.has(a.id) && !want.has(b.id)) continue;
       // a line that stays (not being written, or recorded from the song's vocals) is what its partner rhymes with
       const stays = (l: Line) => (!want.has(l.id) || recorded(l)) && !!l.text.trim();

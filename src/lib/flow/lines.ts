@@ -1,11 +1,14 @@
 import { prosody } from "@/lib/rhyme/prosody";
 import type { TimedWord } from "@/lib/audio/lyrics";
+import { fixPairs, rhymeSegments } from "./rhymelines";
 import type { Syllable } from "./syllables";
 
 /**
- * A flow take → the lines of the song: one line per bar (two when bars are
- * short), with the rhythm sung in it — syllable count, which syllables were
- * stressed, a held last note — and the words that were recognised in it.
+ * A flow take → the lines of the song, with the rhythm sung in each —
+ * syllable count, which syllables were stressed, a held last note — and the
+ * words that were recognised in it. With words, a line ends on its rhyme
+ * (couplets, see rhymeSegments); with only "na-na", one line per bar (two
+ * when bars are short).
  */
 
 export interface FlowLine {
@@ -22,6 +25,8 @@ export interface FlowLine {
   words: string;
   /** song time of every sung syllable's start */
   times: number[];
+  /** 1 / 2 = first / second line of a rhyming couplet, 0 = on its own (undefined: laid out by bar) */
+  pair?: 0 | 1 | 2;
 }
 
 export interface FlowGrid {
@@ -45,14 +50,27 @@ export function flowLines(
   // a line = 1 bar; 2 bars when the tempo is fast (a line needs room to breathe)
   const unit = bar ? (bar < 1.9 ? 2 * bar : bar) : 2.5;
   const origin = bar ? grid.beat_offset : 0;
-  const count = Math.ceil((opts.duration - origin) / unit) + 1;
+  // the windows the lines are cut from: by rhyme when the words cover the singing, else by bar
+  const covered = words.length ? sy.filter((s) => words.some((w) => s.t >= w.start - 0.05 && s.t <= w.end + 0.05)).length : 0;
+  const byRhyme = sy.length > 0 && covered / sy.length >= 0.6;
+  const windows: { from: number; to: number; start: number; pair?: 0 | 1 | 2 }[] = [];
+  if (byRhyme) {
+    const segs = rhymeSegments(words, opts.lang, unit);
+    segs.forEach((g, k) => {
+      const first = words[g.from].start;
+      const from = k === 0 ? Math.min(first, sy[0].t) - LEAD : first - LEAD;
+      const to = k + 1 < segs.length ? words[segs[k + 1].from].start - LEAD : Infinity;
+      windows.push({ from, to, start: Math.round(Math.max(0, first) * 1000) / 1000, pair: g.pair });
+    });
+  } else {
+    const count = Math.ceil((opts.duration - origin) / unit) + 1;
+    for (let k = 0; k < count; k++) windows.push({ from: origin + k * unit - LEAD, to: origin + (k + 1) * unit - LEAD, start: Math.round((origin + k * unit) * 1000) / 1000 });
+  }
   const out: FlowLine[] = [];
-  for (let k = 0; k < count; k++) {
-    const from = origin + k * unit - LEAD;
-    const to = from + unit;
+  for (const { from, to, start, pair } of windows) {
     const inside = sy.filter((s) => s.t >= from && s.t < to);
     if (inside.length < 2) continue;
-    const ws = words.filter((w) => w.start >= from && w.start < to);
+    const ws = words.filter((w) => w.start >= from + (byRhyme ? LEAD : 0) - 1e-9 && w.start < to + (byRhyme ? LEAD : 0) - 1e-9);
     const text = ws
       .map((w) => w.text)
       .join(" ")
@@ -68,7 +86,7 @@ export function flowLines(
     const stress = [...new Set(loud.map((x) => Math.min(syllableCount, Math.max(1, Math.round((x.i + 0.5) * scale + 0.5)))))].sort((a, b) => a - b);
     const last = inside[inside.length - 1];
     out.push({
-      start: Math.round((origin + k * unit) * 1000) / 1000,
+      start,
       sungAt: inside[0].t,
       end: Math.round((last.t + last.dur) * 1000) / 1000,
       syllables: syllableCount,
@@ -76,9 +94,10 @@ export function flowLines(
       held: last.dur >= 0.35,
       words: text,
       times: inside.map((s) => Math.round(s.t * 1000) / 1000),
+      pair,
     });
   }
-  return out;
+  return byRhyme ? fixPairs(out) : out;
 }
 
 /** "da-DUM-da-da-DUM…" for prompts and the pattern view */

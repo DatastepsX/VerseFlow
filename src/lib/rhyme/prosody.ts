@@ -26,6 +26,11 @@ export interface Prosody {
   pattern: string;
 }
 
+/** an unstressed function word (article, preposition, conjunction…) */
+export function isWeakWord(word: string, lang: string) {
+  return (WEAK[lang] ?? WEAK.it).has(word.toLowerCase().replace(/'/g, ""));
+}
+
 const cache = new Map<string, Prosody>();
 
 export function prosody(text: string, lang: string): Prosody {

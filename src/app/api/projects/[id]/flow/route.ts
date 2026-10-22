@@ -18,7 +18,7 @@ export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]/f
     const b = await body<{
       action: string;
       takeId?: string;
-      lines?: { start: number; sungAt: number; end?: number; syllables: number; stress: number[]; held: boolean; words: string; times?: number[] }[];
+      lines?: { start: number; sungAt: number; end?: number; syllables: number; stress: number[]; held: boolean; words: string; times?: number[]; pair?: number }[];
       lineIds?: string[];
       source?: string;
     }>(req);
@@ -46,6 +46,7 @@ export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]/f
           words: typeof l.words === "string" ? l.words : "",
           times: (Array.isArray(l.times) ? l.times : []).filter(ok).slice(0, 60),
           end: ok(l.end) ? l.end : undefined,
+          pair: l.pair === 1 || l.pair === 2 || l.pair === 0 ? (l.pair as 0 | 1 | 2) : undefined,
         }));
       if (!lines.length) return Response.json({ error: b.source === "vocals" ? "No vocals were found in the song." : "No singing was found in the recording." }, { status: 400 });
       await buildFlowSong(id, lines, b.source === "vocals" ? "vocals" : "flow");

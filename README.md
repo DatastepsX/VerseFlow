@@ -14,7 +14,11 @@ The home screen is a simple, app-like flow for the phone:
 2. **Record your flow**: the beat plays and you sing or rap anything over it (headphones recommended; without them,
    echo cancellation is used). The recording is analysed in the browser (`src/lib/flow`):
    - syllable onsets, strength and length come from the vocal energy envelope (`detectSyllables`);
-   - the syllables are laid out on the bar grid, one line per sung bar or two bars when the bars are short (`flowLines`);
+   - the lines: **a line ends on its rhyme** — when words were recognised, they are split so lines pair up in rhyming
+     couplets ("…la notte / …più forte"), about a bar long, breaking where you breathe and never on "e", "che", "la"…
+     (`rhymeSegments` in `src/lib/flow/rhymelines.ts`; `lines.flow.pair`); suggestions rhyme with the sung partner and
+     the Lyrics view shows each couplet together with its rhyme words marked. With only "na-na", one line per bar (two
+     when the bars are short) (`flowLines`);
      each line stores its sung rhythm in `lines.flow` (syllables, stresses, held last note, recognised words);
    - the take is saved as a 16 kHz WAV (lane "Flow") and the words are recognised by ElevenLabs Scribe (1 call);
      if that fails, the lyrics follow the rhythm alone.

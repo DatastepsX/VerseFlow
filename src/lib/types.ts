@@ -207,4 +207,6 @@ export interface LineFlow {
   /** song time where each sung syllable starts, and where the line's singing ends (the guide voice follows them) */
   times?: number[];
   end?: number;
+  /** 1 / 2 = first / second line of a rhyming couplet (the line ends on the rhyme), 0 = on its own */
+  pair?: 0 | 1 | 2;
 }

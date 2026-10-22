@@ -70,3 +70,47 @@ test("vocals in the song: one line per bar with the sung words, their syllables 
   assert.equal(lines[1].start, 2.5);
   assert.ok(lines[1].held, "the last word is held");
 });
+
+test("a line ends on its rhyme: the couplet's last words close the lines, not the bar lines", () => {
+  // sung in one breath, starting mid-bar (120 bpm, bar = 2 s from 0.5 s)
+  const text =
+    "Cammino adesso sempre e aspetto io la notte il giorno che sta bene io mi sento un po più forte " +
+    "ma quando torna il vento la strada mi confonde e cerco le parole come sabbia tra le onde";
+  let t = 1.3;
+  const words = text.split(" ").map((w) => {
+    const d = 0.08 + w.length * 0.03;
+    const x = { text: w, start: t, end: t + d };
+    t += d + 0.03;
+    return x;
+  });
+  const lines = vocalLines(words, { bpm: 120, beat_offset: 0.5, beats_per_bar: 4 }, { lang: "it", duration: 30 });
+  assert.deepEqual(
+    lines.map((l) => l.words),
+    [
+      "Cammino adesso sempre e aspetto io la notte",
+      "il giorno che sta bene io mi sento un po più forte",
+      "ma quando torna il vento la strada mi confonde",
+      "e cerco le parole come sabbia tra le onde",
+    ],
+  );
+  assert.equal(lines[1].start, words[8].start, "the 2nd line starts right after “notte”");
+});
+
+test("the couplets are marked, so suggestions rhyme with the right line", () => {
+  const w = (text: string, start: number, end: number) => ({ text, start, end });
+  // "…la notte / …più forte" rhyme, then a line on its own after a long break
+  const words = [
+    ...["cammino", "adesso", "e", "aspetto", "la", "notte"].map((x, i) => w(x, 0.5 + i * 0.3, 0.75 + i * 0.3)),
+    ...["mi", "sento", "un", "po", "più", "forte"].map((x, i) => w(x, 2.5 + i * 0.3, 2.75 + i * 0.3)),
+    ...["e", "poi", "domani", "parto", "via"].map((x, i) => w(x, 8 + i * 0.3, 8.25 + i * 0.3)),
+  ];
+  const lines = vocalLines(words, { bpm: 120, beat_offset: 0.5, beats_per_bar: 4 }, { lang: "it", duration: 12 });
+  assert.deepEqual(
+    lines.map((l) => [l.words, l.pair]),
+    [
+      ["cammino adesso e aspetto la notte", 1],
+      ["mi sento un po più forte", 2],
+      ["e poi domani parto via", 0],
+    ],
+  );
+});

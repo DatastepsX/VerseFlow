@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { fmtTime } from "@/lib/audio/song-map";
 import { buildTimeline, positionIn } from "@/lib/audio/timeline";
 import { BEAT_ACCEPT, MAX_BEAT_BYTES, uploadBeat } from "@/lib/client/beat";
-import { processFlow, processVocals, type FlowStep } from "@/lib/flow/pipeline";
+import { chunkLines, processFlow, processVocals, type FlowStep } from "@/lib/flow/pipeline";
 import { stressPattern } from "@/lib/flow/lines";
 import { prosody } from "@/lib/rhyme/prosody";
 import { StudioEngine, type PlayLayer } from "@/lib/studio/engine";
@@ -321,6 +321,7 @@ export function SongApp({ initialTree, autoVocals = false }: { initialTree: Proj
     }
   };
   const missing = lyricLines.filter((l) => !l.text.trim()).map((l) => l.id);
+  const missingCalls = tree.sections.flatMap((s) => chunkLines(s.lines.filter((l) => l.kind === "lyric" && missing.includes(l.id)))).length;
   const kept = lyricLines.filter((l) => l.status === "APPROVED" || l.status === "APPROVED_EDITED").length;
 
   // ---------- screens ----------
@@ -531,13 +532,13 @@ export function SongApp({ initialTree, autoVocals = false }: { initialTree: Proj
                 disabled={busyLine === "missing"}
                 onClick={() =>
                   void lineAction("missing", async () => {
-                    for (let i = 0; i < missing.length; i += 8) await call(`/api/projects/${pid}/flow`, { action: "suggest", lineIds: missing.slice(i, i + 8) });
+                    for (const ids of chunkLines(lyricLines.filter((l) => missing.includes(l.id)))) await call(`/api/projects/${pid}/flow`, { action: "suggest", lineIds: ids });
                   })
                 }
               >
                 {busyLine === "missing"
                   ? "Writing…"
-                  : `✨ Write the ${missing.length} empty line${missing.length === 1 ? "" : "s"} · ${Math.ceil(missing.length / 8)} call${missing.length > 8 ? "s" : ""}`}
+                  : `✨ Write the ${missing.length} empty line${missing.length === 1 ? "" : "s"} · ${missingCalls} call${missingCalls === 1 ? "" : "s"}`}
               </button>
             )}
             {tree.sections.map((s) => {
@@ -546,50 +547,59 @@ export function SongApp({ initialTree, autoVocals = false }: { initialTree: Proj
               return (
                 <section key={s.id}>
                   <h3 className="mb-2 px-1 text-xs font-bold uppercase tracking-widest text-muted">{s.name}</h3>
-                  <div className="space-y-2">
-                    {lines.map((l, i) => (
-                      <LineCard
-                        key={l.id}
-                        line={l}
-                        lang={lang}
-                        live={live === l.id}
-                        couplet={i % 2 === 1}
-                        busy={busyLine === l.id}
-                        editing={editing === l.id}
-                        draft={draft}
-                        setDraft={setDraft}
-                        onPlay={() => {
-                          const at = l.audio_at ?? 0;
-                          void play(Math.max(0, at - 0.4), at + 8);
-                        }}
-                        onKeep={() =>
-                          void lineAction(l.id, () =>
-                            call(
-                              `/api/lines/${l.id}`,
-                              l.status === "APPROVED" || l.status === "APPROVED_EDITED" ? { status: "SUGGESTED", action: "unkeep" } : { status: "APPROVED", action: "approve" },
-                              "PATCH",
-                            ),
-                          )
-                        }
-                        onNext={() => void lineAction(l.id, () => call(`/api/alternatives/${l.alternatives[0].id}`, { action: "swap" }))}
-                        onNew={() => void lineAction(l.id, () => call(`/api/projects/${pid}/flow`, { action: "suggest", lineIds: [l.id] }))}
-                        onEdit={() => {
-                          setEditing(l.id);
-                          setDraft(l.text);
-                        }}
-                        onSave={() => {
-                          setEditing(null);
-                          if (draft.trim() && draft.trim() !== l.text.trim())
-                            void lineAction(l.id, () => call(`/api/lines/${l.id}`, { text: draft.trim(), status: "APPROVED_EDITED", action: "edit" }, "PATCH"));
-                        }}
-                        onCancel={() => setEditing(null)}
-                        voiceLabel={voice && !spoken.has(l.id) ? "1 call" : ""}
-                        voiceBusy={guideBusy === l.id}
-                        onVoice={() => void hearLine(l)}
-                        onRemove={() => {
-                          if (window.confirm("Remove this line?")) void lineAction(l.id, () => call(`/api/lines/${l.id}`, undefined, "DELETE"));
-                        }}
-                      />
+                  <div className="space-y-3">
+                    {couplets(lines).map((group) => (
+                      <div key={group[0].id} className={group.length > 1 ? "relative space-y-1.5 border-l-2 border-accent/40 pl-2" : ""}>
+                        {group.length > 1 && (
+                          <span className="absolute -left-[9px] top-1/2 -translate-y-1/2 rounded-full bg-bg px-0.5 text-[10px] leading-none text-accent" title="These two lines rhyme">
+                            ♪
+                          </span>
+                        )}
+                        {group.map((l) => (
+                          <LineCard
+                            key={l.id}
+                            line={l}
+                            lang={lang}
+                            live={live === l.id}
+                            pair={l.flow?.pair}
+                            busy={busyLine === l.id}
+                            editing={editing === l.id}
+                            draft={draft}
+                            setDraft={setDraft}
+                            onPlay={() => {
+                              const at = l.audio_at ?? 0;
+                              void play(Math.max(0, at - 0.4), at + 8);
+                            }}
+                            onKeep={() =>
+                              void lineAction(l.id, () =>
+                                call(
+                                  `/api/lines/${l.id}`,
+                                  l.status === "APPROVED" || l.status === "APPROVED_EDITED" ? { status: "SUGGESTED", action: "unkeep" } : { status: "APPROVED", action: "approve" },
+                                  "PATCH",
+                                ),
+                              )
+                            }
+                            onNext={() => void lineAction(l.id, () => call(`/api/alternatives/${l.alternatives[0].id}`, { action: "swap" }))}
+                            onNew={() => void lineAction(l.id, () => call(`/api/projects/${pid}/flow`, { action: "suggest", lineIds: [l.id] }))}
+                            onEdit={() => {
+                              setEditing(l.id);
+                              setDraft(l.text);
+                            }}
+                            onSave={() => {
+                              setEditing(null);
+                              if (draft.trim() && draft.trim() !== l.text.trim())
+                                void lineAction(l.id, () => call(`/api/lines/${l.id}`, { text: draft.trim(), status: "APPROVED_EDITED", action: "edit" }, "PATCH"));
+                            }}
+                            onCancel={() => setEditing(null)}
+                            voiceLabel={voice && !spoken.has(l.id) ? "1 call" : ""}
+                            voiceBusy={guideBusy === l.id}
+                            onVoice={() => void hearLine(l)}
+                            onRemove={() => {
+                              if (window.confirm("Remove this line?")) void lineAction(l.id, () => call(`/api/lines/${l.id}`, undefined, "DELETE"));
+                            }}
+                          />
+                        ))}
+                      </div>
                     ))}
                   </div>
                 </section>
@@ -661,7 +671,8 @@ function LineCard(props: {
   line: LyricLine;
   lang: string;
   live: boolean;
-  couplet: boolean;
+  /** 1 / 2: first / second line of a rhyming couplet — its last word is the rhyme */
+  pair?: 0 | 1 | 2;
   busy: boolean;
   editing: boolean;
   draft: string;
@@ -686,7 +697,7 @@ function LineCard(props: {
   return (
     <div
       id={`line-${l.id}`}
-      className={`rounded-2xl border px-3.5 py-3 transition-colors ${props.live ? "border-accent bg-accent-soft" : kept ? "border-ok/40 bg-panel" : "border-line bg-panel"} ${props.couplet ? "" : ""}`}
+      className={`rounded-2xl border px-3.5 py-3 transition-colors ${props.live ? "border-accent bg-accent-soft" : kept ? "border-ok/40 bg-panel" : "border-line bg-panel"}`}
     >
       {props.editing ? (
         <div className="space-y-2">
@@ -708,7 +719,9 @@ function LineCard(props: {
       ) : (
         <>
           <button className="block w-full text-left" onClick={props.onPlay} title="Play this bar">
-            <span className={`text-[17px] leading-snug ${l.text.trim() ? "" : "italic text-muted"}`}>{l.text.trim() || (props.busy ? "Writing…" : "…")}</span>
+            <span className={`text-[17px] leading-snug ${l.text.trim() ? "" : "italic text-muted"}`}>
+              {l.text.trim() && props.pair ? <RhymeEnd text={l.text.trim()} /> : l.text.trim() || (props.busy ? "Writing…" : "…")}
+            </span>
           </button>
           {l.flow && <Pattern flow={l.flow} />}
           <div className="mt-1 flex items-center gap-1.5 text-[11px] text-muted">
@@ -778,6 +791,29 @@ function LineCard(props: {
         </>
       )}
     </div>
+  );
+}
+
+/** lines in their couplets (as sung: flow.pair) — the two lines of a couplet are shown together */
+function couplets<T extends Line>(lines: T[]): T[][] {
+  const out: T[][] = [];
+  lines.forEach((l, k) => {
+    if (l.flow?.pair === 2 && lines[k - 1]?.flow?.pair === 1 && out.length) out[out.length - 1].push(l);
+    else out.push([l]);
+  });
+  return out;
+}
+
+/** the line with its last word — the rhyme — marked */
+function RhymeEnd({ text }: { text: string }) {
+  const m = text.match(/^(.*?)(\S+?)([^\p{L}\p{N}']*)$/u);
+  if (!m) return <>{text}</>;
+  return (
+    <>
+      {m[1]}
+      <span className="font-semibold text-accent">{m[2]}</span>
+      {m[3]}
+    </>
   );
 }
 
