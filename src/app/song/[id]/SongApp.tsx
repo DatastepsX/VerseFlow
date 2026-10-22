@@ -9,10 +9,12 @@ import { BEAT_ACCEPT, MAX_BEAT_BYTES, uploadBeat } from "@/lib/client/beat";
 import { processFlow, processVocals, type FlowStep } from "@/lib/flow/pipeline";
 import { stressPattern } from "@/lib/flow/lines";
 import { prosody } from "@/lib/rhyme/prosody";
-import { StudioEngine } from "@/lib/studio/engine";
+import { StudioEngine, type PlayLayer } from "@/lib/studio/engine";
+import { guideLayers, spokenIds } from "@/lib/voice/client";
 import { LANGUAGES, type Line, type ProjectTree } from "@/lib/types";
 import { followTo } from "@/components/writer/follow";
 import { download, fullText } from "@/components/writer/util";
+import { VoiceSheet, type VoiceInfo } from "./VoiceSheet";
 
 type View = "flow" | "lyrics" | "more";
 type LyricLine = Line & { alternatives: ProjectTree["sections"][number]["lines"][number]["alternatives"] };
@@ -133,13 +135,63 @@ export function SongApp({ initialTree, autoVocals = false }: { initialTree: Proj
     return () => clearInterval(id);
   }, [playing, timeline, tree.sections, tree.audio?.duration]);
 
-  const play = async (from: number, until: number | null = null) => {
+  // ---------- your voice (the guide vocal: the lyrics rapped in your cloned voice, on your flow) ----------
+  const [voice, setVoice] = useState<VoiceInfo | null | undefined>(undefined);
+  const [voiceSheet, setVoiceSheet] = useState(false);
+  const [withGuide, setWithGuide] = useState(false);
+  const [guideBusy, setGuideBusy] = useState<string | null>(null);
+  const [spoken, setSpoken] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    fetch("/api/voice")
+      .then((r) => r.json())
+      .then((d: { voice?: VoiceInfo | null }) => setVoice(d.voice ?? null), () => setVoice(null));
+  }, []);
+  const textsKey = lyricLines.map((l) => l.id + l.text).join("|");
+  useEffect(() => {
+    if (!voice || !textsKey) return;
+    spokenIds(pid, tree).then((ids) => setSpoken(new Set(ids)), () => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only when the texts or the voice change
+  }, [voice, textsKey, pid]);
+  const unspoken = lyricLines.filter((l) => l.text.trim() && !spoken.has(l.id));
+  const guide = async (ids: string[], busy: string) => {
+    const e = engine.current;
+    if (!e) return null;
+    setGuideBusy(busy);
+    try {
+      const layers = await guideLayers(pid, tree, ids, e.ctx);
+      setSpoken((prev) => new Set([...prev, ...ids]));
+      return layers;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Your voice could not speak the lyrics");
+      return null;
+    } finally {
+      setGuideBusy(null);
+    }
+  };
+  const hearLine = async (l: Line) => {
+    if (!voice) return setVoiceSheet(true);
+    if (playing) stopPlay();
+    const layers = await guide([l.id], l.id);
+    if (!layers?.length) return;
+    const g = layers[0];
+    void play(Math.max(0, g.at - 0.5), g.at + g.buffer.duration + 0.3, { guide: layers, flow: false });
+  };
+
+  const play = async (from: number, until: number | null = null, opts: { guide?: PlayLayer[]; flow?: boolean } = {}) => {
     const e = engine.current;
     if (!e || !beat.current) return;
     await e.ctx.resume();
-    if (withFlow) await loadFlow().catch(() => {});
-    const layers = withFlow && flowBuf.current && flowTake ? [{ buffer: flowBuf.current.buf, at: flowTake.start_at, gain: 0.9 }] : [];
-    e.play(Math.max(0, from), { beat: beat.current, layers, beatGain: 0.8 });
+    let guideL = opts.guide ?? [];
+    if (!opts.guide && withGuide && voice) {
+      if (unspoken.length && !window.confirm(`Hear the song in your voice? ${unspoken.length} line${unspoken.length === 1 ? "" : "s"} still to speak · ${unspoken.length} call${unspoken.length === 1 ? "" : "s"}`))
+        return;
+      guideL = (await guide(lyricLines.map((l) => l.id), "all")) ?? [];
+    }
+    // your voice replaces your flow (two voices at once are hard to follow)
+    const flowOn = (opts.flow ?? withFlow) && !guideL.length;
+    if (flowOn) await loadFlow().catch(() => {});
+    const layers = [...(flowOn && flowBuf.current && flowTake ? [{ buffer: flowBuf.current.buf, at: flowTake.start_at, gain: 0.9 }] : []), ...guideL];
+    e.play(Math.max(0, from), { beat: beat.current, layers, beatGain: guideL.length ? 0.6 : 0.8 });
     stopAt.current = until;
     setPlaying(true);
   };
@@ -316,13 +368,28 @@ export function SongApp({ initialTree, autoVocals = false }: { initialTree: Proj
                 <span>{fmtTime(total)}</span>
               </div>
             </div>
-            {flowTake && (
+            {flowTake && !withGuide && (
               <button
                 className={`shrink-0 rounded-full px-2.5 py-1.5 text-xs font-semibold ${withFlow ? "bg-accent-soft text-accent" : "bg-panel-2 text-muted"}`}
                 onClick={() => setWithFlow((v) => !v)}
                 title="Hear your recorded flow with the beat"
               >
                 🎤 {withFlow ? "on" : "off"}
+              </button>
+            )}
+            {hasLines && (
+              <button
+                className={`shrink-0 rounded-full px-2.5 py-1.5 text-xs font-semibold ${withGuide ? "bg-accent text-white" : "bg-panel-2 text-muted"}`}
+                onClick={() => {
+                  if (!voice) return setVoiceSheet(true);
+                  if (playing) stopPlay();
+                  setWithGuide((v) => !v);
+                }}
+                title="Hear the lyrics rapped in your voice, on your flow"
+              >
+                {guideBusy === "all" ? <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-white border-r-transparent" /> : "🗣"}{" "}
+                {withGuide ? "on" : "off"}
+                {withGuide && unspoken.length > 0 && guideBusy !== "all" && <span className="ml-1 font-normal opacity-80">· {unspoken.length} calls</span>}
               </button>
             )}
           </div>
@@ -516,6 +583,9 @@ export function SongApp({ initialTree, autoVocals = false }: { initialTree: Proj
                             void lineAction(l.id, () => call(`/api/lines/${l.id}`, { text: draft.trim(), status: "APPROVED_EDITED", action: "edit" }, "PATCH"));
                         }}
                         onCancel={() => setEditing(null)}
+                        voiceLabel={voice && !spoken.has(l.id) ? "1 call" : ""}
+                        voiceBusy={guideBusy === l.id}
+                        onVoice={() => void hearLine(l)}
                         onRemove={() => {
                           if (window.confirm("Remove this line?")) void lineAction(l.id, () => call(`/api/lines/${l.id}`, undefined, "DELETE"));
                         }}
@@ -532,6 +602,8 @@ export function SongApp({ initialTree, autoVocals = false }: { initialTree: Proj
         {view === "more" && (
           <MoreView
             tree={tree}
+            voice={voice ?? null}
+            onVoice={() => setVoiceSheet(true)}
             onRename={(title) => void call(`/api/projects/${pid}`, { title }, "PATCH")}
             onLanguage={(language) => void call(`/api/projects/${pid}`, { language }, "PATCH")}
             onDelete={async () => {
@@ -542,6 +614,21 @@ export function SongApp({ initialTree, autoVocals = false }: { initialTree: Proj
           />
         )}
       </main>
+
+      {voiceSheet && (
+        <VoiceSheet
+          engine={engine}
+          lang={lang}
+          current={voice ?? null}
+          onClose={() => setVoiceSheet(false)}
+          onDone={(v) => {
+            setVoice(v);
+            setSpoken(new Set());
+            setVoiceSheet(false);
+            if (!v) setWithGuide(false);
+          }}
+        />
+      )}
 
       {/* tab bar */}
       <nav className="fixed inset-x-0 bottom-0 z-30 mx-auto flex max-w-lg border-t border-line bg-panel/95 pb-[env(safe-area-inset-bottom)] backdrop-blur">
@@ -587,6 +674,9 @@ function LineCard(props: {
   onSave: () => void;
   onCancel: () => void;
   onRemove: () => void;
+  voiceLabel: string;
+  voiceBusy: boolean;
+  onVoice: () => void;
 }) {
   const { line: l, lang } = props;
   const kept = l.status === "APPROVED" || l.status === "APPROVED_EDITED";
@@ -635,6 +725,17 @@ function LineCard(props: {
               )
             ) : (
               l.flow?.words && <span className="min-w-0 truncate">· you sang “{l.flow.words}”</span>
+            )}
+            {l.text.trim() && (
+              <button
+                className="ml-auto flex shrink-0 items-center gap-1 rounded-full bg-accent-soft px-2.5 py-1 text-[11px] font-semibold text-accent disabled:opacity-50"
+                disabled={props.voiceBusy}
+                onClick={props.onVoice}
+                title="Hear this line rapped in your voice, on your flow"
+              >
+                {props.voiceBusy ? <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-accent border-r-transparent" /> : "🗣"} Hear
+                {props.voiceLabel && <span className="font-normal text-muted">· {props.voiceLabel}</span>}
+              </button>
             )}
           </div>
           <div className="mt-2 flex items-center gap-1.5">
@@ -743,11 +844,15 @@ function BeatUpload({ pid, onDone }: { pid: string; onDone: (t: ProjectTree) => 
 
 function MoreView({
   tree,
+  voice,
+  onVoice,
   onRename,
   onLanguage,
   onDelete,
 }: {
   tree: ProjectTree;
+  voice: VoiceInfo | null;
+  onVoice: () => void;
   onRename: (t: string) => void;
   onLanguage: (l: string) => void;
   onDelete: () => void;
@@ -793,6 +898,16 @@ function MoreView({
           <span className="flex-1">Download the lyrics (.txt)</span>
         </button>
       </div>
+      <button className={row} onClick={onVoice}>
+        <span>🗣</span>
+        <span className="flex-1">
+          My voice
+          <span className="block text-xs text-muted">
+            {voice ? `${voice.name} · raps your lyrics on your flow` : "Record a minute of your voice once — it raps your lyrics on your flow"}
+          </span>
+        </span>
+        <span className="text-muted">›</span>
+      </button>
       <div className="space-y-2">
         <p className="label">Advanced</p>
         <Link href={`/p/${pid}`} className={row}>

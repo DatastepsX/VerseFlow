@@ -204,4 +204,7 @@ export interface LineFlow {
   words: string;
   /** "vocals": read from the vocals in the uploaded song — the words are the writer's lyrics and stay */
   source?: "flow" | "vocals";
+  /** song time where each sung syllable starts, and where the line's singing ends (the guide voice follows them) */
+  times?: number[];
+  end?: number;
 }

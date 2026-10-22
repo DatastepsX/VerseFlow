@@ -20,6 +20,8 @@ export interface FlowLine {
   held: boolean;
   /** recognised words sung in this line ("" when it was only "na-na") */
   words: string;
+  /** song time of every sung syllable's start */
+  times: number[];
 }
 
 export interface FlowGrid {
@@ -73,6 +75,7 @@ export function flowLines(
       stress,
       held: last.dur >= 0.35,
       words: text,
+      times: inside.map((s) => Math.round(s.t * 1000) / 1000),
     });
   }
   return out;

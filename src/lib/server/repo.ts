@@ -1192,7 +1192,7 @@ export async function getRemoteState(projectId: string) {
  */
 export async function buildFlowSong(
   projectId: string,
-  lines: { start: number; sungAt: number; syllables: number; stress: number[]; held: boolean; words: string }[],
+  lines: { start: number; sungAt: number; end?: number; syllables: number; stress: number[]; held: boolean; words: string; times?: number[] }[],
   source: "flow" | "vocals" = "flow",
 ) {
   const tree = await getTree(projectId);
@@ -1225,7 +1225,7 @@ export async function buildFlowSong(
       status: (source === "vocals" && l.words?.trim() ? "SUGGESTED" : "OPEN") as LineStatus,
       kind: "lyric",
       audio_at: Math.round(Math.max(g[0].start, Math.min(l.sungAt, l.start + step)) * 1000) / 1000,
-      flow: { syllables: l.syllables, stress: l.stress.slice(0, 24), held: !!l.held, words: (l.words ?? "").slice(0, 200), source },
+      flow: { syllables: l.syllables, stress: l.stress.slice(0, 24), held: !!l.held, words: (l.words ?? "").slice(0, 200), source, times: l.times ?? [], end: l.end },
     })),
   );
   if (rows.length) {

@@ -31,6 +31,15 @@ rhythm and rhyme with the recorded partner line. ↻ cycles through the alternat
 alternatives without replacing the line. Every line shows its flow (one mark per syllable, stressed ones tall, a held last
 note long).
 
+**Your voice (guide vocal)**: More → "My voice" (or 🗣 Hear the first time) records about a minute of your voice
+(or takes uploaded acapella files) and makes a copy of it with ElevenLabs Instant Voice Cloning (1 call, needs a paid
+ElevenLabs plan and the key's "Text to Speech" + "Voices" permissions; table `voices`). Then:
+- **🗣 Hear** on a line: the line is spoken in your voice (1 call the first time; cached in `tts_cache` by voice + text,
+  so replaying is free) and laid onto your flow in the browser (`src/lib/voice/guide.ts`): every word starts on the
+  sung syllable it falls on (`lines.flow.times`) and is time-stretched with the pitch kept (WSOLA) to fit.
+- **🗣 on** in the player: the whole song in your voice with the beat (asks first when lines still need a call).
+It's a demo-quality guide for hearing whether lyrics fit — rap works best; it doesn't sing melodies.
+
 The full editor (`/p/[id]`), the Studio and the phone remote are still there under **More → Advanced**.
 
 ## What works today (full editor)
@@ -152,7 +161,8 @@ single shared password (`APP_PASSWORD`).
 | `SUPABASE_KEY` | Supabase API key (server only) |
 | `ANTHROPIC_API_KEY` | enables AI suggestions (optional — the app works without it) |
 | `APP_PASSWORD` | shared access password (if unset, the app is open) |
-| `ELEVENLABS_API_KEY` | enables “Lyrics from beat” (speech-to-text with ElevenLabs Scribe) |
+| `ELEVENLABS_API_KEY` | lyrics recognition (Scribe), your cloned voice and the guide vocal (needs the Speech to Text, Text to Speech and Voices permissions) |
+| `TTS_MODEL` | optional, ElevenLabs voice model for the guide vocal (default `eleven_multilingual_v2`) |
 | `AI_MODEL` | Claude model (default `claude-opus-5-5`; e.g. `claude-sonnet-5-5` / `claude-haiku-5-5` cost less) |
 | `AI_EFFORT` | `low` / `medium` (default) / `high` — lower = fewer thinking tokens |
 | `AI_DRAFT_EFFORT` | effort for section drafts (Fill / Replace): `low` (default) / `medium` / `high` |
