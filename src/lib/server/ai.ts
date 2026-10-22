@@ -8,7 +8,7 @@ import { describeRhythm, prosody } from "@/lib/rhyme/prosody";
 import { rhymePartners } from "@/lib/scheme";
 import { sectionPattern } from "@/lib/pattern";
 import { sectionLineTarget } from "@/lib/audio/song-map";
-import { LANGUAGES, PROJECT_TYPES, type ProjectTree } from "@/lib/types";
+import { LANGUAGES, PROJECT_TYPES, type Line, type ProjectTree } from "@/lib/types";
 import { bankTexts, rejectedAlternatives, recordAiCall } from "./repo";
 
 /** Overridable in Vercel env (e.g. claude-sonnet-5-5 or claude-haiku-5-5 for lower cost). */
@@ -577,6 +577,9 @@ export async function flowSuggest(tree: ProjectTree, lineIds: string[]) {
   if (!targets.length) return [] as { id: string; options: string[] }[];
 
   const sang = all.map((x, i) => `${i + 1}. ${x.l.flow?.words?.trim() || "(na-na)"}`).join("\n");
+  // from the vocals in the uploaded song: the recorded words are the lyrics and stay — options are alternatives
+  const recorded = (l: Line) => l.flow?.source === "vocals" && !!l.text.trim();
+  const vocals = targets.some((x) => recorded(x.l));
   const listing = tree.sections
     .map((s) => {
       const lyric = s.lines.filter((l) => l.kind === "lyric");
@@ -584,7 +587,12 @@ export async function flowSuggest(tree: ProjectTree, lineIds: string[]) {
         const n = num.get(l.id)!;
         const f = l.flow;
         const rhythm = f ? `${f.syllables} syllables ${patternOf(f)}` : "free";
-        const chosen = (l.status === "APPROVED" || l.status === "APPROVED_EDITED") && l.text.trim() ? ` — written: “${l.text}”` : "";
+        const chosen =
+          (l.status === "APPROVED" || l.status === "APPROVED_EDITED") && l.text.trim()
+            ? ` — written: “${l.text}”`
+            : recorded(l)
+              ? ` — recorded: “${l.flow!.words}”${l.text.trim() !== l.flow!.words.trim() ? `, now: “${l.text}”` : ""}`
+              : "";
         return `${n}. ${want.has(l.id) ? "[WRITE]" : "[KEEP]"} rhythm: ${rhythm}; sang: ${f?.words?.trim() ? `“${f.words}”` : "(na-na)"}${chosen}`;
       });
       return `${s.name}${performedBy(tree, s)}:\n${rows.join("\n")}`;
@@ -597,12 +605,14 @@ export async function flowSuggest(tree: ProjectTree, lineIds: string[]) {
     for (let k = 0; k + 1 < lyric.length; k += 2) {
       const [a, b] = [lyric[k], lyric[k + 1]];
       if (!want.has(a.id) && !want.has(b.id)) continue;
-      const fixed = !want.has(a.id) ? a : !want.has(b.id) ? b : null;
-      rhymes.push(
-        fixed?.text.trim()
-          ? `Line ${num.get(want.has(a.id) ? a.id : b.id)} must rhyme with line ${num.get(fixed.id)} “${fixed.text}” (-${analyzeLine(fixed.text, lang).rhymeKey}).`
-          : `Lines ${num.get(a.id)} and ${num.get(b.id)} rhyme with each other (option i with option i).`,
-      );
+      // a line that stays (not being written, or recorded from the song's vocals) is what its partner rhymes with
+      const stays = (l: Line) => (!want.has(l.id) || recorded(l)) && !!l.text.trim();
+      const rule = (l: Line, partner: Line) =>
+        `Line ${num.get(l.id)} must rhyme with line ${num.get(partner.id)} “${partner.text}” (-${analyzeLine(partner.text, lang).rhymeKey}).`;
+      if (want.has(a.id) && stays(b)) rhymes.push(rule(a, b));
+      if (want.has(b.id) && stays(a)) rhymes.push(rule(b, a));
+      if (want.has(a.id) && want.has(b.id) && !stays(a) && !stays(b))
+        rhymes.push(`Lines ${num.get(a.id)} and ${num.get(b.id)} rhyme with each other (option i with option i).`);
     }
   }
   const st = project.settings ?? {};
@@ -624,7 +634,11 @@ For every [WRITE] line write 3 options. Each option must:
 - have exactly the line's number of syllables (sung syllables, ±1) with the stressed syllables on the DUM positions — it must fit the rhythm the writer sang;
 - end on an open, singable vowel when the last note is held (~);
 - respect its rhyme rule and continue the lines around it, so the song reads as one coherent text about the writer's topic.
-When the writer sang real words in a line, the FIRST option keeps them (completed and corrected into a full line); the others may go further. Make the 3 options clearly different.
+When the writer sang real words in a line that isn't recorded, the FIRST option keeps them (completed and corrected into a full line); the others may go further. Make the 3 options clearly different.${
+    vocals
+      ? `\nLines marked "recorded" are the writer's own lyrics from the vocals in the song — they stay. For those, write 3 ALTERNATIVE lines: same rhythm and rhyme sound, same meaning direction, different wording — never the recorded line itself.`
+      : ""
+  }
 Return one entry per [WRITE] line, "line" = its number.`;
 
   const parsed = await callJson<{ slots: { line: number; options: string[] }[] }>(project.id, "flow_suggest", prompt, DRAFT_SCHEMA, SYSTEM, DRAFT_EFFORT);

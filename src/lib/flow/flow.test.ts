@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { flowLines, stressPattern } from "./lines";
 import { detectSyllables } from "./syllables";
+import { vocalLines } from "./vocals";
 
 const SR = 16000;
 
@@ -54,4 +55,18 @@ test("flow lines follow the bars and take over the recognised words", () => {
   assert.equal(lines[1].syllables, 5); // the pickup at 1.9 s belongs to bar 2
   assert.ok(lines[1].held);
   assert.equal(stressPattern({ syllables: 4, stress: [2, 4], held: true }), "da-DUM-da-DUM~");
+});
+
+test("vocals in the song: one line per bar with the sung words, their syllables and stresses", () => {
+  // 120 bpm, bar = 2 s, bar 1 at 0.5 s: "cammino da solo" in bar 1, "nella notte scura" in bar 2, bar 3 empty
+  const w = (text: string, start: number, end: number) => ({ text, start, end });
+  const words = [w("cammino", 0.5, 1.0), w("da", 1.0, 1.15), w("solo", 1.2, 1.9), w("nella", 2.5, 2.8), w("notte", 2.8, 3.2), w("scura", 3.3, 4.2)];
+  const lines = vocalLines(words, { bpm: 120, beat_offset: 0.5, beats_per_bar: 4 }, { lang: "it", duration: 8 });
+  assert.equal(lines.length, 2);
+  assert.equal(lines[0].words, "cammino da solo");
+  assert.equal(lines[0].syllables, 6);
+  assert.deepEqual(lines[0].stress, [2, 5]);
+  assert.equal(lines[1].words, "nella notte scura");
+  assert.equal(lines[1].start, 2.5);
+  assert.ok(lines[1].held, "the last word is held");
 });

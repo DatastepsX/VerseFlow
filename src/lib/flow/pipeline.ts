@@ -6,6 +6,7 @@ import { encodeWav, peaksOf, resample } from "@/lib/studio/wav";
 import type { ProjectTree } from "@/lib/types";
 import { flowLines } from "./lines";
 import { detectSyllables } from "./syllables";
+import { vocalLines } from "./vocals";
 
 /** lines suggested per AI call (couplets stay together); the calls run in parallel */
 export const FLOW_CHUNK = 8;
@@ -77,10 +78,42 @@ export async function processFlow(
 
   onStep("song");
   const lines = flowLines(syllables, words, audio, { offset: rec.startAt, lang: tree.project.language, duration: audio.duration ?? rec.startAt + rec.samples.length / rec.sampleRate });
-  let t = await post<ProjectTree>(`/api/projects/${pid}/flow`, { action: "build", lines });
+  const t = await post<ProjectTree>(`/api/projects/${pid}/flow`, { action: "build", lines });
   onTree(t);
 
-  // 3 suggestions per line: chunks of whole couplets per section, all at once
+  return { tree: await suggestAll(pid, t, onStep, onTree), takeId, wordsFailed };
+}
+
+/**
+ * A song with vocals on it: the words are read from the track itself (1
+ * recognition call, stored), every sung bar becomes a line with the recorded
+ * words as its text and their rhythm as its pattern, then 3 alternatives per
+ * line that fit that rhythm.
+ */
+export async function processVocals(
+  pid: string,
+  tree: ProjectTree,
+  onStep: (step: FlowStep, progress?: { done: number; total: number }) => void,
+  onTree: (t: ProjectTree) => void,
+): Promise<ProjectTree> {
+  const audio = tree.audio!;
+  onStep("words");
+  const { words } = await post<{ words: TimedWord[] }>(`/api/projects/${pid}/flow`, { action: "vocals" });
+  onStep("song");
+  const lines = vocalLines(words, audio, { lang: tree.project.language, duration: audio.duration ?? (words.at(-1)?.end ?? 0) + 2 });
+  if (!lines.length) throw new Error("No vocals were found in this song — record your flow instead.");
+  const t = await post<ProjectTree>(`/api/projects/${pid}/flow`, { action: "build", lines, source: "vocals" });
+  onTree(t);
+  return suggestAll(pid, t, onStep, onTree);
+}
+
+/** 3 suggestions per line: chunks of whole couplets per section, all at once */
+async function suggestAll(
+  pid: string,
+  t: ProjectTree,
+  onStep: (step: FlowStep, progress?: { done: number; total: number }) => void,
+  onTree: (t: ProjectTree) => void,
+) {
   const chunks: string[][] = [];
   for (const s of t.sections) {
     const ids = s.lines.filter((l) => l.kind === "lyric").map((l) => l.id);
@@ -98,12 +131,11 @@ export async function processFlow(
       return r;
     }),
   );
-  // the newest state (responses can arrive out of order)
-  t = (await fetch(`/api/projects/${pid}`).then((r) => r.json())) as ProjectTree;
   const failed = results.filter((r) => r.status === "rejected").length;
   if (failed === results.length && results.length) {
     const why = (results[0] as PromiseRejectedResult).reason;
     throw new Error(why instanceof Error ? why.message : "Writing the suggestions failed");
   }
-  return { tree: t, takeId, wordsFailed };
+  // the newest state (responses can arrive out of order)
+  return (await fetch(`/api/projects/${pid}`).then((r) => r.json())) as ProjectTree;
 }

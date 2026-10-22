@@ -202,4 +202,6 @@ export interface LineFlow {
   held: boolean;
   /** recognised words ("" = only "na-na") */
   words: string;
+  /** "vocals": read from the vocals in the uploaded song — the words are the writer's lyrics and stay */
+  source?: "flow" | "vocals";
 }

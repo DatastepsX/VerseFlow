@@ -6,7 +6,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { fmtTime } from "@/lib/audio/song-map";
 import { buildTimeline, positionIn } from "@/lib/audio/timeline";
 import { BEAT_ACCEPT, MAX_BEAT_BYTES, uploadBeat } from "@/lib/client/beat";
-import { processFlow, type FlowStep } from "@/lib/flow/pipeline";
+import { processFlow, processVocals, type FlowStep } from "@/lib/flow/pipeline";
+import { stressPattern } from "@/lib/flow/lines";
 import { prosody } from "@/lib/rhyme/prosody";
 import { StudioEngine } from "@/lib/studio/engine";
 import { LANGUAGES, type Line, type ProjectTree } from "@/lib/types";
@@ -23,13 +24,18 @@ const STEPS: { key: FlowStep; label: string }[] = [
   { key: "song", label: "Laying out the song" },
   { key: "suggest", label: "Writing lyrics for every bar" },
 ];
+const VOCAL_STEPS: { key: FlowStep; label: string }[] = [
+  { key: "words", label: "Reading the lyrics from your song" },
+  { key: "song", label: "Finding the flow of every line" },
+  { key: "suggest", label: "Writing 3 alternatives per line" },
+];
 
 /**
  * The app: upload a beat → record your flow (sing or rap anything over it)
  * → a first version of the lyrics, written to your rhythm and your words →
  * go through it bar by bar: keep, next option, new options, edit, remove.
  */
-export function SongApp({ initialTree }: { initialTree: ProjectTree }) {
+export function SongApp({ initialTree, autoVocals = false }: { initialTree: ProjectTree; autoVocals?: boolean }) {
   const router = useRouter();
   const [tree, setTree] = useState(initialTree);
   const pid = tree.project.id;
@@ -146,6 +152,7 @@ export function SongApp({ initialTree }: { initialTree: ProjectTree }) {
   // ---------- recording the flow ----------
   const [headphones, setHeadphones] = useState(true);
   const [rec, setRec] = useState<null | "recording" | "processing">(null);
+  const [source, setSource] = useState<"flow" | "vocals">("flow");
   const [level, setLevel] = useState(0);
   const [step, setStep] = useState<{ key: FlowStep; progress?: { done: number; total: number } } | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -183,6 +190,7 @@ export function SongApp({ initialTree }: { initialTree: ProjectTree }) {
   const stopFlow = async () => {
     const e = engine.current;
     if (!e || rec !== "recording") return;
+    setSource("flow");
     setRec("processing");
     const r = await e.stopRecording(e.reportedLatency, 0, 0);
     e.disarm();
@@ -211,6 +219,41 @@ export function SongApp({ initialTree }: { initialTree: ProjectTree }) {
 
   useEffect(() => {
     stopRef.current = stopFlow;
+  });
+
+  // ---------- the song's own vocals ----------
+  const readVocals = async () => {
+    if (!tree.audio) return;
+    if (hasLines && !window.confirm("Read the lyrics from the song? It replaces the current draft (a version is saved first).")) return;
+    stopPlay();
+    setError(null);
+    setNote(null);
+    setSource("vocals");
+    setRec("processing");
+    setView("flow");
+    let latest = tree;
+    try {
+      latest = await processVocals(pid, tree, (key, progress) => setStep({ key, progress }), (t) => {
+        latest = t;
+        setTree(t);
+      });
+      setTree(latest);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong");
+    } finally {
+      setRec(null);
+      setStep(null);
+      // the lyrics are there even when the suggestions failed
+      if (latest.sections.some((s) => s.lines.some((l) => l.kind === "lyric"))) setView("lyrics");
+      window.scrollTo(0, 0);
+    }
+  };
+  const autoStarted = useRef(false);
+  useEffect(() => {
+    if (!autoVocals || autoStarted.current || hasLines || !tree.audio) return;
+    autoStarted.current = true;
+    router.replace(`/song/${pid}`);
+    void readVocals();
   });
 
   // ---------- line actions ----------
@@ -340,6 +383,14 @@ export function SongApp({ initialTree }: { initialTree: ProjectTree }) {
                   <span className="h-10 w-10 rounded-full bg-white" />
                 </button>
                 <p className="mt-3 text-sm font-semibold">{beatReady ? "Tap to start" : "Loading the beat…"}</p>
+                <button className="mt-8 flex w-full items-center gap-3 rounded-2xl border border-line bg-panel px-4 py-3.5 text-left" onClick={() => void readVocals()}>
+                  <span className="text-2xl">🎙</span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-sm font-semibold">The track already has vocals?</span>
+                    <span className="block text-xs text-muted">Read the lyrics and the flow from it · 1 recognition + 1 AI call per 8 lines</span>
+                  </span>
+                  <span className="text-muted">›</span>
+                </button>
               </>
             )}
             {rec === "recording" && (
@@ -372,10 +423,10 @@ export function SongApp({ initialTree }: { initialTree: ProjectTree }) {
             )}
             {rec === "processing" && (
               <>
-                <h2 className="text-2xl font-extrabold">Writing your song…</h2>
+                <h2 className="text-2xl font-extrabold">{source === "vocals" ? "Reading your song…" : "Writing your song…"}</h2>
                 <ul className="mt-6 w-full space-y-2 text-left">
-                  {STEPS.map((s, i) => {
-                    const cur = STEPS.findIndex((x) => x.key === step?.key);
+                  {(source === "vocals" ? VOCAL_STEPS : STEPS).map((s, i, steps) => {
+                    const cur = steps.findIndex((x) => x.key === step?.key);
                     const state = i < cur ? "done" : i === cur ? "now" : "todo";
                     return (
                       <li key={s.key} className={`flex items-center gap-3 rounded-2xl px-4 py-3 ${state === "now" ? "bg-accent-soft" : "bg-panel"}`}>
@@ -569,13 +620,22 @@ function LineCard(props: {
           <button className="block w-full text-left" onClick={props.onPlay} title="Play this bar">
             <span className={`text-[17px] leading-snug ${l.text.trim() ? "" : "italic text-muted"}`}>{l.text.trim() || (props.busy ? "Writing…" : "…")}</span>
           </button>
+          {l.flow && <Pattern flow={l.flow} />}
           <div className="mt-1 flex items-center gap-1.5 text-[11px] text-muted">
             {target !== null && (
               <span className={fits === false ? "text-warn" : fits ? "text-ok" : ""} title={`You sang ${target} syllables here`}>
                 {syl || "–"}/{target} syl
               </span>
             )}
-            {l.flow?.words && <span className="min-w-0 truncate">· you sang “{l.flow.words}”</span>}
+            {l.flow?.source === "vocals" ? (
+              l.text.trim() === l.flow.words.trim() ? (
+                <span className="font-semibold text-accent">· 🎙 your recording</span>
+              ) : (
+                <span className="min-w-0 truncate">· recorded “{l.flow.words}”</span>
+              )
+            ) : (
+              l.flow?.words && <span className="min-w-0 truncate">· you sang “{l.flow.words}”</span>
+            )}
           </div>
           <div className="mt-2 flex items-center gap-1.5">
             <button
@@ -616,6 +676,24 @@ function LineCard(props: {
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+/** the line's sung rhythm: one mark per syllable, stressed ones tall, a held last note drawn long */
+function Pattern({ flow }: { flow: NonNullable<Line["flow"]> }) {
+  const stressed = new Set(flow.stress);
+  return (
+    <div className="mt-1.5 flex h-4 items-end gap-[3px]" title={stressPattern(flow)} aria-label={`Flow: ${stressPattern(flow)}`}>
+      {Array.from({ length: flow.syllables }, (_, i) => {
+        const last = i === flow.syllables - 1;
+        return (
+          <span
+            key={i}
+            className={`rounded-full ${stressed.has(i + 1) ? "h-4 bg-accent" : "h-2 bg-accent/35"} ${last && flow.held ? "w-5" : "w-1.5"}`}
+          />
+        );
+      })}
     </div>
   );
 }

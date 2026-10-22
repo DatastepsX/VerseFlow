@@ -22,6 +22,7 @@ export default function Home() {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [beat, setBeat] = useState<File | null>(null);
+  const [vocals, setVocals] = useState(false);
   const [form, setForm] = useState({
     title: "",
     language: "it",
@@ -55,14 +56,17 @@ export default function Home() {
           text: form.text.trim() || undefined,
         },
       });
+      let uploaded = false;
       if (beat) {
         try {
           await api(`/api/projects/${p.id}/audio`, { body: await uploadBeat(p.id, beat, setStatus) });
+          uploaded = true;
         } catch (err) {
           window.alert(`The song was created, but the beat: ${(err as Error).message}`);
         }
       }
-      router.push(`/song/${p.id}`);
+      // with vocals on the track, the song opens reading its lyrics and flow
+      router.push(`/song/${p.id}${uploaded && vocals && !form.text.trim() ? "?vocals=1" : ""}`);
     } catch (err) {
       setError((err as Error).message);
       setBusy(false);
@@ -147,6 +151,17 @@ export default function Home() {
               />
             </label>
 
+            {beat && (
+              <label className="flex cursor-pointer items-start gap-3 rounded-2xl bg-panel-2 px-4 py-3">
+                <input type="checkbox" className="mt-1" checked={vocals} onChange={(e) => setVocals(e.target.checked)} />
+                <span className="min-w-0 flex-1">
+                  <span className="block text-sm font-semibold">🎙 It has vocals on it</span>
+                  <span className="block text-xs text-muted">
+                    Read the lyrics and the flow from the recording · 1 recognition + 1 AI call per 8 lines
+                  </span>
+                </span>
+              </label>
+            )}
             <div>
               <label className="label">Name</label>
               <input

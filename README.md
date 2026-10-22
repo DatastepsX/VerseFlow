@@ -23,6 +23,14 @@ The home screen is a simple, app-like flow for the phone:
 4. **Bar by bar**: ✓ keep · ↻ next option (free) · ✨ 3 new options (1 call) · ✎ edit · 🗑 remove. The player plays the
    beat with your flow and highlights the line being sung; tap a line to hear its bar.
 
+**A track that already has vocals** (a demo with your voice): tick "🎙 It has vocals on it" when creating the song, or
+"The track already has vocals?" on the Flow tab. The lyrics are read from the track (1 ElevenLabs call, stored and
+reused), every sung bar becomes a line with **your recorded words as its text** and their rhythm as its pattern
+(`vocalLines` in `src/lib/flow/vocals.ts`; `lines.flow.source = "vocals"`), then 3 alternatives per line that fit that
+rhythm and rhyme with the recorded partner line. ↻ cycles through the alternatives and back to your recording; ✨ adds new
+alternatives without replacing the line. Every line shows its flow (one mark per syllable, stressed ones tall, a held last
+note long).
+
 The full editor (`/p/[id]`), the Studio and the phone remote are still there under **More → Advanced**.
 
 ## What works today (full editor)

@@ -8,6 +8,7 @@ import type {
   BankLine,
   Line,
   LineEvent,
+  LineFlow,
   LineKind,
   LineStatus,
   Project,
@@ -1192,9 +1193,11 @@ export async function getRemoteState(projectId: string) {
 export async function buildFlowSong(
   projectId: string,
   lines: { start: number; sungAt: number; syllables: number; stress: number[]; held: boolean; words: string }[],
+  source: "flow" | "vocals" = "flow",
 ) {
   const tree = await getTree(projectId);
-  if (tree.sections.some((s) => s.lines.some((l) => l.text.trim()))) await saveVersion(projectId, "Before the new flow");
+  if (tree.sections.some((s) => s.lines.some((l) => l.text.trim())))
+    await saveVersion(projectId, source === "vocals" ? "Before reading the vocals" : "Before the new flow");
   if (tree.sections.length) check(await db().from("sections").delete().in("id", tree.sections.map((s) => s.id)));
   const sorted = [...lines].sort((a, b) => a.start - b.start);
   const steps = sorted.slice(1).map((l, i) => l.start - sorted[i].start).sort((a, b) => a - b);
@@ -1217,11 +1220,12 @@ export async function buildFlowSong(
       project_id: projectId,
       section_id: idAt.get(i + 1)!,
       position: k + 1,
-      text: "",
-      status: "OPEN" as LineStatus,
+      // vocals from the song: the recorded words are the lyrics
+      text: source === "vocals" ? (l.words ?? "").slice(0, 200) : "",
+      status: (source === "vocals" && l.words?.trim() ? "SUGGESTED" : "OPEN") as LineStatus,
       kind: "lyric",
       audio_at: Math.round(Math.max(g[0].start, Math.min(l.sungAt, l.start + step)) * 1000) / 1000,
-      flow: { syllables: l.syllables, stress: l.stress.slice(0, 24), held: !!l.held, words: (l.words ?? "").slice(0, 200) },
+      flow: { syllables: l.syllables, stress: l.stress.slice(0, 24), held: !!l.held, words: (l.words ?? "").slice(0, 200), source },
     })),
   );
   if (rows.length) {
@@ -1243,10 +1247,11 @@ export async function buildFlowSong(
 export async function applyFlowOptions(projectId: string, items: { id: string; options: string[] }[]) {
   const ids = items.map((x) => x.id);
   if (!ids.length) return;
-  const current = check(await db().from("lines").select("id, text, status").eq("project_id", projectId).in("id", ids)) as {
+  const current = check(await db().from("lines").select("id, text, status, flow").eq("project_id", projectId).in("id", ids)) as {
     id: string;
     text: string;
     status: LineStatus;
+    flow: LineFlow | null;
   }[];
   const byId = new Map(current.map((l) => [l.id, l]));
   check(await db().from("alternatives").update({ state: "rejected" }).in("line_id", ids).eq("state", "pending"));
@@ -1254,8 +1259,12 @@ export async function applyFlowOptions(projectId: string, items: { id: string; o
   for (const x of items) {
     const l = byId.get(x.id);
     if (!l || !x.options.length) continue;
-    const locked = l.status === "APPROVED" || l.status === "APPROVED_EDITED";
+    // kept lines, and lines from the song's vocals, keep their text: the options become alternatives
+    const locked = l.status === "APPROVED" || l.status === "APPROVED_EDITED" || (l.flow?.source === "vocals" && !!l.text.trim());
     const opts = x.options.filter((o) => o.trim() && o.trim() !== l.text.trim());
+    // the recorded line stays one of the options when another one is showing
+    const original = l.flow?.source === "vocals" ? l.flow.words.trim() : "";
+    if (original && original !== l.text.trim() && !opts.includes(original)) opts.unshift(original);
     if (!locked && opts.length) await updateLine(l.id, { text: opts[0], status: "SUGGESTED" }, "flow");
     for (const text of locked ? opts : opts.slice(1)) alts.push({ line_id: l.id, project_id: projectId, text, source: "ai", state: "pending" });
   }
