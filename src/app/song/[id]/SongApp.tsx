@@ -28,6 +28,7 @@ import {
   Download,
   Ellipsis,
   Hand,
+  LineBreak,
   Headphones,
   Lyrics,
   Mic,
@@ -757,7 +758,7 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
                   ) : (
                     <li className="flex items-center gap-3 rounded-2xl bg-panel px-4 py-3">
                       <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent"><Hand className="h-4 w-4" /></span>
-                      <span>Two pads: the big one once per syllable, on the beat you hear — the other one when a line is done.</span>
+                      <span>Two pads: the big one (right) once per syllable, on the beat you hear — “Next line” (left) when a line is done.</span>
                     </li>
                   )}
                   <li className="flex items-center gap-3 rounded-2xl bg-panel px-4 py-3">
@@ -858,7 +859,7 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
                 <p className="mt-5 text-sm font-semibold">
                   Line {tapLine.n} · {tapLine.count} syllable{tapLine.count === 1 ? "" : "s"}
                 </p>
-                {/* two pads: syllables, and "next line" */}
+                {/* two pads: "next line" on the left, syllables on the right */}
                 <div className="mt-3 flex w-full gap-2.5">
                   <button
                     className="flex h-72 flex-[2] touch-manipulation select-none flex-col items-center justify-center gap-3 rounded-[2rem] bg-accent text-white shadow-xl shadow-accent/30 active:bg-accent/85"
@@ -873,14 +874,14 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
                     <span className="text-xs opacity-80">one per syllable</span>
                   </button>
                   <button
-                    className="flex h-72 flex-1 touch-manipulation select-none flex-col items-center justify-center gap-2 rounded-[2rem] bg-fg text-bg shadow-xl active:opacity-85"
+                    className="order-first flex h-72 flex-1 touch-manipulation select-none flex-col items-center justify-center gap-2 rounded-[2rem] bg-fg text-bg shadow-xl active:opacity-85"
                     onPointerDown={(ev) => {
                       ev.preventDefault();
                       nextLine();
                     }}
                     aria-label="Next line"
                   >
-                    <ChevronRight className="h-10 w-10" />
+                    <LineBreak className="h-10 w-10" />
                     <span className="text-base font-bold leading-tight">
                       Next
                       <br />

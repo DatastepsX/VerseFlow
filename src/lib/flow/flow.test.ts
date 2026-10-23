@@ -248,3 +248,9 @@ test("taps with 'next line': the writer's marks break the lines, not the pauses"
   );
   assert.equal(lines[1].start, 2);
 });
+
+test("sounds: an Italian “po'” (un po') is a word, not a sung sound", () => {
+  const w = (text: string, i: number) => ({ text, start: i, end: i + 0.2 });
+  const line = "suoni risposta tarda un po'.".split(" ").map(w);
+  assert.equal(dropSounds(line).length, 5);
+});

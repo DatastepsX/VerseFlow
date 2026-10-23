@@ -212,3 +212,10 @@ export const Hand = (p: P) => (
     <path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15" />
   </Icon>
 );
+/** a line break (↵) */
+export const LineBreak = (p: P) => (
+  <Icon {...p}>
+    <polyline points="9 10 4 15 9 20" />
+    <path d="M20 4v7a4 4 0 0 1-4 4H4" />
+  </Icon>
+);

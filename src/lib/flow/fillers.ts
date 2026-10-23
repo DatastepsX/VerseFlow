@@ -7,9 +7,9 @@ import type { TimedWord } from "@/lib/audio/lyrics";
  */
 
 /** clearly not words: pom, pam, para, nanana, yeah, oh, mmm… */
-const SOUND = /^(?:p[aou]m+|b[aou]m+|d[aou]m+|t[aou]m+|para|pa(?:pa)+|pi|po|pu|ba|bi|du|di|dun|tun|ta(?:ta)+|na(?:na)+|la(?:la)+|da(?:da)+|ra(?:ra)+|ye+a*h*|ye+|oh+|o+h|uh+|ah+|eh+|m+h*m*|hm+|wo+h?|uo+|yo+)$/;
+const SOUND = /^(?:p[aou]m+|b[aou]m+|d[aou]m+|t[aou]m+|para|pa(?:pa)+|pu|ba|bi|du|dun|tun|ta(?:ta)+|na(?:na)+|la(?:la)+|da(?:da)+|ra(?:ra)+|ye+a*h*|ye+|oh+|o+h|uh+|ah+|eh+|m+h*m*|hm+|wo+h?|uo+|yo+)$/;
 /** also real words ("la", "da", "ta", "na", "pa"…): sounds only when the whole take is sounds */
-const MAYBE = /^(?:la|da|ta|na|pa|ra|ma|no|di|mi|ti|tu)$/;
+const MAYBE = /^(?:la|da|ta|na|pa|ra|ma|no|di|mi|ti|tu|pi|po)$/;
 /** a short chunk repeated: "papapa", "nanana", "tatata" */
 const REPEATED = /^([a-z]{1,3})\1{1,}$/;
 

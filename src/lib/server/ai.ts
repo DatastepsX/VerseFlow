@@ -3,7 +3,7 @@ import { performedBy } from "@/lib/artists";
 import { adjustLength } from "@/lib/rhyme/fit";
 import { songRhymeDistance } from "@/lib/scheme";
 import Anthropic from "@anthropic-ai/sdk";
-import { analyzeLine, lastWord } from "@/lib/rhyme/analyze";
+import { analyzeLine, compareLines, lastWord } from "@/lib/rhyme/analyze";
 import { describeRhythm, prosody } from "@/lib/rhyme/prosody";
 import { rhymePartners } from "@/lib/scheme";
 import { sectionPattern } from "@/lib/pattern";
@@ -600,6 +600,8 @@ export async function flowSuggest(tree: ProjectTree, lineIds: string[]) {
     .join("\n\n");
   // couplets: as sung (a line ends on its rhyme — flow.pair), else lines 1+2, 3+4… of each section
   const rhymes: string[] = [];
+  /** every couplet with a line being written, to keep its options rhyming pairwise */
+  const allCouplets: [Line, Line][] = [];
   for (const s of tree.sections) {
     const lyric = s.lines.filter((l) => l.kind === "lyric");
     const sung = lyric.some((l) => l.flow?.pair !== undefined);
@@ -607,6 +609,7 @@ export async function flowSuggest(tree: ProjectTree, lineIds: string[]) {
     for (let k = 0; k + 1 < lyric.length; k++) {
       if (sung ? lyric[k].flow?.pair === 1 && lyric[k + 1].flow?.pair === 2 : k % 2 === 0) couplets.push([lyric[k], lyric[k + 1]]);
     }
+    allCouplets.push(...couplets);
     for (const [a, b] of couplets) {
       if (!want.has(a.id) && !want.has(b.id)) continue;
       // a line that stays (not being written, or recorded from the song's vocals) is what its partner rhymes with
@@ -638,6 +641,7 @@ For every [WRITE] line write 3 options. Each option must:
 - have exactly the line's number of syllables (sung syllables, ±1) with the stressed syllables on the DUM positions — it must fit the rhythm the writer sang;
 - end on an open, singable vowel when the last note is held (~);
 - respect its rhyme rule and continue the lines around it, so the song reads as one coherent text about the writer's topic.
+The rhyme matters most: the last words of a couplet must truly rhyme — the same ending from the stressed vowel on (cuore / amore, notte / forte), not just one shared vowel — and in a couplet that is written together, option 1 rhymes with option 1, option 2 with option 2, option 3 with option 3.
 When the writer sang real words in a line that isn't recorded, the FIRST option keeps them (completed and corrected into a full line); the others may go further. Make the 3 options clearly different.${
     vocals
       ? `\nLines marked "recorded" are the writer's own lyrics from the vocals in the song — they stay. For those, write 3 ALTERNATIVE lines: same rhythm and rhyme sound, same meaning direction, different wording — never the recorded line itself.`
@@ -647,36 +651,61 @@ Return one entry per [WRITE] line, "line" = its number.`;
 
   const parsed = await callJson<{ slots: { line: number; options: string[] }[] }>(project.id, "flow_suggest", prompt, DRAFT_SCHEMA, SYSTEM, DRAFT_EFFORT);
   const byNum = new Map(all.map((x, i) => [i + 1, x.l]));
-  return parsed.slots
-    .map((slot) => {
-      const line = byNum.get(slot.line);
-      if (!line || !want.has(line.id)) return null;
-      const target = line.flow?.syllables ?? null;
-      const fitted = slot.options
-        .map((o) => o.trim())
-        .filter(Boolean)
-        .slice(0, 3)
-        .map((o, i) => {
-          let text = o;
-          // nudge a near miss onto the sung length (fillers / small cuts)
-          if (target) {
-            for (let step = 0; step < 3; step++) {
-              const d = prosody(text, lang).syllables - target;
-              if (Math.abs(d) <= 1) break;
-              const next = adjustLength(text, lang, d > 0 ? -1 : 1);
-              if (!next) break;
-              text = next;
-            }
+  type Opt = { text: string; off: number; i: number };
+  const opts = new Map<string, Opt[]>();
+  for (const slot of parsed.slots) {
+    const line = byNum.get(slot.line);
+    if (!line || !want.has(line.id)) continue;
+    const target = line.flow?.syllables ?? null;
+    const fitted = slot.options
+      .map((o) => o.trim())
+      .filter(Boolean)
+      .slice(0, 3)
+      .map((o, i) => {
+        let text = o;
+        // nudge a near miss onto the sung length (fillers / small cuts)
+        if (target) {
+          for (let step = 0; step < 3; step++) {
+            const d = prosody(text, lang).syllables - target;
+            if (Math.abs(d) <= 1) break;
+            const next = adjustLength(text, lang, d > 0 ? -1 : 1);
+            if (!next) break;
+            text = next;
           }
-          const off = target ? Math.abs(prosody(text, lang).syllables - target) : 0;
-          return { text, off, i };
-        })
-        // best fit first; the writer's own words (first option) win ties
-        .sort((a, b) => Math.min(a.off, 2) - Math.min(b.off, 2) || a.i - b.i)
-        .map((x) => x.text);
-      return { id: line.id, options: fitted };
-    })
-    .filter((x): x is { id: string; options: string[] } => !!x && x.options.length > 0);
+        }
+        return { text, off: target ? Math.abs(prosody(text, lang).syllables - target) : 0, i };
+      });
+    if (fitted.length) opts.set(line.id, fitted);
+  }
+  const rhymeScore = (x: string, y: string) => compareLines(analyzeLine(x, lang), analyzeLine(y, lang)).score;
+  const fit = (o: Opt) => Math.min(o.off, 2);
+  const done = new Set<string>();
+  for (const [a, b] of allCouplets) {
+    const oa = opts.get(a.id);
+    const ob = opts.get(b.id);
+    if (oa && ob) {
+      // both written: option i of one goes with option i of the other — keep the pairs together, best rhyme first
+      const n = Math.min(oa.length, ob.length);
+      const order = Array.from({ length: n }, (_, k) => k).sort(
+        (x, y) => rhymeScore(oa[y].text, ob[y].text) * 2 - (fit(oa[y]) + fit(ob[y])) * 0.5 - (rhymeScore(oa[x].text, ob[x].text) * 2 - (fit(oa[x]) + fit(ob[x])) * 0.5) || x - y,
+      );
+      opts.set(a.id, [...order.map((k) => oa[k]), ...oa.slice(n)]);
+      opts.set(b.id, [...order.map((k) => ob[k]), ...ob.slice(n)]);
+      done.add(a.id).add(b.id);
+    } else {
+      // one written, its partner stays: the options that rhyme with the partner first
+      const [mine, partner] = oa ? [a, b] : [b, a];
+      const o = opts.get(mine.id);
+      if (!o || !partner.text.trim()) continue;
+      opts.set(mine.id, [...o].sort((x, y) => rhymeScore(y.text, partner.text) * 2 - fit(y) * 0.5 - (rhymeScore(x.text, partner.text) * 2 - fit(x) * 0.5) || x.i - y.i));
+      done.add(mine.id);
+    }
+  }
+  return [...opts.entries()].map(([id, o]) => ({
+    id,
+    // not in a couplet: best fit first; the writer's own words (first option) win ties
+    options: (done.has(id) ? o : [...o].sort((x, y) => fit(x) - fit(y) || x.i - y.i)).map((x) => x.text),
+  }));
 }
 
 function patternOf(f: { syllables: number; stress: number[]; held: boolean }) {
