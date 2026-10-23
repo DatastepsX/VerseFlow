@@ -524,6 +524,8 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
   const [busyLine, setBusyLine] = useState<string | null>(null);
   /** the line whose flow grid is open */
   const [gridLine, setGridLine] = useState<string | null>(null);
+  /** the line opened for its details and actions (one at a time) */
+  const [openLine, setOpenLine] = useState<string | null>(null);
   useEffect(() => {
     tappingRef.current = gridLine !== null;
   }, [gridLine]);
@@ -1068,11 +1070,11 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
                       </button>
                     )}
                   </h3>
-                  <div className="space-y-3">
+                  <div className="space-y-2.5">
                     {couplets(lines).map((group) => {
                       const off = group.length > 1 && !rhymesWell(group[0].text, group[1].text, lang);
                       return (
-                      <div key={group[0].id} className={group.length > 1 ? `space-y-1.5 border-l-2 pl-2 ${off ? "border-warn/60" : "border-accent/30"}` : ""} title={group.length > 1 ? "A couplet: these two lines rhyme" : undefined}>
+                      <div key={group[0].id} className={group.length > 1 ? `border-l-2 pl-1 ${off ? "border-warn/60" : "border-accent/30"}` : "pl-[6px]"} title={group.length > 1 ? "A couplet: these two lines rhyme" : undefined}>
                         {group.map((l) => (
                           <LineCard
                             key={l.id}
@@ -1118,6 +1120,8 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
                             onStartTap={startTap}
                             onSing={singLine}
                             songTime={songTime}
+                            open={openLine === l.id}
+                            onToggle={() => setOpenLine(openLine === l.id ? null : l.id)}
                             onSaveGrid={(flow, write) =>
                               void lineAction(l.id, async () => {
                                 setGridLine(null);
@@ -1134,12 +1138,12 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
                           />
                         ))}
                         {off && (
-                          <div className="flex items-center gap-2 rounded-2xl bg-warn-soft px-3 py-2 text-xs text-warn">
+                          <div className="ml-2 mt-0.5 flex items-center gap-2 rounded-xl bg-warn-soft px-2.5 py-1 text-[11px] text-warn">
                             <span className="flex-1">
                               “{lastWordOf(group[0].text)}” and “{lastWordOf(group[1].text)}” don&apos;t rhyme
                             </span>
                             <button
-                              className="flex shrink-0 items-center gap-1 rounded-full bg-panel px-3 py-1.5 font-semibold text-accent disabled:opacity-50"
+                              className="flex shrink-0 items-center gap-1 rounded-full bg-panel px-2.5 py-1 font-semibold text-accent disabled:opacity-50"
                               disabled={busyLine === group[1].id}
                               onClick={() => void makeItRhyme(group[0] as LyricLine, group[1] as LyricLine)}
                             >
@@ -1246,16 +1250,49 @@ function LineCard(props: {
   onSing: (g: FlowGridModel) => Promise<number[]>;
   songTime: () => number;
   onSaveGrid: (f: NonNullable<Line["flow"]>, write: boolean) => void;
+  /** opened: its flow, details and actions show (one line at a time) */
+  open: boolean;
+  onToggle: () => void;
 }) {
   const { line: l, lang } = props;
   const kept = l.status === "APPROVED" || l.status === "APPROVED_EDITED";
   const target = l.flow?.syllables ?? null;
   const syl = l.text.trim() ? prosody(l.text, lang).syllables : 0;
   const fits = target !== null && syl > 0 ? Math.abs(syl - target) <= 1 : null;
+  const lineText = (
+    <span className={`text-[17px] leading-snug ${l.text.trim() ? "" : "italic text-muted"}`}>
+      {l.text.trim() ? (
+        <Syllables text={l.text.trim()} lang={lang} rhyme={!!props.pair} />
+      ) : props.busy ? (
+        "Writing…"
+      ) : l.flow?.syllables ? (
+        `e.g. “${exampleWords(l.flow.syllables, l.flow.stress, lang, l.position)}”`
+      ) : (
+        "…"
+      )}
+    </span>
+  );
+  // closed: just the text — the lyrics read like a sheet; tap to open the line
+  if (!props.open && !props.editing && !props.gridOpen) {
+    return (
+      <button
+        id={`line-${l.id}`}
+        onClick={props.onToggle}
+        className={`flex w-full items-start gap-2 rounded-2xl px-3 py-1 text-left transition-colors ${props.live ? "bg-accent-soft" : "active:bg-panel-2"}`}
+      >
+        <span className="min-w-0 flex-1">{lineText}</span>
+        {props.busy ? (
+          <span className="mt-2 inline-block h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-accent border-r-transparent" />
+        ) : (
+          kept && <Check className="mt-2 h-4 w-4 shrink-0 text-ok" aria-label="kept" />
+        )}
+      </button>
+    );
+  }
   return (
     <div
       id={`line-${l.id}`}
-      className={`rounded-3xl px-4 py-3.5 shadow-[0_1px_2px_rgba(0,0,0,0.04)] ring-1 transition-colors ${
+      className={`my-1 rounded-3xl px-4 py-3 shadow-[0_2px_10px_rgba(0,0,0,0.06)] ring-1 transition-colors ${
         props.live ? "bg-accent-soft ring-accent" : kept ? "bg-panel ring-ok/40" : "bg-panel ring-line/70"
       }`}
     >
@@ -1278,15 +1315,8 @@ function LineCard(props: {
         </div>
       ) : (
         <>
-          <button className="block w-full text-left" onClick={props.onPlay} title="Play this bar">
-            <span className={`text-[17px] leading-snug ${l.text.trim() ? "" : "italic text-muted"}`}>
-              {l.text.trim() ? (
-                <Syllables text={l.text.trim()} lang={lang} rhyme={!!props.pair} />
-              ) : (
-                l.text.trim() ||
-                (props.busy ? "Writing…" : l.flow?.syllables ? `e.g. “${exampleWords(l.flow.syllables, l.flow.stress, lang, l.position)}”` : "…")
-              )}
-            </span>
+          <button className="block w-full text-left" onClick={props.onToggle} title="Close">
+            {lineText}
           </button>
           {props.beatGrid && (l.flow || l.audio_at !== null) ? (
             <button className="group mt-1.5 flex items-center gap-2" onClick={props.onGrid} title="Set this line's flow: sing it or tap it" aria-expanded={props.gridOpen}>
@@ -1311,6 +1341,13 @@ function LineCard(props: {
             />
           )}
           <div className="mt-1 flex items-center gap-1.5 text-[11px] text-muted">
+            <button
+              className="flex shrink-0 items-center gap-1 rounded-full bg-panel-2 px-2.5 py-1 font-semibold text-fg/80"
+              onClick={props.onPlay}
+              title="Play this bar"
+            >
+              <Play className="h-3 w-3" /> Play
+            </button>
             {target !== null && (
               <span className={fits === false ? "text-warn" : fits ? "text-ok" : ""} title={`You sang ${target} syllables here`}>
                 {syl || "–"}/{target} syl

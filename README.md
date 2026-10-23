@@ -28,8 +28,9 @@ The home screen is a simple, app-like flow for the phone:
      if that fails, the lyrics follow the rhythm alone.
 3. **A first version of the song**: 3 options per line, written to the sung rhythm and about what you sang
    (`flowSuggest`, 1 AI call per 8 lines, all running in parallel).
-4. **Bar by bar**: ✓ keep · ↻ next option (free) · ✨ 3 new options (1 call) · ✎ edit · 🗑 remove. The player plays the
-   beat with your flow and highlights the line being sung; tap a line to hear its bar.
+4. **Bar by bar**: the lyrics read like a sheet (just the text, a ✓ on kept lines); tap a line to open it — Play, its
+   flow, Hear, ✓ keep · ↻ next option (free) · ✨ 3 new options (1 call) · ✎ edit · 🗑 remove — one line open at a time.
+   The player plays the beat with your flow and highlights the line being sung.
 
 **A track that already has vocals** (a demo with your voice) **is recognised automatically**: after uploading, the track
 is listened to once (1 ElevenLabs call, stored and reused — also when there are no lyrics). Fewer than 8 recognised
