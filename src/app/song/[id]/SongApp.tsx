@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fmtTime } from "@/lib/audio/song-map";
 import { buildTimeline, positionIn } from "@/lib/audio/timeline";
 import { BEAT_ACCEPT, MAX_BEAT_BYTES, uploadBeat } from "@/lib/client/beat";
@@ -15,7 +15,8 @@ import { LANGUAGES, type Line, type ProjectTree } from "@/lib/types";
 import { followTo } from "@/components/writer/follow";
 import { download, fullText } from "@/components/writer/util";
 import { VoiceSheet, type VoiceInfo } from "./VoiceSheet";
-import { FlowGrid } from "./FlowGrid";
+import { TapFlow } from "./TapFlow";
+import { exampleWords } from "@/lib/flow/example";
 import { gridFor, type BeatGrid, type FlowGridModel } from "@/lib/flow/grid";
 import {
   AudioLines,
@@ -25,7 +26,7 @@ import {
   Copy,
   Download,
   Ellipsis,
-  Grid as GridIcon,
+  Hand,
   Headphones,
   Lyrics,
   Mic,
@@ -143,6 +144,8 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
   const [now, setNow] = useState(0);
   const [live, setLive] = useState<string | null>(null);
   const stopAt = useRef<number | null>(null);
+  /** a flow is being tapped: the lyrics don't scroll along */
+  const tappingRef = useRef(false);
   useEffect(() => {
     if (!playing) return;
     const id = setInterval(() => {
@@ -155,7 +158,7 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
       const line = sec && pos?.lineIndex !== null && pos?.lineIndex !== undefined ? sec.lines[pos.lineIndex] : null;
       setLive((prev) => {
         const next = line?.id ?? null;
-        if (next && next !== prev) followTo(document.getElementById(`line-${next}`));
+        if (next && next !== prev && !tappingRef.current) followTo(document.getElementById(`line-${next}`));
         return next;
       });
       if ((stopAt.current !== null && p >= stopAt.current) || (tree.audio?.duration && p >= tree.audio.duration)) {
@@ -419,14 +422,26 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
   const [busyLine, setBusyLine] = useState<string | null>(null);
   /** the line whose flow grid is open */
   const [gridLine, setGridLine] = useState<string | null>(null);
+  useEffect(() => {
+    tappingRef.current = gridLine !== null;
+  }, [gridLine]);
   const beatGrid: BeatGrid | null = tree.audio?.bpm ? { bpm: tree.audio.bpm, beat_offset: tree.audio.beat_offset ?? 0, beats_per_bar: tree.audio.beats_per_bar ?? 4 } : null;
-  const listenGrid = (g: FlowGridModel) => {
+  /** tapping a flow: one bar to count in (clicks on its beats), then the line's bar(s); no recorded voices */
+  const startTap = (g: FlowGridModel) => {
     if (playing) stopPlay();
     const beatLen = g.step * 4;
-    const clicks = g.cells.flatMap((c, i) => (c ? [{ at: g.start + i * g.step, accent: c === 2 }] : []));
-    // a beat before (to hear where it starts), the clicks on the syllables, no recorded voices
-    void play(Math.max(0, g.start - beatLen), g.start + g.cells.length * g.step + 0.4, { guide: [], flow: false, clicks });
+    const barLen = beatLen * (beatGrid?.beats_per_bar ?? 4);
+    const from = g.start - barLen;
+    const clicks = Array.from({ length: beatGrid?.beats_per_bar ?? 4 }, (_, k) => ({ at: from + k * beatLen, accent: k === 0 })).filter((c) => c.at >= 0);
+    void play(Math.max(0, from), g.start + g.cells.length * g.step + 0.25, { guide: [], flow: false, clicks });
   };
+  /** the song time being heard now (the output's delay taken off: a tap answers what you hear) */
+  const songTime = useCallback(() => {
+    const e = engine.current;
+    if (!e) return 0;
+    const out = (e.ctx as AudioContext & { outputLatency?: number }).outputLatency || e.ctx.baseLatency || 0;
+    return e.position() - out;
+  }, []);
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const lineAction = async (id: string, fn: () => Promise<unknown>) => {
@@ -836,12 +851,17 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
                             onCancel={() => setEditing(null)}
                             beatGrid={beatGrid}
                             gridOpen={gridLine === l.id}
-                            onGrid={() => setGridLine(gridLine === l.id ? null : l.id)}
-                            onListenGrid={listenGrid}
-                            onSaveGrid={(flow) =>
+                            onGrid={() => {
+                              if (playing) stopPlay();
+                              setGridLine(gridLine === l.id ? null : l.id);
+                            }}
+                            onStartTap={startTap}
+                            songTime={songTime}
+                            onSaveGrid={(flow, write) =>
                               void lineAction(l.id, async () => {
-                                await call(`/api/lines/${l.id}`, { flow, action: "flow" }, "PATCH");
                                 setGridLine(null);
+                                await call(`/api/lines/${l.id}`, { flow, action: "flow" }, "PATCH");
+                                if (write) await call(`/api/projects/${pid}/flow`, { action: "suggest", lineIds: [l.id] });
                               })
                             }
                             voiceLabel={voice && !spoken.has(l.id) ? "1 call" : ""}
@@ -946,8 +966,9 @@ function LineCard(props: {
   beatGrid: BeatGrid | null;
   gridOpen: boolean;
   onGrid: () => void;
-  onListenGrid: (g: FlowGridModel) => void;
-  onSaveGrid: (f: NonNullable<Line["flow"]>) => void;
+  onStartTap: (g: FlowGridModel) => void;
+  songTime: () => number;
+  onSaveGrid: (f: NonNullable<Line["flow"]>, write: boolean) => void;
 }) {
   const { line: l, lang } = props;
   const kept = l.status === "APPROVED" || l.status === "APPROVED_EDITED";
@@ -982,21 +1003,34 @@ function LineCard(props: {
         <>
           <button className="block w-full text-left" onClick={props.onPlay} title="Play this bar">
             <span className={`text-[17px] leading-snug ${l.text.trim() ? "" : "italic text-muted"}`}>
-              {l.text.trim() && props.pair ? <RhymeEnd text={l.text.trim()} /> : l.text.trim() || (props.busy ? "Writing…" : "…")}
+              {l.text.trim() && props.pair ? (
+                <RhymeEnd text={l.text.trim()} />
+              ) : (
+                l.text.trim() ||
+                (props.busy ? "Writing…" : l.flow?.syllables ? `e.g. “${exampleWords(l.flow.syllables, l.flow.stress, lang, l.position)}”` : "…")
+              )}
             </span>
           </button>
           {props.beatGrid && (l.flow || l.audio_at !== null) ? (
             <button className="group mt-1.5 flex items-center gap-2" onClick={props.onGrid} title="Edit the flow on the beat" aria-expanded={props.gridOpen}>
-              {l.flow?.syllables ? <Pattern flow={l.flow} /> : <span className="mt-1.5 text-xs font-semibold text-accent">Draw the flow</span>}
-              <span className={`mt-1.5 flex h-6 items-center gap-1 rounded-full px-2 text-[11px] font-semibold ${props.gridOpen ? "bg-accent text-white" : "bg-panel-2 text-muted group-active:bg-accent-soft"}`}>
-                <GridIcon className="h-3.5 w-3.5" /> Flow
+              {l.flow?.syllables ? <Pattern flow={l.flow} /> : null}
+              <span className={`mt-1.5 flex h-6 items-center gap-1 rounded-full px-2 text-[11px] font-semibold ${props.gridOpen ? "bg-accent text-white" : "bg-panel-2 text-accent group-active:bg-accent-soft"}`}>
+                <Hand className="h-3.5 w-3.5" /> {l.flow?.syllables ? "Tap flow" : "Tap the flow"}
               </span>
             </button>
           ) : (
             l.flow && <Pattern flow={l.flow} />
           )}
           {props.gridOpen && props.beatGrid && (
-            <GridFor line={l} beatGrid={props.beatGrid} busy={props.busy} onListen={props.onListenGrid} onSave={props.onSaveGrid} onCancel={props.onGrid} />
+            <TapFor
+              line={l}
+              lang={lang}
+              beatGrid={props.beatGrid}
+              onStart={props.onStartTap}
+              songTime={props.songTime}
+              onSave={props.onSaveGrid}
+              onCancel={props.onGrid}
+            />
           )}
           <div className="mt-1 flex items-center gap-1.5 text-[11px] text-muted">
             {target !== null && (
@@ -1103,25 +1137,29 @@ function RhymeEnd({ text }: { text: string }) {
   );
 }
 
-/** the grid editor for a line (its model built once, when opened) */
-function GridFor({
+/** tapping a line's flow (its bar on the beat taken once, when opened) */
+function TapFor({
   line,
+  lang,
   beatGrid,
-  busy,
-  onListen,
+  onStart,
+  songTime,
   onSave,
   onCancel,
 }: {
   line: Line;
+  lang: string;
   beatGrid: BeatGrid;
-  busy: boolean;
-  onListen: (g: FlowGridModel) => void;
-  onSave: (f: NonNullable<Line["flow"]>) => void;
+  onStart: (g: FlowGridModel) => void;
+  songTime: () => number;
+  onSave: (f: NonNullable<Line["flow"]>, write: boolean) => void;
   onCancel: () => void;
 }) {
-  const [model] = useState(() => gridFor(line.flow, line.audio_at, beatGrid));
-  if (!model) return null;
-  return <FlowGrid initial={model} flow={line.flow} saving={busy} onListen={onListen} onSave={onSave} onCancel={onCancel} />;
+  const [win] = useState(() => gridFor(line.flow, line.audio_at, beatGrid));
+  if (!win) return null;
+  return (
+    <TapFlow window={win} flow={line.flow} lang={lang} onStart={() => onStart(win)} songTime={songTime} onSave={onSave} onCancel={onCancel} />
+  );
 }
 
 /** the line's sung rhythm: one mark per syllable, stressed ones tall, a held last note drawn long */

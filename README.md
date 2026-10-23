@@ -53,11 +53,13 @@ ElevenLabs plan and the key's "Text to Speech" + "Voices" permissions; table `vo
 - **🗣 on** in the player: the whole song in your voice with the beat (asks first when lines still need a call).
 It's a demo-quality guide for hearing whether lyrics fit — rap works best; it doesn't sing melodies.
 
-**Flow grid** (tap "Flow" under a line): the line's rhythm on the beat, drum-machine style — 16 steps (16th notes)
-per bar, 2 beats per row. The sung syllables are snapped onto it; tap a step: empty → syllable → stressed → empty.
-"Listen" plays the beat with a click on every syllable (stressed louder); "Save" makes the grid the line's flow
-(syllables, stresses, `flow.times`, the line's start) — undoable like a text edit. Lines without a flow can get one
-drawn from scratch ("Draw the flow"). Pure logic in `src/lib/flow/grid.ts`; no AI calls.
+**Tap the flow** ("Tap flow" under a line): Start → one bar of count-in (clicks), then the line's bar plays and you tap a
+big pad once per syllable. Taps snap to 16th notes (two quick taps never merge); a tap on a beat is stressed. Right away
+you see example words with exactly that rhythm — real words from a small built-in bank, no AI
+(`exampleWords` in `src/lib/flow/example.ts`), e.g. "Ricordo piano passo" — "Other example" for another one. "Save"
+makes it the line's flow (undoable like a text edit); "Write · 1 call" also writes 3 lyrics options for it. Empty
+lines with a flow show example words as a placeholder, so you see how long each bar is. Grid logic:
+`src/lib/flow/grid.ts`.
 
 The full editor (`/p/[id]`), the Studio and the phone remote are still there under **More → Advanced**.
 

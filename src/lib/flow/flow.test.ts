@@ -4,6 +4,8 @@ import { flowLines, stressPattern } from "./lines";
 import { detectSyllables } from "./syllables";
 import { dropSounds, isSound } from "./fillers";
 import { cycle, flowFromGrid, gridFor } from "./grid";
+import { exampleWords } from "./example";
+import { prosody } from "@/lib/rhyme/prosody";
 import { emptyParts, vocalLines } from "./vocals";
 
 const SR = 16000;
@@ -192,4 +194,21 @@ test("flow grid: sung syllables snap to 16th notes, edits become the line's flow
   const empty = gridFor(null, 3.2, grid)!;
   assert.equal(empty.start, 3);
   assert.ok(empty.cells.every((c) => c === 0));
+});
+
+test("example words: exactly the tapped syllables, stressed words on the stressed taps", () => {
+  for (const lang of ["it", "en", "es", "de"]) {
+    for (const [n, stress] of [
+      [7, [2, 5, 7]],
+      [10, [1, 4, 8]],
+      [4, [1, 3]],
+      [12, [2, 6, 10, 12]],
+    ] as [number, number[]][]) {
+      const line = exampleWords(n, stress, lang, n);
+      assert.equal(prosody(line, lang).syllables, n, `${lang}: “${line}” should have ${n} syllables`);
+    }
+  }
+  const it = exampleWords(7, [2, 4, 7], "it");
+  assert.ok(it.length > 5, it);
+  assert.notEqual(exampleWords(8, [1, 5], "it", 1), exampleWords(8, [1, 5], "it", 2), "other examples for another seed");
 });
