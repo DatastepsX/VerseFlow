@@ -53,6 +53,12 @@ ElevenLabs plan and the key's "Text to Speech" + "Voices" permissions; table `vo
 - **🗣 on** in the player: the whole song in your voice with the beat (asks first when lines still need a call).
 It's a demo-quality guide for hearing whether lyrics fit — rap works best; it doesn't sing melodies.
 
+**Flow grid** (tap "Flow" under a line): the line's rhythm on the beat, drum-machine style — 16 steps (16th notes)
+per bar, 2 beats per row. The sung syllables are snapped onto it; tap a step: empty → syllable → stressed → empty.
+"Listen" plays the beat with a click on every syllable (stressed louder); "Save" makes the grid the line's flow
+(syllables, stresses, `flow.times`, the line's start) — undoable like a text edit. Lines without a flow can get one
+drawn from scratch ("Draw the flow"). Pure logic in `src/lib/flow/grid.ts`; no AI calls.
+
 The full editor (`/p/[id]`), the Studio and the phone remote are still there under **More → Advanced**.
 
 ## What works today (full editor)

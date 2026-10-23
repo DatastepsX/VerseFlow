@@ -1,7 +1,7 @@
-import { addAlternatives, clearAlternatives, deleteLine, getTree, moveLine, setBankState, splitSection, updateLine } from "@/lib/server/repo";
+import { addAlternatives, clearAlternatives, deleteLine, getTree, moveLine, setBankState, setLineTimes, splitSection, updateLine } from "@/lib/server/repo";
 import { generateOptions } from "@/lib/server/ai";
 import { body, handle, pick, treeResponse } from "@/lib/server/http";
-import type { Line } from "@/lib/types";
+import type { Line, LineFlow } from "@/lib/types";
 
 export const maxDuration = 120;
 
@@ -9,7 +9,15 @@ export async function PATCH(req: Request, ctx: RouteContext<"/api/lines/[id]">) 
   return handle(async () => {
     const b = await body(req);
     const action = typeof b.action === "string" ? b.action : "edit";
-    const projectId = await updateLine((await ctx.params).id, pick<Line>(b, ["text", "status", "kind", "note"]), action);
+    const id = (await ctx.params).id;
+    const patch: Partial<Pick<Line, "text" | "status" | "kind" | "note" | "flow">> = pick<Line>(b, ["text", "status", "kind", "note"]);
+    // the line's rhythm, edited on the flow grid (undoable like a text edit)
+    const flow = b.flow === null ? null : b.flow !== undefined ? cleanFlow(b.flow) : undefined;
+    if (b.flow !== undefined && flow === undefined) return Response.json({ error: "Invalid flow" }, { status: 400 });
+    if (flow !== undefined) patch.flow = flow;
+    const projectId = await updateLine(id, patch, action);
+    // the line starts where its first syllable is sung
+    if (flow?.times?.length) await setLineTimes(projectId, [{ id, at: flow.times[0] }]);
     if (typeof b.bankId === "string") await setBankState(b.bankId, "used");
     return treeResponse(projectId);
   });
@@ -68,4 +76,23 @@ export async function POST(req: Request, ctx: RouteContext<"/api/lines/[id]">) {
         return Response.json({ error: "Unknown action" }, { status: 400 });
     }
   });
+}
+
+function cleanFlow(v: unknown): LineFlow | undefined {
+  if (!v || typeof v !== "object") return undefined;
+  const f = v as Record<string, unknown>;
+  const num = (x: unknown) => typeof x === "number" && Number.isFinite(x);
+  const nums = (x: unknown, max: number) => (Array.isArray(x) ? x.filter(num).slice(0, max) : []) as number[];
+  if (!num(f.syllables)) return undefined;
+  const times = nums(f.times, 64);
+  return {
+    syllables: Math.max(0, Math.min(64, Math.round(f.syllables as number))),
+    stress: nums(f.stress, 64).map(Math.round),
+    held: !!f.held,
+    words: typeof f.words === "string" ? f.words.slice(0, 200) : "",
+    source: f.source === "vocals" ? "vocals" : "flow",
+    times,
+    end: num(f.end) ? (f.end as number) : undefined,
+    pair: f.pair === 1 || f.pair === 2 || f.pair === 0 ? (f.pair as 0 | 1 | 2) : undefined,
+  };
 }

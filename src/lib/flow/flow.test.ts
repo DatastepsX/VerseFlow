@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { flowLines, stressPattern } from "./lines";
 import { detectSyllables } from "./syllables";
 import { dropSounds, isSound } from "./fillers";
+import { cycle, flowFromGrid, gridFor } from "./grid";
 import { emptyParts, vocalLines } from "./vocals";
 
 const SR = 16000;
@@ -165,4 +166,30 @@ test("sung sounds (pom pom para…) are not lyrics", () => {
     ["Lo", "so", "quando", "parti", "tu", "la", "notte"],
   );
   assert.ok(isSound("Pom.") && isSound("papapa") && isSound("Yeah,") && !isSound("parti") && !isSound("notte"));
+});
+
+test("flow grid: sung syllables snap to 16th notes, edits become the line's flow", () => {
+  // 120 bpm: beat 0.5 s, step 0.125 s; bar 1 from 0.5 s
+  const grid = { bpm: 120, beat_offset: 0.5, beats_per_bar: 4 };
+  const flow = { syllables: 5, stress: [1, 4], held: true, words: "", source: "flow" as const, times: [1.01, 1.26, 1.37, 1.5, 1.98], end: 2.4 };
+  const g = gridFor(flow, 1.01, grid)!;
+  assert.equal(g.start, 1, "starts on the beat the singing starts on");
+  assert.equal(g.cells.length, 16);
+  assert.deepEqual(
+    g.cells.map((c, i) => (c ? `${i}:${c}` : "")).filter(Boolean),
+    ["0:2", "2:1", "3:1", "4:2", "8:1"],
+  );
+  // tap: a new syllable on step 6, the one on step 3 removed, step 8 stressed
+  g.cells[6] = 1;
+  g.cells[3] = 0;
+  g.cells[8] = cycle(g.cells[8]);
+  const f = flowFromGrid(g, flow);
+  assert.equal(f.syllables, 5);
+  assert.deepEqual(f.times, [1, 1.25, 1.5, 1.75, 2]);
+  assert.deepEqual(f.stress, [1, 3, 5]);
+  assert.ok(f.held);
+  // an empty line: drawn from scratch where it starts
+  const empty = gridFor(null, 3.2, grid)!;
+  assert.equal(empty.start, 3);
+  assert.ok(empty.cells.every((c) => c === 0));
 });

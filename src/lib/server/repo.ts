@@ -22,7 +22,7 @@ import type {
 
 const TAKE_COLS = "id, section_id, lane, take_no, start_at, duration, sample_rate, peaks, chosen, created_at";
 const LINE_COLS = "id, project_id, section_id, position, text, status, kind, note, audio_at, flow, updated_at";
-const SNAPSHOT_FIELDS = ["text", "status", "kind", "note", "deleted"] as const;
+const SNAPSHOT_FIELDS = ["text", "status", "kind", "note", "deleted", "flow"] as const;
 
 export class NotFound extends Error {}
 
@@ -334,7 +334,7 @@ export async function appendLines(sectionId: string, items: { text: string; stat
 
 export async function updateLine(
   id: string,
-  patch: Partial<Pick<Line, "text" | "status" | "kind" | "note">>,
+  patch: Partial<Pick<Line, "text" | "status" | "kind" | "note" | "flow">>,
   action = "edit",
 ) {
   const before = await getLine(id);
