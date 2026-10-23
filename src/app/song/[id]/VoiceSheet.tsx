@@ -5,6 +5,7 @@ import { fmtTime } from "@/lib/audio/song-map";
 import { BEAT_ACCEPT, MAX_BEAT_BYTES } from "@/lib/client/beat";
 import type { StudioEngine } from "@/lib/studio/engine";
 import { encodeWav } from "@/lib/studio/wav";
+import { AudioLines, Play, Upload } from "@/components/icons";
 
 export interface VoiceInfo {
   name: string;
@@ -147,7 +148,7 @@ export function VoiceSheet({
         </p>
         {current && phase === "idle" && (
           <div className="flex items-center gap-3 rounded-2xl bg-accent-soft px-4 py-3 text-sm">
-            <span className="text-xl">🗣</span>
+            <AudioLines className="h-5 w-5 text-accent" />
             <span className="flex-1">
               <b>{current.name}</b> is ready · created {new Date(current.created_at).toLocaleDateString()}
             </span>
@@ -180,10 +181,10 @@ export function VoiceSheet({
         ) : (
           <div className="flex gap-2">
             <button className="btn-primary flex-1 justify-center rounded-2xl py-3" disabled={phase === "busy"} onClick={() => void start()}>
-              ● {take.length ? "Record again" : "Record my voice"}
+              <span className="h-2.5 w-2.5 rounded-full bg-white" /> {take.length ? "Record again" : "Record my voice"}
             </button>
             <label className="btn flex-1 cursor-pointer justify-center rounded-2xl py-3">
-              ⬆ Upload
+              <Upload className="h-4 w-4" /> Upload
               <input
                 type="file"
                 multiple
@@ -228,7 +229,7 @@ export function VoiceSheet({
                     }}
                     aria-label="Listen"
                   >
-                    ▶
+                    <Play className="h-4 w-4" />
                   </button>
                   <span className="min-w-0 flex-1 truncate">{t.label}</span>
                 </li>

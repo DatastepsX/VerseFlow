@@ -91,3 +91,10 @@ body {
     transform: translateX(300%);
   }
 }
+
+@utility no-scrollbar {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}

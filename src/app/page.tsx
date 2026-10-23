@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { ChevronRight, Mic, Music, Plus } from "@/components/icons";
 import { api } from "@/lib/client/api";
 import { BEAT_ACCEPT, MAX_BEAT_BYTES, uploadBeat } from "@/lib/client/beat";
 import { LANGUAGES, PROJECT_TYPES, type Project, type ProjectType } from "@/lib/types";
@@ -88,7 +89,7 @@ export default function Home() {
           className="flex flex-col items-center gap-2 rounded-2xl border-2 border-dashed border-line px-6 py-12 text-center"
           onClick={() => setSheet(true)}
         >
-          <span className="text-4xl">🎵</span>
+          <span className="flex h-14 w-14 items-center justify-center rounded-full bg-accent text-white shadow-lg shadow-accent/30"><Music className="h-7 w-7" /></span>
           <span className="font-semibold">Start your first song</span>
           <span className="text-sm text-muted">Upload a beat, sing or rap over it, and get lyrics that fit your flow.</span>
         </button>
@@ -96,15 +97,15 @@ export default function Home() {
       <ul className="space-y-2.5">
         {projects?.map((p) => (
           <li key={p.id}>
-            <Link href={`/song/${p.id}`} className="flex items-center gap-3 rounded-2xl border border-line bg-panel px-4 py-3.5 shadow-sm active:scale-[0.99]">
-              <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-accent-soft text-xl">🎤</span>
+            <Link href={`/song/${p.id}`} className="flex items-center gap-3 rounded-3xl bg-panel px-4 py-3.5 shadow-[0_1px_2px_rgba(0,0,0,0.04)] ring-1 ring-line/70 active:scale-[0.99]">
+              <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-accent-soft text-accent"><Mic className="h-5 w-5" /></span>
               <span className="min-w-0 flex-1">
                 <span className="block truncate font-semibold">{p.title}</span>
                 <span className="text-xs text-muted">
                   {PROJECT_TYPES.find((t) => t.value === p.type)?.label} · {p.language.toUpperCase()} · {new Date(p.updated_at).toLocaleDateString()}
                 </span>
               </span>
-              <span className="text-muted">›</span>
+              <ChevronRight className="h-4 w-4 text-muted" />
             </Link>
           </li>
         ))}
@@ -112,10 +113,10 @@ export default function Home() {
 
       {/* new song */}
       <button
-        className="fixed bottom-[max(1.25rem,env(safe-area-inset-bottom))] left-1/2 z-20 -translate-x-1/2 rounded-full bg-accent px-7 py-4 text-base font-bold text-white shadow-xl active:scale-95"
+        className="fixed bottom-[max(1.25rem,env(safe-area-inset-bottom))] left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 rounded-full bg-accent px-6 py-3.5 text-base font-bold text-white shadow-xl shadow-accent/30 active:scale-95"
         onClick={() => setSheet(true)}
       >
-        ＋ New song
+        <Plus className="h-5 w-5" /> New song
       </button>
 
       {sheet && (
@@ -129,7 +130,7 @@ export default function Home() {
             <h2 className="text-xl font-bold">New song</h2>
 
             <label className="flex cursor-pointer items-center gap-3 rounded-2xl border-2 border-dashed border-accent/50 bg-accent-soft/40 px-4 py-4">
-              <span className="text-3xl">🎵</span>
+              <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-accent text-white"><Music className="h-5 w-5" /></span>
               <span className="min-w-0 flex-1">
                 <span className="block font-semibold">{beat ? beat.name : "Choose your beat"}</span>
                 <span className="text-xs text-muted">

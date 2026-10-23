@@ -15,6 +15,29 @@ import { LANGUAGES, type Line, type ProjectTree } from "@/lib/types";
 import { followTo } from "@/components/writer/follow";
 import { download, fullText } from "@/components/writer/util";
 import { VoiceSheet, type VoiceInfo } from "./VoiceSheet";
+import {
+  AudioLines,
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  Copy,
+  Download,
+  Ellipsis,
+  Headphones,
+  Lyrics,
+  Mic,
+  Music,
+  Pause,
+  Pencil,
+  Phone,
+  Play,
+  Plus,
+  Shuffle,
+  Sliders,
+  Sparkles,
+  Trash,
+  User,
+} from "@/components/icons";
 
 type View = "flow" | "lyrics" | "more";
 type LyricLine = Line & { alternatives: ProjectTree["sections"][number]["lines"][number]["alternatives"] };
@@ -351,6 +374,40 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
     window.scrollTo(0, 0);
   };
 
+  // ---------- the parts bar: where you are, tap to jump ----------
+  const [activePart, setActivePart] = useState<string | null>(null);
+  const partsRow = useRef<HTMLDivElement | null>(null);
+  const liveSection = live ? (tree.sections.find((s) => s.lines.some((l) => l.id === live))?.id ?? null) : null;
+  // while scrolling: the part at the top of the screen
+  useEffect(() => {
+    if (view !== "lyrics") return;
+    const els = [...document.querySelectorAll<HTMLElement>("[data-part-section]")];
+    if (!els.length) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        const top = entries.filter((e) => e.isIntersecting).sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)[0];
+        if (top) setActivePart((top.target as HTMLElement).dataset.partSection ?? null);
+      },
+      { rootMargin: "-170px 0px -55% 0px" },
+    );
+    els.forEach((el) => io.observe(el));
+    return () => io.disconnect();
+  }, [view, tree.sections.length, hasLines]);
+  // while playing: the part being sung
+  const shownPart = playing && liveSection ? liveSection : activePart;
+  useEffect(() => {
+    const row = partsRow.current;
+    const chip = row?.querySelector<HTMLElement>(`[data-part="${shownPart}"]`);
+    if (row && chip) row.scrollTo({ left: chip.offsetLeft - row.clientWidth / 2 + chip.clientWidth / 2, behavior: "smooth" });
+  }, [shownPart]);
+  const goPart = (s: ProjectTree["sections"][number]) => {
+    document.getElementById(`part-${s.id}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    setActivePart(s.id);
+    const start = partRange(s).start;
+    setNow(start);
+    if (playing) void play(Math.max(0, start - 0.3));
+  };
+
   // ---------- line actions ----------
   const [busyLine, setBusyLine] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
@@ -376,32 +433,33 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
   return (
     <div className="mx-auto flex min-h-dvh w-full max-w-lg flex-col bg-bg">
       {/* top bar */}
-      <header className="sticky top-0 z-20 border-b border-line bg-bg/95 px-4 pb-2 pt-[max(0.75rem,env(safe-area-inset-top))] backdrop-blur">
-        <div className="flex items-center gap-2">
-          <Link href="/" className="-ml-1 px-1 text-xl text-muted" aria-label="Back">
-            ‹
+      <header className="sticky top-0 z-20 border-b border-line/70 bg-bg/90 pt-[max(0.75rem,env(safe-area-inset-top))] backdrop-blur-xl">
+        <div className="flex items-center gap-2 px-3">
+          <Link href="/" className="flex h-9 w-9 items-center justify-center rounded-full text-muted active:bg-panel-2" aria-label="Back">
+            <ChevronLeft className="h-6 w-6" />
           </Link>
-          <h1 className="min-w-0 flex-1 truncate text-lg font-bold">{tree.project.title}</h1>
+          <h1 className="min-w-0 flex-1 truncate text-[17px] font-bold tracking-tight">{tree.project.title}</h1>
           {view === "lyrics" && hasLines && (
-            <span className="shrink-0 rounded-full bg-panel-2 px-2.5 py-1 text-xs font-medium text-muted">
-              ✓ {kept}/{lyricLines.length}
+            <span className="flex shrink-0 items-center gap-1 rounded-full bg-panel-2 px-2.5 py-1 text-xs font-semibold text-muted" title="Lines kept">
+              <Check className="h-3.5 w-3.5" />
+              {kept}/{lyricLines.length}
             </span>
           )}
         </div>
         {/* player */}
         {view === "lyrics" && tree.audio && (
-          <div className="mt-2 flex items-center gap-2">
+          <div className="mt-2 flex items-center gap-2.5 px-4">
             <button
-              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-accent text-lg text-white disabled:opacity-40"
+              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-accent text-white shadow-md shadow-accent/30 active:scale-95 disabled:opacity-40"
               disabled={!beatReady}
               onClick={() => (playing ? stopPlay() : void play(now >= total - 1 ? 0 : now))}
               aria-label={playing ? "Pause" : "Play"}
             >
-              {playing ? "❚❚" : "▶"}
+              {playing ? <Pause className="h-5 w-5" /> : <Play className="ml-0.5 h-5 w-5" />}
             </button>
             <div className="min-w-0 flex-1">
               <div
-                className="relative h-2 cursor-pointer overflow-hidden rounded-full bg-panel-2"
+                className="relative h-1.5 cursor-pointer rounded-full bg-panel-2"
                 onClick={(ev) => {
                   const r = (ev.currentTarget as HTMLElement).getBoundingClientRect();
                   const t = ((ev.clientX - r.left) / r.width) * total;
@@ -409,37 +467,76 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
                   if (playing) void play(t);
                 }}
               >
+                {/* where the parts start */}
+                {total > 0 &&
+                  tree.sections.map((s) => {
+                    const at = s.audio_start;
+                    return at && at > 0 ? <span key={s.id} className="absolute -top-0.5 h-2.5 w-px bg-muted/40" style={{ left: `${(at / total) * 100}%` }} /> : null;
+                  })}
                 <div className="absolute inset-y-0 left-0 rounded-full bg-accent" style={{ width: `${total ? (now / total) * 100 : 0}%` }} />
               </div>
-              <div className="mt-0.5 flex justify-between font-mono text-[11px] text-muted">
+              <div className="mt-1 flex justify-between font-mono text-[11px] tabular-nums text-muted">
                 <span>{fmtTime(now)}</span>
                 <span>{fmtTime(total)}</span>
               </div>
             </div>
             {flowTakes.length > 0 && !withGuide && (
               <button
-                className={`shrink-0 rounded-full px-2.5 py-1.5 text-xs font-semibold ${withFlow ? "bg-accent-soft text-accent" : "bg-panel-2 text-muted"}`}
+                className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${withFlow ? "bg-accent-soft text-accent" : "bg-panel-2 text-muted"}`}
                 onClick={() => setWithFlow((v) => !v)}
-                title="Hear your recorded flow with the beat"
+                aria-pressed={withFlow}
+                title={withFlow ? "Your recorded flow plays with the beat (tap to mute)" : "Your recorded flow is muted (tap to hear it)"}
               >
-                🎤 {withFlow ? "on" : "off"}
+                <Mic className="h-[18px] w-[18px]" />
               </button>
             )}
             {hasLines && (
               <button
-                className={`shrink-0 rounded-full px-2.5 py-1.5 text-xs font-semibold ${withGuide ? "bg-accent text-white" : "bg-panel-2 text-muted"}`}
+                className={`relative flex h-9 shrink-0 items-center justify-center gap-1 rounded-full px-2.5 text-xs font-semibold ${withGuide ? "bg-accent text-white" : "bg-panel-2 text-muted"}`}
                 onClick={() => {
                   if (!voice) return setVoiceSheet(true);
                   if (playing) stopPlay();
                   setWithGuide((v) => !v);
                 }}
+                aria-pressed={withGuide}
                 title="Hear the lyrics rapped in your voice, on your flow"
               >
-                {guideBusy === "all" ? <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-white border-r-transparent" /> : "🗣"}{" "}
-                {withGuide ? "on" : "off"}
-                {withGuide && unspoken.length > 0 && guideBusy !== "all" && <span className="ml-1 font-normal opacity-80">· {unspoken.length} calls</span>}
+                {guideBusy === "all" ? (
+                  <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white border-r-transparent" />
+                ) : (
+                  <AudioLines className="h-[18px] w-[18px]" />
+                )}
+                {withGuide && unspoken.length > 0 && guideBusy !== "all" && <span className="font-normal opacity-80">{unspoken.length} calls</span>}
               </button>
             )}
+          </div>
+        )}
+        {/* the parts: tap to jump there */}
+        {view === "lyrics" && hasLines && tree.sections.length > 1 && (
+          <div ref={partsRow} className="no-scrollbar mt-2 flex gap-1.5 overflow-x-auto px-4 pb-2.5">
+            {tree.sections
+              .filter((s) => s.lines.some((l) => l.kind === "lyric"))
+              .map((s) => {
+                const active = shownPart === s.id;
+                const empty = isEmptyPart(s);
+                const lyric = s.lines.filter((l) => l.kind === "lyric");
+                const done = lyric.length > 0 && lyric.every((l) => l.status === "APPROVED" || l.status === "APPROVED_EDITED");
+                return (
+                  <button
+                    key={s.id}
+                    data-part={s.id}
+                    onClick={() => goPart(s)}
+                    className={`flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-[13px] font-semibold transition-colors ${
+                      active ? "bg-fg text-bg" : empty ? "border border-dashed border-accent/50 text-accent" : "bg-panel-2 text-fg/80"
+                    }`}
+                  >
+                    {done && <Check className="h-3.5 w-3.5" />}
+                    {empty && <Plus className="h-3.5 w-3.5" />}
+                    {s.name}
+                    <span className={`font-mono text-[11px] font-normal ${active ? "opacity-70" : "text-muted"}`}>{fmtTime(partRange(s).start)}</span>
+                  </button>
+                );
+              })}
           </div>
         )}
       </header>
@@ -487,19 +584,19 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
                   </p>
                 )}
                 <ol className="mt-5 w-full space-y-2 text-left text-sm">
-                  <li className="flex gap-3 rounded-2xl bg-panel px-4 py-3">
-                    <span>🎧</span>
+                  <li className="flex items-center gap-3 rounded-2xl bg-panel px-4 py-3">
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent"><Headphones className="h-4 w-4" /></span>
                     <span>Put on headphones (wired is best) so the mic only hears you.</span>
                   </li>
-                  <li className="flex gap-3 rounded-2xl bg-panel px-4 py-3">
-                    <span>🎤</span>
+                  <li className="flex items-center gap-3 rounded-2xl bg-panel px-4 py-3">
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent"><Mic className="h-4 w-4" /></span>
                     <span>{part ? "Tap record and flow over the part — it stops by itself at the part's end." : "Tap record and flow over the whole beat — stop whenever you like."}</span>
                   </li>
-                  <li className="flex gap-3 rounded-2xl bg-panel px-4 py-3">
-                    <span>✨</span>
+                  <li className="flex items-center gap-3 rounded-2xl bg-panel px-4 py-3">
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent"><Sparkles className="h-4 w-4" /></span>
                     <span>
                       {part ? "You get this part's lines with 3 options for every bar." : "You get a first version of the song with 3 options for every bar."}
-                      <span className="block text-xs text-muted">· 1 word recognition + 1 AI call per 8 bars</span>
+                      <span className="block text-xs text-muted">1 word recognition + 1 AI call per 8 bars</span>
                     </span>
                   </li>
                 </ol>
@@ -519,19 +616,24 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
                 <p className="mt-3 text-sm font-semibold">{beatReady ? "Tap to start" : "Loading the beat…"}</p>
                 {!part && (
                 <button className="mt-8 flex w-full items-center gap-3 rounded-2xl border border-line bg-panel px-4 py-3.5 text-left" onClick={() => void readVocals()}>
-                  <span className="text-2xl">🎙</span>
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-panel-2 text-muted">
+                    <Lyrics className="h-[18px] w-[18px]" />
+                  </span>
                   <span className="min-w-0 flex-1">
                     <span className="block text-sm font-semibold">Read the lyrics from the track</span>
                     <span className="block text-xs text-muted">Done automatically when you upload — tap if vocals were missed · 1 AI call per 8 lines</span>
                   </span>
-                  <span className="text-muted">›</span>
+                  <ChevronRight className="h-4 w-4 text-muted" />
                 </button>
                 )}
               </>
             )}
             {rec === "recording" && (
               <>
-                <p className="text-sm font-semibold uppercase tracking-widest text-[#dc2626]">● Recording your flow</p>
+                <p className="flex items-center gap-2 text-sm font-semibold uppercase tracking-widest text-[#dc2626]">
+                  <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-[#dc2626]" />
+                  Recording your flow
+                </p>
                 <p className="mt-2 font-mono text-4xl font-bold tabular-nums">{fmtTime(Math.max(0, now))}</p>
                 <p className="text-sm text-muted">{part ? `${part.name} ends at ${fmtTime(part.end)}` : `of ${fmtTime(total)}`}</p>
                 <div className="mt-6 h-2 w-full overflow-hidden rounded-full bg-panel-2">
@@ -546,7 +648,7 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
                     />
                   ))}
                 </div>
-                <p className="mt-2 text-xs text-muted">{level < 0.02 ? "Not hearing you yet — sing or rap!" : "Hearing you ✓"}</p>
+                <p className="mt-2 text-xs text-muted">{level < 0.02 ? "Not hearing you yet — sing or rap!" : "Hearing you"}</p>
                 <button
                   className="mt-8 flex h-28 w-28 items-center justify-center rounded-full bg-[#1f1f24] text-white shadow-xl active:scale-95"
                   onClick={() => void stopFlow()}
@@ -567,7 +669,13 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
                     return (
                       <li key={s.key} className={`flex items-center gap-3 rounded-2xl px-4 py-3 ${state === "now" ? "bg-accent-soft" : "bg-panel"}`}>
                         <span className="w-5 text-center">
-                          {state === "done" ? "✓" : state === "now" ? <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-accent border-r-transparent" /> : "·"}
+                          {state === "done" ? (
+                            <Check className="h-4 w-4 text-ok" />
+                          ) : state === "now" ? (
+                            <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-accent border-r-transparent" />
+                          ) : (
+                            <span className="inline-block h-1.5 w-1.5 rounded-full bg-muted/50" />
+                          )}
                         </span>
                         <span className={state === "todo" ? "text-muted" : "font-medium"}>
                           {s.label}
@@ -588,7 +696,7 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
           <div className="mt-10 text-center">
             <p className="text-muted">No lyrics yet.</p>
             <button className="btn-primary mt-4 rounded-full px-5 py-2.5" onClick={() => setView("flow")}>
-              🎤 Record your flow
+              <Mic className="h-4 w-4" /> Record your flow
             </button>
           </div>
         )}
@@ -596,7 +704,7 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
           <div className="space-y-6">
             {missing.length > 0 && (
               <button
-                className="w-full rounded-2xl bg-accent-soft px-4 py-3 text-sm font-semibold text-accent disabled:opacity-50"
+                className="flex w-full items-center justify-center gap-2 rounded-2xl bg-accent-soft px-4 py-3 text-sm font-semibold text-accent disabled:opacity-50"
                 disabled={busyLine === "missing"}
                 onClick={() =>
                   void lineAction("missing", async () => {
@@ -604,9 +712,10 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
                   })
                 }
               >
+                <Sparkles className="h-4 w-4" />
                 {busyLine === "missing"
                   ? "Writing…"
-                  : `✨ Write the ${missing.length} empty line${missing.length === 1 ? "" : "s"} · ${missingCalls} call${missingCalls === 1 ? "" : "s"}`}
+                  : `Write the ${missing.length} empty line${missing.length === 1 ? "" : "s"} · ${missingCalls} call${missingCalls === 1 ? "" : "s"}`}
               </button>
             )}
             {tree.sections.map((s) => {
@@ -616,27 +725,28 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
                 const r = partRange(s);
                 const calls = chunkLines(lines).length;
                 return (
-                  <section key={s.id}>
-                    <h3 className="mb-2 px-1 text-xs font-bold uppercase tracking-widest text-muted">
-                      {s.name} <span className="font-medium normal-case tracking-normal">· no vocals yet</span>
+                  <section key={s.id} id={`part-${s.id}`} data-part-section={s.id} className="scroll-mt-44">
+                    <h3 className="mb-2 flex items-baseline gap-2 px-1">
+                      <span className="text-lg font-bold tracking-tight">{s.name}</span>
+                      <span className="text-xs text-muted">no vocals yet</span>
                     </h3>
-                    <div className="space-y-2.5 rounded-2xl border-2 border-dashed border-accent/40 bg-accent-soft/30 px-4 py-4">
+                    <div className="space-y-2.5 rounded-3xl border border-dashed border-accent/40 bg-accent-soft/30 p-4">
                       <p className="text-sm">
                         <b>{lines.length} lines to write</b>
-                        <span className="text-muted">
+                        <span className="font-mono text-xs text-muted">
                           {" "}
                           · {fmtTime(r.start)} – {fmtTime(r.end)}
                         </span>
                       </p>
-                      <button className="btn-primary w-full justify-center rounded-xl py-3" onClick={() => recordPart(s)}>
-                        🎤 Record your flow for this part
+                      <button className="btn-primary w-full justify-center rounded-2xl py-3 text-[15px]" onClick={() => recordPart(s)}>
+                        <Mic className="h-[18px] w-[18px]" /> Record your flow for this part
                       </button>
                       <div className="flex gap-2">
-                        <button className="btn flex-1 justify-center rounded-xl py-2.5 text-sm" disabled={!beatReady} onClick={() => void play(Math.max(0, r.start - bar), r.end)}>
-                          ▶ Listen
+                        <button className="btn flex-1 justify-center rounded-2xl border-0 py-2.5 text-sm" disabled={!beatReady} onClick={() => void play(Math.max(0, r.start - bar), r.end)}>
+                          <Play className="h-4 w-4" /> Listen
                         </button>
                         <button
-                          className="btn flex-1 justify-center rounded-xl py-2.5 text-sm disabled:opacity-50"
+                          className="btn flex-1 justify-center rounded-2xl border-0 py-2.5 text-sm disabled:opacity-50"
                           disabled={busyLine === s.id}
                           onClick={() =>
                             void lineAction(s.id, async () => {
@@ -645,7 +755,8 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
                           }
                           title="Write the lines without a flow (free rhythm, fitting the song around them)"
                         >
-                          {busyLine === s.id ? "Writing…" : `✨ Write them · ${calls} call${calls === 1 ? "" : "s"}`}
+                          <Sparkles className="h-4 w-4" />
+                          {busyLine === s.id ? "Writing…" : `Write · ${calls} call${calls === 1 ? "" : "s"}`}
                         </button>
                       </div>
                     </div>
@@ -653,23 +764,23 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
                 );
               }
               return (
-                <section key={s.id}>
-                  <h3 className="mb-2 flex items-center px-1 text-xs font-bold uppercase tracking-widest text-muted">
-                    <span className="flex-1">{s.name}</span>
+                <section key={s.id} id={`part-${s.id}`} data-part-section={s.id} className="scroll-mt-44">
+                  <h3 className="mb-2 flex items-center gap-2 px-1">
+                    <span className="text-lg font-bold tracking-tight">{s.name}</span>
+                    <span className="flex-1 font-mono text-xs text-muted">{fmtTime(partRange(s).start)}</span>
                     {tree.audio && (
-                      <button className="rounded-full px-2 py-0.5 font-semibold normal-case tracking-normal text-accent" onClick={() => recordPart(s)} title="Record a new flow for this part only">
-                        🎤 new flow
+                      <button
+                        className="flex items-center gap-1 rounded-full bg-panel-2 px-2.5 py-1 text-xs font-semibold text-accent"
+                        onClick={() => recordPart(s)}
+                        title="Record a new flow for this part only"
+                      >
+                        <Mic className="h-3.5 w-3.5" /> New flow
                       </button>
                     )}
                   </h3>
                   <div className="space-y-3">
                     {couplets(lines).map((group) => (
-                      <div key={group[0].id} className={group.length > 1 ? "relative space-y-1.5 border-l-2 border-accent/40 pl-2" : ""}>
-                        {group.length > 1 && (
-                          <span className="absolute -left-[9px] top-1/2 -translate-y-1/2 rounded-full bg-bg px-0.5 text-[10px] leading-none text-accent" title="These two lines rhyme">
-                            ♪
-                          </span>
-                        )}
+                      <div key={group[0].id} className={group.length > 1 ? "space-y-1.5 border-l-2 border-accent/30 pl-2" : ""} title={group.length > 1 ? "These two lines rhyme" : undefined}>
                         {group.map((l) => (
                           <LineCard
                             key={l.id}
@@ -756,24 +867,26 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
       )}
 
       {/* tab bar */}
-      <nav className="fixed inset-x-0 bottom-0 z-30 mx-auto flex max-w-lg border-t border-line bg-panel/95 pb-[env(safe-area-inset-bottom)] backdrop-blur">
+      <nav className="fixed inset-x-0 bottom-0 z-30 mx-auto flex max-w-lg border-t border-line/70 bg-panel/90 px-2 pb-[env(safe-area-inset-bottom)] backdrop-blur-xl">
         {(
           [
-            ["flow", "🎤", "Flow"],
-            ["lyrics", "📝", "Lyrics"],
-            ["more", "⋯", "More"],
-          ] as [View, string, string][]
-        ).map(([v, icon, label]) => (
+            ["flow", Mic, "Flow"],
+            ["lyrics", Lyrics, "Lyrics"],
+            ["more", Ellipsis, "More"],
+          ] as const
+        ).map(([v, Icon, label]) => (
           <button
             key={v}
             disabled={rec !== null}
-            className={`flex flex-1 flex-col items-center gap-0.5 py-2.5 text-xs font-medium ${view === v ? "text-accent" : "text-muted"}`}
+            className={`flex flex-1 flex-col items-center gap-1 pb-2 pt-2.5 text-[11px] font-semibold transition-colors ${view === v ? "text-accent" : "text-muted"}`}
             onClick={() => {
               if (playing) stopPlay();
               setView(v);
             }}
           >
-            <span className="text-xl leading-none">{icon}</span>
+            <span className={`flex h-7 w-12 items-center justify-center rounded-full transition-colors ${view === v ? "bg-accent-soft" : ""}`}>
+              <Icon className="h-[22px] w-[22px]" />
+            </span>
             {label}
           </button>
         ))}
@@ -812,7 +925,9 @@ function LineCard(props: {
   return (
     <div
       id={`line-${l.id}`}
-      className={`rounded-2xl border px-3.5 py-3 transition-colors ${props.live ? "border-accent bg-accent-soft" : kept ? "border-ok/40 bg-panel" : "border-line bg-panel"}`}
+      className={`rounded-3xl px-4 py-3.5 shadow-[0_1px_2px_rgba(0,0,0,0.04)] ring-1 transition-colors ${
+        props.live ? "bg-accent-soft ring-accent" : kept ? "bg-panel ring-ok/40" : "bg-panel ring-line/70"
+      }`}
     >
       {props.editing ? (
         <div className="space-y-2">
@@ -847,7 +962,9 @@ function LineCard(props: {
             )}
             {l.flow?.source === "vocals" ? (
               l.text.trim() === l.flow.words.trim() ? (
-                <span className="font-semibold text-accent">· 🎙 your recording</span>
+                <span className="flex items-center gap-1 font-semibold text-accent">
+                  · <Mic className="h-3 w-3" /> your recording
+                </span>
               ) : (
                 <span className="min-w-0 truncate">· recorded “{l.flow.words}”</span>
               )
@@ -861,46 +978,56 @@ function LineCard(props: {
                 onClick={props.onVoice}
                 title="Hear this line rapped in your voice, on your flow"
               >
-                {props.voiceBusy ? <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-accent border-r-transparent" /> : "🗣"} Hear
+                {props.voiceBusy ? (
+                  <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-accent border-r-transparent" />
+                ) : (
+                  <AudioLines className="h-3.5 w-3.5" />
+                )}{" "}
+                Hear
                 {props.voiceLabel && <span className="font-normal text-muted">· {props.voiceLabel}</span>}
               </button>
             )}
           </div>
-          <div className="mt-2 flex items-center gap-1.5">
+          <div className="mt-3 flex items-center gap-1.5">
             <button
-              className={`flex h-10 flex-1 items-center justify-center rounded-xl text-sm font-semibold ${kept ? "bg-ok text-white" : "bg-panel-2 text-ok"}`}
+              className={`flex h-10 flex-[1.4] items-center justify-center gap-1.5 rounded-2xl text-sm font-semibold transition-colors ${kept ? "bg-ok text-white" : "bg-ok-soft text-ok"}`}
               disabled={props.busy || !l.text.trim()}
               onClick={props.onKeep}
             >
-              ✓ {kept ? "Kept" : "Keep"}
+              <Check className="h-4 w-4" />
+              {kept ? "Kept" : "Keep"}
             </button>
             <button
-              className="flex h-10 flex-1 items-center justify-center rounded-xl bg-panel-2 text-sm font-semibold text-accent disabled:opacity-40"
+              className="flex h-10 flex-1 items-center justify-center gap-1.5 rounded-2xl bg-panel-2 text-sm font-semibold text-fg/80 disabled:opacity-40"
               disabled={props.busy || l.alternatives.length === 0}
               onClick={props.onNext}
               title="Next option (free)"
+              aria-label="Next option"
             >
-              ↻ {l.alternatives.length || ""}
+              <Shuffle className="h-4 w-4" />
+              {l.alternatives.length || ""}
             </button>
             <button
-              className="flex h-10 flex-1 items-center justify-center rounded-xl bg-panel-2 text-sm font-semibold disabled:opacity-40"
+              className="flex h-10 flex-1 items-center justify-center gap-1 rounded-2xl bg-panel-2 text-sm font-semibold text-accent disabled:opacity-40"
               disabled={props.busy}
               onClick={props.onNew}
               title="3 new options for this bar (1 AI call)"
+              aria-label="3 new options, 1 call"
             >
               {props.busy ? (
                 <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-accent border-r-transparent" />
               ) : (
                 <>
-                  ✨<span className="ml-1 text-[10px] font-medium text-muted">1 call</span>
+                  <Sparkles className="h-4 w-4" />
+                  <span className="text-[10px] font-medium text-muted">1 call</span>
                 </>
               )}
             </button>
-            <button className="flex h-10 w-10 items-center justify-center rounded-xl bg-panel-2 text-sm" onClick={props.onEdit} aria-label="Edit">
-              ✎
+            <button className="flex h-10 w-10 items-center justify-center rounded-2xl bg-panel-2 text-fg/70" onClick={props.onEdit} aria-label="Edit">
+              <Pencil className="h-4 w-4" />
             </button>
-            <button className="flex h-10 w-10 items-center justify-center rounded-xl bg-panel-2 text-sm text-bad" onClick={props.onRemove} aria-label="Remove">
-              🗑
+            <button className="flex h-10 w-10 items-center justify-center rounded-2xl bg-panel-2 text-bad/80" onClick={props.onRemove} aria-label="Remove">
+              <Trash className="h-4 w-4" />
             </button>
           </div>
         </>
@@ -958,7 +1085,7 @@ function BeatUpload({ pid, onDone }: { pid: string; onDone: (t: ProjectTree) => 
       <h2 className="text-2xl font-extrabold">Upload your beat</h2>
       <p className="mt-2 text-sm text-muted">The beat you want to write lyrics for.</p>
       <label className="mt-6 flex w-full cursor-pointer flex-col items-center gap-2 rounded-2xl border-2 border-dashed border-accent/50 bg-accent-soft/40 px-4 py-10">
-        <span className="text-4xl">🎵</span>
+        <span className="flex h-14 w-14 items-center justify-center rounded-full bg-accent text-white"><Music className="h-7 w-7" /></span>
         <span className="font-semibold">{status ?? "Choose an audio file"}</span>
         <span className="text-xs text-muted">MP3 or any audio file, up to 50 MB</span>
         <input
@@ -1012,7 +1139,7 @@ function MoreView({
   const [copied, setCopied] = useState(false);
   const text = fullText(tree);
   const slug = tree.project.title.replace(/[^\p{L}\p{N}]+/gu, "-").toLowerCase() || "lyrics";
-  const row = "flex w-full items-center gap-3 rounded-2xl bg-panel px-4 py-3.5 text-left";
+  const row = "flex w-full items-center gap-3 rounded-2xl bg-panel px-4 py-3 text-left ring-1 ring-line/60";
   return (
     <div className="space-y-5">
       <div className="space-y-2">
@@ -1041,53 +1168,53 @@ function MoreView({
             setTimeout(() => setCopied(false), 1500);
           }}
         >
-          <span>📋</span>
-          <span className="flex-1">{copied ? "Copied ✓" : "Copy the lyrics"}</span>
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-panel-2 "><Copy className="h-[18px] w-[18px]" /></span>
+          <span className="flex-1">{copied ? "Copied" : "Copy the lyrics"}</span>
         </button>
         <button className={row} disabled={!text} onClick={() => download(`${slug}.txt`, `${tree.project.title}\n\n${text}`)}>
-          <span>⬇️</span>
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-panel-2 "><Download className="h-[18px] w-[18px]" /></span>
           <span className="flex-1">Download the lyrics (.txt)</span>
         </button>
       </div>
       <button className={row} onClick={onVoice}>
-        <span>🗣</span>
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-panel-2 text-accent"><User className="h-[18px] w-[18px]" /></span>
         <span className="flex-1">
           My voice
           <span className="block text-xs text-muted">
             {voice ? `${voice.name} · raps your lyrics on your flow` : "Record a minute of your voice once — it raps your lyrics on your flow"}
           </span>
         </span>
-        <span className="text-muted">›</span>
+        <ChevronRight className="h-4 w-4 text-muted" />
       </button>
       <div className="space-y-2">
         <p className="label">Advanced</p>
         <Link href={`/p/${pid}`} className={row}>
-          <span>✍️</span>
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-panel-2 "><Pencil className="h-[18px] w-[18px]" /></span>
           <span className="flex-1">
             Full editor
             <span className="block text-xs text-muted">sections, rhymes, patterns, performers, history</span>
           </span>
-          <span className="text-muted">›</span>
+          <ChevronRight className="h-4 w-4 text-muted" />
         </Link>
         <Link href={`/p/${pid}/studio`} className={row}>
-          <span>🎚</span>
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-panel-2 "><Sliders className="h-[18px] w-[18px]" /></span>
           <span className="flex-1">
             Studio
             <span className="block text-xs text-muted">record vocal takes on a Mac with your sound card</span>
           </span>
-          <span className="text-muted">›</span>
+          <ChevronRight className="h-4 w-4 text-muted" />
         </Link>
         <Link href={`/p/${pid}/remote`} className={row}>
-          <span>📱</span>
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-panel-2 "><Phone className="h-[18px] w-[18px]" /></span>
           <span className="flex-1">
             Remote
             <span className="block text-xs text-muted">control the Studio on your Mac from this phone</span>
           </span>
-          <span className="text-muted">›</span>
+          <ChevronRight className="h-4 w-4 text-muted" />
         </Link>
       </div>
       <button className={`${row} text-bad`} onClick={onDelete}>
-        <span>🗑</span>
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-panel-2 text-bad"><Trash className="h-[18px] w-[18px]" /></span>
         <span className="flex-1">Delete this song</span>
       </button>
     </div>
