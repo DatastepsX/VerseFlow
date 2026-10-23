@@ -36,11 +36,11 @@ test("syllables of a flow are found with their stress and held notes", () => {
   assert.ok(syl[7].dur >= 0.35 && syl[0].dur < 0.3);
 });
 
-test("flow lines follow the bars and take over the recognised words", () => {
+test("flow lines follow the sung phrases and take over the recognised words", () => {
   const grid = { bpm: 120, beat_offset: 0, beats_per_bar: 4 }; // 2 s bars
   const syl = [
     ...[0.1, 0.35, 0.6, 0.85, 1.1, 1.35].map((t, i) => ({ t, strength: i % 3 === 1 ? 1 : 0.5, dur: 0.15 })),
-    // bar 2 starts with a pickup just before the bar line
+    // a pause, then the next phrase (a pickup just before bar 2)
     ...[1.9, 2.2, 2.5, 2.8, 3.1].map((t, i) => ({ t, strength: i === 4 ? 1 : 0.6, dur: i === 4 ? 0.5 : 0.15 })),
   ];
   const words = [
@@ -50,9 +50,9 @@ test("flow lines follow the bars and take over the recognised words", () => {
   const lines = flowLines(syl, words, grid, { lang: "it", duration: 6 });
   assert.equal(lines.length, 2);
   assert.equal(lines[0].words, "amore mio");
-  assert.equal(lines[0].start, 0);
-  assert.equal(lines[1].start, 2);
-  assert.equal(lines[1].syllables, 5); // the pickup at 1.9 s belongs to bar 2
+  assert.equal(lines[0].start, 0.1);
+  assert.equal(lines[1].start, 1.9);
+  assert.equal(lines[1].syllables, 5); // the pickup at 1.9 s starts the 2nd phrase
   assert.ok(lines[1].held);
   assert.equal(stressPattern({ syllables: 4, stress: [2, 4], held: true }), "da-DUM-da-DUM~");
 });
@@ -134,4 +134,21 @@ test("parts without vocals become empty parts to write later", () => {
   assert.equal(parts[0].start, 12.5, "on the first bar line after the singing (+ half a bar)");
   assert.equal(parts[0].slots.length, 8, "one line per bar, an even number");
   assert.deepEqual(parts[0].slots.slice(0, 2), [12.5, 14.5]);
+});
+
+test("na-na flows: the pauses break the lines, not the bars (“Pam Pam Pa-ra Pa-Pa-Pam” twice per bar)", () => {
+  // 88 bpm: bar ≈ 2.73 s; the phrase (7 syllables, ~1.3 s) twice per bar with a ~0.45 s pause, the last one held
+  const phrase = [0, 0.22, 0.42, 0.6, 0.78, 0.92, 1.05];
+  const ev = [0.4, 2.2, 4.0, 5.8].flatMap((at) =>
+    phrase.map((t, i) => ({ t: at + t, dur: i === 6 ? 0.3 : 0.1, amp: [0, 1, 2, 6].includes(i) ? 0.5 : 0.25 })),
+  );
+  const syl = detectSyllables(voice(ev, 7.8), SR);
+  assert.equal(syl.length, 28, JSON.stringify(syl.map((s) => s.t)));
+  const lines = flowLines(syl, [], { bpm: 88, beat_offset: 0.4, beats_per_bar: 4 }, { lang: "it", duration: 7.8 });
+  assert.deepEqual(
+    lines.map((l) => l.syllables),
+    [7, 7, 7, 7],
+  );
+  assert.ok(Math.abs(lines[1].start - 2.2) < 0.06);
+  assert.deepEqual(lines[0].stress, [1, 2, 3, 7]);
 });

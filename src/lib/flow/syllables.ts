@@ -80,7 +80,7 @@ export function detectSyllables(samples: Float32Array, sampleRate: number): Syll
     peaks.push({ f, v });
     valley = v;
   }
-  return peaks.map((p, i) => {
+  const found = peaks.map((p, i) => {
     // the syllable starts where its energy rises through half of the peak (its onset, what lands on the beat)
     const prev = peaks[i - 1]?.f ?? -1;
     let o = p.f;
@@ -93,5 +93,14 @@ export function detectSyllables(samples: Float32Array, sampleRate: number): Syll
     let around = 0;
     for (const q of peaks) if (Math.abs(q.f - p.f) <= 100) around = Math.max(around, q.v);
     return { t: Math.round(o * FRAME * 1000) / 1000, strength: Math.round((p.v / (around || p.v)) * 100) / 100, dur: Math.round((e - o) * FRAME * 100) / 100 };
+  });
+  // a faint bump standing apart in a pause is a breath, not a syllable
+  return found.filter((s, i) => {
+    if (s.strength >= 0.25) return true;
+    const prev = found[i - 1];
+    const next = found[i + 1];
+    const before = prev ? s.t - (prev.t + prev.dur) : Infinity;
+    const after = next ? next.t - (s.t + s.dur) : Infinity;
+    return before <= 0.25 && after <= 0.25;
   });
 }

@@ -18,8 +18,11 @@ The home screen is a simple, app-like flow for the phone:
      the recognition put there end a line; where you sing on without a break, **the rhyme decides**: lines pair up in
      couplets whose last words rhyme ("…la notte / …più forte"). Lines stay about a bar long and never end on "e",
      "che", "la"… (`rhymeSegments` in `src/lib/flow/rhymelines.ts`; `lines.flow.pair`). Suggestions rhyme with the
-     sung partner; the Lyrics view shows each couplet together with its rhyme words marked. With only "na-na", one line
-     per bar (two when the bars are short) (`flowLines`);
+     sung partner; the Lyrics view shows each couplet together with its rhyme words marked. With only "na-na" ("pam pam
+     para…"), your pauses break the lines too; where you sing on without a pause, lines are cut at the deepest dips
+     near your own phrase length, learned from the phrases with clear pauses (`phraseSegments` in
+     `src/lib/flow/phrases.ts`). Faint bumps in the pauses (breaths) don't count as syllables;
+     stresses are the syllables that stand out from their neighbours or are leaned into (`flowLines`);
      each line stores its sung rhythm in `lines.flow` (syllables, stresses, held last note, recognised words);
    - the take is saved as a 16 kHz WAV (lane "Flow") and the words are recognised by ElevenLabs Scribe (1 call);
      if that fails, the lyrics follow the rhythm alone.
