@@ -132,6 +132,8 @@ export async function processTaps(
   onStep: (step: FlowStep, progress?: { done: number; total: number }) => void,
   onTree: (t: ProjectTree) => void,
   part?: { sectionId: string; start: number; end: number },
+  /** where "next line" was tapped: the index of the first tap of each new line */
+  breaks?: number[],
 ): Promise<ProjectTree> {
   const audio = tree.audio!;
   onStep("song");
@@ -139,7 +141,7 @@ export async function processTaps(
   if (q.length < 2) throw new Error("Tap at least a few syllables.");
   // a tap has no length: a syllable lasts until the next tap (at most ~a 16th), so pauses stay pauses
   const syl: Syllable[] = q.map((x, i) => ({ t: x.t, strength: x.onBeat ? 1 : 0.5, dur: Math.min(0.15, (q[i + 1]?.t ?? x.t + 0.3) - x.t) }));
-  let lines = flowLines(syl, [], audio, { offset: 0, lang: tree.project.language, duration: audio.duration ?? q[q.length - 1].t + 2 });
+  let lines = flowLines(syl, [], audio, { offset: 0, lang: tree.project.language, duration: audio.duration ?? q[q.length - 1].t + 2, breaks });
   if (part) {
     lines = lines.filter((l) => l.sungAt >= part.start - 0.4 && l.sungAt < part.end);
     if (!lines.length) throw new Error("No taps in this part — try again.");

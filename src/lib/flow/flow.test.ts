@@ -235,3 +235,16 @@ test("taps: snapped to 16ths, none lost, a tap on a beat is stressed; pauses bre
     [6, 6],
   );
 });
+
+test("taps with 'next line': the writer's marks break the lines, not the pauses", () => {
+  const grid = { bpm: 120, beat_offset: 0.5, beats_per_bar: 4 };
+  // 10 taps in one go (no pause) — "next line" after the 4th and after the 7th
+  const taps = Array.from({ length: 10 }, (_, i) => 1 + i * 0.25);
+  const syl = quantizeTaps(taps, grid).map((x, i, a) => ({ t: x.t, strength: x.onBeat ? 1 : 0.5, dur: Math.min(0.15, (a[i + 1]?.t ?? x.t + 0.3) - x.t) }));
+  const lines = flowLines(syl, [], grid, { lang: "it", duration: 6, breaks: [4, 7] });
+  assert.deepEqual(
+    lines.map((l) => l.syllables),
+    [4, 3, 3],
+  );
+  assert.equal(lines[1].start, 2);
+});

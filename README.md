@@ -54,8 +54,9 @@ ElevenLabs plan and the key's "Text to Speech" + "Voices" permissions; table `vo
 It's a demo-quality guide for hearing whether lyrics fit — rap works best; it doesn't sing melodies.
 
 **Sing it or tap it** — every flow can be set either way: the Flow tab has a "Sing it | Tap it" switch (whole song or one
-part; tapped: one tap per syllable while the beat plays, pauses start the next line — `processTaps`, no microphone, no
-word recognition), empty parts offer "Sing it" / "Tap it", and each line's "Flow" panel offers "Sing" (that bar is
+part; tapped on two pads: the big one once per syllable while the beat plays, "Next line" when a line is done — the
+lines are exactly as marked; without "Next line", pauses start the lines — `processTaps`, no microphone, no word
+recognition), empty parts offer "Sing it" / "Tap it", and each line's "Flow" panel offers "Sing" (that bar is
 recorded and its syllables found on the phone, free) or "Tap".
 
 **Tap one line** ("Flow" under a line → Tap): one bar of count-in (clicks), then the line's bar plays and you tap a

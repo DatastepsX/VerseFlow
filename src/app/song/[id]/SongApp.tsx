@@ -253,7 +253,11 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
   /** how the flow is set: sung into the mic, or tapped on the screen */
   const [flowMode, setFlowMode] = useState<"sing" | "tap">("sing");
   const tapsRef = useRef<number[]>([]);
+  /** "next line" taps: the index of the first tap of each new line */
+  const breaksRef = useRef<number[]>([]);
   const [tapCount, setTapCount] = useState(0);
+  /** the line being tapped (1-based) and its syllables so far */
+  const [tapLine, setTapLine] = useState({ n: 1, count: 0 });
   /** recording a flow for one part only (a part without vocals): its time range */
   const [part, setPart] = useState<{ sectionId: string; name: string; start: number; end: number } | null>(null);
   const bar = tree.audio?.bpm ? ((tree.audio.beats_per_bar ?? 4) * 60) / tree.audio.bpm : 2.5;
@@ -336,7 +340,9 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
     stopPlay();
     await e.ctx.resume();
     tapsRef.current = [];
+    breaksRef.current = [];
     setTapCount(0);
+    setTapLine({ n: 1, count: 0 });
     e.play(part ? Math.max(0, part.start - bar) : 0, { beat: beat.current });
     setRec("tapping");
   };
@@ -348,7 +354,17 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
     if (part && t < part.start - 0.3) return; // the bar before the part is only for getting in
     tapsRef.current.push(t);
     setTapCount(tapsRef.current.length);
+    setTapLine((x) => ({ ...x, count: x.count + 1 }));
     navigator.vibrate?.(8);
+  };
+  /** the second pad: the line is done, the next taps start a new one */
+  const nextLine = () => {
+    const n = tapsRef.current.length;
+    const last = breaksRef.current[breaksRef.current.length - 1] ?? 0;
+    if (n === last) return; // nothing tapped in this line yet
+    breaksRef.current.push(n);
+    setTapLine((x) => ({ n: x.n + 1, count: 0 }));
+    navigator.vibrate?.([6, 40, 6]);
   };
   const finishTapping = async () => {
     const e = engine.current;
@@ -363,7 +379,15 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
     setSource("tap");
     setRec("processing");
     try {
-      const out = await processTaps(pid, tree, taps, (key, progress) => setStep({ key, progress }), setTree, part ?? undefined);
+      const out = await processTaps(
+        pid,
+        tree,
+        taps,
+        (key, progress) => setStep({ key, progress }),
+        setTree,
+        part ?? undefined,
+        breaksRef.current.length ? breaksRef.current : undefined,
+      );
       setTree(out);
       setPart(null);
       setView("lyrics");
@@ -716,7 +740,7 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
                     ? `${fmtTime(part.start)} – ${fmtTime(part.end)}. The beat starts one bar before the part — come in on it. The rest of the song stays. `
                     : "The beat plays from the start. "}
                   {flowMode === "tap"
-                    ? "Tap the screen once per syllable in your rhythm — pause where a line ends. No microphone needed."
+                    ? "Tap once per syllable in your rhythm, and “Next line” where a line ends. No microphone needed."
                     : "Sing or rap anything over it — real words, “na-na”, anything. Your rhythm and your words become the lyrics."}
                 </p>
                 {part && (
@@ -733,7 +757,7 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
                   ) : (
                     <li className="flex items-center gap-3 rounded-2xl bg-panel px-4 py-3">
                       <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent"><Hand className="h-4 w-4" /></span>
-                      <span>One tap per syllable, on the beat you hear. A short pause starts the next line.</span>
+                      <span>Two pads: the big one once per syllable, on the beat you hear — the other one when a line is done.</span>
                     </li>
                   )}
                   <li className="flex items-center gap-3 rounded-2xl bg-panel px-4 py-3">
@@ -831,19 +855,40 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
                 <div className="mt-4 h-1.5 w-full overflow-hidden rounded-full bg-panel-2">
                   <div className="h-full bg-accent" style={{ width: `${part ? Math.max(0, Math.min(1, (now - part.start) / (part.end - part.start))) * 100 : total ? (Math.max(0, now) / total) * 100 : 0}%` }} />
                 </div>
-                <button
-                  className="mt-6 flex h-72 w-full touch-manipulation select-none flex-col items-center justify-center gap-3 rounded-[2rem] bg-accent text-white shadow-xl shadow-accent/30 active:bg-accent/85"
-                  onPointerDown={(ev) => {
-                    ev.preventDefault();
-                    tapNow();
-                  }}
-                >
-                  <Hand className="h-14 w-14" />
-                  <span className="text-2xl font-extrabold">Tap!</span>
-                  <span className="text-sm tabular-nums opacity-90">
-                    {tapCount} syllable{tapCount === 1 ? "" : "s"}
-                  </span>
-                </button>
+                <p className="mt-5 text-sm font-semibold">
+                  Line {tapLine.n} · {tapLine.count} syllable{tapLine.count === 1 ? "" : "s"}
+                </p>
+                {/* two pads: syllables, and "next line" */}
+                <div className="mt-3 flex w-full gap-2.5">
+                  <button
+                    className="flex h-72 flex-[2] touch-manipulation select-none flex-col items-center justify-center gap-3 rounded-[2rem] bg-accent text-white shadow-xl shadow-accent/30 active:bg-accent/85"
+                    onPointerDown={(ev) => {
+                      ev.preventDefault();
+                      tapNow();
+                    }}
+                    aria-label="Syllable"
+                  >
+                    <Hand className="h-12 w-12" />
+                    <span className="text-2xl font-extrabold">Tap!</span>
+                    <span className="text-xs opacity-80">one per syllable</span>
+                  </button>
+                  <button
+                    className="flex h-72 flex-1 touch-manipulation select-none flex-col items-center justify-center gap-2 rounded-[2rem] bg-fg text-bg shadow-xl active:opacity-85"
+                    onPointerDown={(ev) => {
+                      ev.preventDefault();
+                      nextLine();
+                    }}
+                    aria-label="Next line"
+                  >
+                    <ChevronRight className="h-10 w-10" />
+                    <span className="text-base font-bold leading-tight">
+                      Next
+                      <br />
+                      line
+                    </span>
+                  </button>
+                </div>
+                <p className="mt-2 text-xs text-muted">{tapCount} syllables in all — no “next line”? Your pauses start the lines.</p>
                 <button className="btn mt-5 rounded-full border-0 bg-panel-2 px-6 py-3 text-[15px] font-semibold" onClick={() => void finishTapping()}>
                   <Check className="h-4 w-4" /> Done
                 </button>

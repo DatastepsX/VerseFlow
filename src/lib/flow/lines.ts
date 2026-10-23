@@ -44,7 +44,8 @@ export function flowLines(
   words: TimedWord[],
   grid: FlowGrid,
   /** sounds: sung sounds recognised as "words" ("pom pom para") — they count syllables, but aren't lyrics */
-  opts: { offset?: number; lang: string; duration: number; sounds?: TimedWord[] },
+  /** breaks: where the writer said a new line starts (syllable indices, from tapping "next line") */
+  opts: { offset?: number; lang: string; duration: number; sounds?: TimedWord[]; breaks?: number[] },
 ): FlowLine[] {
   const shift = opts.offset ?? 0; // song time of sample 0
   const sy = syllables.map((s) => ({ ...s, t: s.t + shift }));
@@ -71,7 +72,9 @@ export function flowLines(
       });
     });
   } else {
-    const segs = phraseSegments(sy, unit);
+    // lines as the writer marked them ("next line"), else by the singing's own pauses
+    const marks = opts.breaks?.length ? [...new Set([0, ...opts.breaks])].filter((b) => b > 0 && b < sy.length).sort((a, b) => a - b) : null;
+    const segs = marks ? [0, ...marks].map((from, i, a) => ({ from, to: (a[i + 1] ?? sy.length) - 1 })) : phraseSegments(sy, unit);
     segs.forEach((g, k) => {
       const inside = sy.slice(g.from, g.to + 1);
       const from = inside[0].t - 0.1;
@@ -85,7 +88,7 @@ export function flowLines(
   }
   const out: FlowLine[] = [];
   for (const { inside, ws, from, to, start, pair } of groups) {
-    if (inside.length < 2) continue;
+    if (inside.length < (opts.breaks?.length ? 1 : 2)) continue;
     const text = ws
       .map((w) => w.text)
       .join(" ")
