@@ -81,3 +81,22 @@ export function cycle(c: Cell): Cell {
 }
 
 const round = (t: number) => Math.round(t * 1000) / 1000;
+
+/**
+ * Taps (or sung onsets) → syllables on 16th notes: snapped to the beat grid,
+ * two on one 16th never merge (the later moves on), a tap on a beat is stressed.
+ */
+export function quantizeTaps(taps: number[], grid: BeatGrid): { t: number; onBeat: boolean }[] {
+  const sorted = [...taps].sort((a, b) => a - b);
+  if (!grid.bpm) return sorted.map((t) => ({ t: round(t), onBeat: false }));
+  const step = 60 / grid.bpm / STEPS_PER_BEAT;
+  const out: { t: number; onBeat: boolean }[] = [];
+  let last = -Infinity;
+  for (const t of sorted) {
+    let k = Math.round((t - grid.beat_offset) / step);
+    if (k <= last) k = last + 1;
+    last = k;
+    out.push({ t: round(grid.beat_offset + k * step), onBeat: ((k % STEPS_PER_BEAT) + STEPS_PER_BEAT) % STEPS_PER_BEAT === 0 });
+  }
+  return out;
+}

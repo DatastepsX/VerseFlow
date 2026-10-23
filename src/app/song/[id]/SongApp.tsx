@@ -6,10 +6,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fmtTime } from "@/lib/audio/song-map";
 import { buildTimeline, positionIn } from "@/lib/audio/timeline";
 import { BEAT_ACCEPT, MAX_BEAT_BYTES, uploadBeat } from "@/lib/client/beat";
-import { chunkLines, processFlow, processVocals, type FlowStep } from "@/lib/flow/pipeline";
+import { chunkLines, processFlow, processTaps, processVocals, type FlowStep } from "@/lib/flow/pipeline";
 import { stressPattern } from "@/lib/flow/lines";
 import { prosody } from "@/lib/rhyme/prosody";
 import { StudioEngine, type PlayLayer } from "@/lib/studio/engine";
+import { detectSyllables } from "@/lib/flow/syllables";
 import { guideLayers, spokenIds } from "@/lib/voice/client";
 import { LANGUAGES, type Line, type ProjectTree } from "@/lib/types";
 import { followTo } from "@/components/writer/follow";
@@ -52,6 +53,10 @@ const STEPS: { key: FlowStep; label: string }[] = [
   { key: "words", label: "Recognising your words" },
   { key: "song", label: "Laying out the song" },
   { key: "suggest", label: "Writing lyrics for every bar" },
+];
+const TAP_STEPS: { key: FlowStep; label: string }[] = [
+  { key: "song", label: "Laying out your lines" },
+  { key: "suggest", label: "Writing lyrics for every line" },
 ];
 const VOCAL_STEPS: { key: FlowStep; label: string }[] = [
   { key: "words", label: "Listening for lyrics in your song" },
@@ -243,8 +248,12 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
 
   // ---------- recording the flow ----------
   const [headphones, setHeadphones] = useState(true);
-  const [rec, setRec] = useState<null | "recording" | "processing">(null);
-  const [source, setSource] = useState<"flow" | "vocals">("flow");
+  const [rec, setRec] = useState<null | "recording" | "tapping" | "processing">(null);
+  const [source, setSource] = useState<"flow" | "tap" | "vocals">("flow");
+  /** how the flow is set: sung into the mic, or tapped on the screen */
+  const [flowMode, setFlowMode] = useState<"sing" | "tap">("sing");
+  const tapsRef = useRef<number[]>([]);
+  const [tapCount, setTapCount] = useState(0);
   /** recording a flow for one part only (a part without vocals): its time range */
   const [part, setPart] = useState<{ sectionId: string; name: string; start: number; end: number } | null>(null);
   const bar = tree.audio?.bpm ? ((tree.audio.beats_per_bar ?? 4) * 60) / tree.audio.bpm : 2.5;
@@ -253,12 +262,12 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
   const [note, setNote] = useState<string | null>(null);
   const stopRef = useRef<(() => Promise<void>) | null>(null);
   useEffect(() => {
-    if (rec !== "recording") return;
+    if (rec !== "recording" && rec !== "tapping") return;
     const id = setInterval(() => {
       const e = engine.current;
       if (!e) return;
       setNow(e.position());
-      setLevel(e.level());
+      if (rec === "recording") setLevel(e.level());
       const until = part ? part.end + 0.3 : tree.audio?.duration;
       if (until && e.position() >= until) void stopRef.current?.();
     }, 60);
@@ -316,8 +325,59 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
     }
   };
 
+  // ---------- tapping the flow (no microphone): one tap per syllable while the beat plays ----------
+  const startTapping = async () => {
+    const e = engine.current;
+    if (!e || !beat.current) return;
+    const partHasText = part && tree.sections.find((s) => s.id === part.sectionId)?.lines.some((l) => l.text.trim());
+    if (part ? partHasText && !window.confirm(`Tap a new flow for ${part.name}? It replaces its lines (a version is saved first).`) : hasLines && !window.confirm("Tap a new flow? It replaces the current draft (kept lines are saved as a version).")) return;
+    setError(null);
+    setNote(null);
+    stopPlay();
+    await e.ctx.resume();
+    tapsRef.current = [];
+    setTapCount(0);
+    e.play(part ? Math.max(0, part.start - bar) : 0, { beat: beat.current });
+    setRec("tapping");
+  };
+  const tapNow = () => {
+    const e = engine.current;
+    if (!e) return;
+    // the song time you hear (a tap answers what you hear: the output's delay comes off)
+    const t = e.position() - ((e.ctx as AudioContext & { outputLatency?: number }).outputLatency || e.ctx.baseLatency || 0);
+    if (part && t < part.start - 0.3) return; // the bar before the part is only for getting in
+    tapsRef.current.push(t);
+    setTapCount(tapsRef.current.length);
+    navigator.vibrate?.(8);
+  };
+  const finishTapping = async () => {
+    const e = engine.current;
+    if (!e || rec !== "tapping") return;
+    e.stop();
+    const taps = tapsRef.current;
+    if (taps.length < 2) {
+      setRec(null);
+      setError("Tap once per syllable while the beat plays — at least a few taps.");
+      return;
+    }
+    setSource("tap");
+    setRec("processing");
+    try {
+      const out = await processTaps(pid, tree, taps, (key, progress) => setStep({ key, progress }), setTree, part ?? undefined);
+      setTree(out);
+      setPart(null);
+      setView("lyrics");
+      window.scrollTo(0, 0);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong");
+    } finally {
+      setRec(null);
+      setStep(null);
+    }
+  };
+
   useEffect(() => {
-    stopRef.current = stopFlow;
+    stopRef.current = rec === "tapping" ? finishTapping : stopFlow;
   });
 
   // ---------- the song's own vocals ----------
@@ -377,8 +437,9 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
     const lyric = s.lines.filter((l) => l.kind === "lyric");
     return lyric.length > 0 && lyric.every((l) => !l.text.trim() && !l.flow);
   };
-  const recordPart = (s: ProjectTree["sections"][number]) => {
+  const recordPart = (s: ProjectTree["sections"][number], mode?: "sing" | "tap") => {
     stopPlay();
+    if (mode) setFlowMode(mode);
     setPart({ sectionId: s.id, name: s.name, ...partRange(s) });
     setView("flow");
     window.scrollTo(0, 0);
@@ -434,6 +495,33 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
     const from = g.start - barLen;
     const clicks = Array.from({ length: beatGrid?.beats_per_bar ?? 4 }, (_, k) => ({ at: from + k * beatLen, accent: k === 0 })).filter((c) => c.at >= 0);
     void play(Math.max(0, from), g.start + g.cells.length * g.step + 0.25, { guide: [], flow: false, clicks });
+  };
+  /** singing one line's bar: count-in, record the bar, find the syllables in it (on the phone, free) */
+  const singLine = async (g: FlowGridModel): Promise<number[]> => {
+    const e = engine.current;
+    if (!e || !beat.current) return [];
+    if (playing) stopPlay();
+    await e.arm(undefined, { voiceProcessing: !headphones });
+    const beatLen = g.step * 4;
+    const from = Math.max(0, g.start - beatLen * (beatGrid?.beats_per_bar ?? 4));
+    const end = g.start + g.cells.length * g.step;
+    const clicks = Array.from({ length: beatGrid?.beats_per_bar ?? 4 }, (_, k) => ({ at: from + k * beatLen, accent: k === 0 }));
+    e.play(from, { beat: beat.current, clicks });
+    e.startRecording();
+    await new Promise<void>((done) => {
+      const id = setInterval(() => {
+        if (e.position() >= end + 0.25) {
+          clearInterval(id);
+          done();
+        }
+      }, 50);
+    });
+    const r = await e.stopRecording(e.reportedLatency, 0, Math.max(0, g.start - 0.4));
+    e.disarm();
+    if (!r) return [];
+    return detectSyllables(r.samples, r.sampleRate)
+      .map((x) => x.t + r.startAt)
+      .filter((t) => t >= g.start - 0.3 && t < end);
   };
   /** the song time being heard now (the output's delay taken off: a tap answers what you hear) */
   const songTime = useCallback(() => {
@@ -600,52 +688,97 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
           <div className="flex flex-col items-center text-center">
             {rec === null && (
               <>
-                <h2 className="text-2xl font-extrabold">{part ? `Record your flow for ${part.name}` : "Record your flow"}</h2>
-                {part ? (
-                  <p className="mt-2 max-w-sm text-sm text-muted">
-                    {fmtTime(part.start)} – {fmtTime(part.end)}. The beat starts one bar before the part — come in on it and sing or rap anything:
-                    your rhythm and your words become this part&apos;s lyrics. The rest of the song stays.
-                    <button className="mt-1 block w-full text-center text-xs underline" onClick={() => setPart(null)}>
-                      Record the whole song instead
+                {/* sing it or tap it */}
+                <div className="mb-5 flex w-full rounded-full bg-panel-2 p-1" role="tablist">
+                  {(
+                    [
+                      ["sing", Mic, "Sing it"],
+                      ["tap", Hand, "Tap it"],
+                    ] as const
+                  ).map(([m, Icon, label]) => (
+                    <button
+                      key={m}
+                      role="tab"
+                      aria-selected={flowMode === m}
+                      className={`flex flex-1 items-center justify-center gap-1.5 rounded-full py-2 text-sm font-semibold transition-colors ${flowMode === m ? "bg-accent text-white shadow-sm" : "text-muted"}`}
+                      onClick={() => setFlowMode(m)}
+                    >
+                      <Icon className="h-4 w-4" /> {label}
                     </button>
-                  </p>
-                ) : (
-                  <p className="mt-2 max-w-sm text-sm text-muted">
-                    The beat plays from the start. Sing or rap anything over it — real words, “na-na”, anything. Your rhythm and your words become
-                    the lyrics.
-                  </p>
+                  ))}
+                </div>
+                <h2 className="text-2xl font-extrabold">
+                  {flowMode === "tap" ? "Tap your flow" : "Record your flow"}
+                  {part ? ` for ${part.name}` : ""}
+                </h2>
+                <p className="mt-2 max-w-sm text-sm text-muted">
+                  {part
+                    ? `${fmtTime(part.start)} – ${fmtTime(part.end)}. The beat starts one bar before the part — come in on it. The rest of the song stays. `
+                    : "The beat plays from the start. "}
+                  {flowMode === "tap"
+                    ? "Tap the screen once per syllable in your rhythm — pause where a line ends. No microphone needed."
+                    : "Sing or rap anything over it — real words, “na-na”, anything. Your rhythm and your words become the lyrics."}
+                </p>
+                {part && (
+                  <button className="mt-1 text-xs text-muted underline" onClick={() => setPart(null)}>
+                    Do the whole song instead
+                  </button>
                 )}
                 <ol className="mt-5 w-full space-y-2 text-left text-sm">
+                  {flowMode === "sing" ? (
+                    <li className="flex items-center gap-3 rounded-2xl bg-panel px-4 py-3">
+                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent"><Headphones className="h-4 w-4" /></span>
+                      <span>Put on headphones (wired is best) so the mic only hears you.</span>
+                    </li>
+                  ) : (
+                    <li className="flex items-center gap-3 rounded-2xl bg-panel px-4 py-3">
+                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent"><Hand className="h-4 w-4" /></span>
+                      <span>One tap per syllable, on the beat you hear. A short pause starts the next line.</span>
+                    </li>
+                  )}
                   <li className="flex items-center gap-3 rounded-2xl bg-panel px-4 py-3">
-                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent"><Headphones className="h-4 w-4" /></span>
-                    <span>Put on headphones (wired is best) so the mic only hears you.</span>
-                  </li>
-                  <li className="flex items-center gap-3 rounded-2xl bg-panel px-4 py-3">
-                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent"><Mic className="h-4 w-4" /></span>
-                    <span>{part ? "Tap record and flow over the part — it stops by itself at the part's end." : "Tap record and flow over the whole beat — stop whenever you like."}</span>
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent">
+                      {flowMode === "tap" ? <Hand className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+                    </span>
+                    <span>{part ? "It stops by itself at the part's end." : "Go over the whole beat — stop whenever you like."}</span>
                   </li>
                   <li className="flex items-center gap-3 rounded-2xl bg-panel px-4 py-3">
                     <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent"><Sparkles className="h-4 w-4" /></span>
                     <span>
-                      {part ? "You get this part's lines with 3 options for every bar." : "You get a first version of the song with 3 options for every bar."}
-                      <span className="block text-xs text-muted">1 word recognition + 1 AI call per 8 bars</span>
+                      {part ? "You get this part's lines with 3 options for every line." : "You get a first version of the song with 3 options for every line."}
+                      <span className="block text-xs text-muted">{flowMode === "tap" ? "1 AI call per 8 lines" : "1 word recognition + 1 AI call per 8 lines"}</span>
                     </span>
                   </li>
                 </ol>
-                <label className="mt-4 flex items-center gap-2 text-sm">
-                  <input type="checkbox" checked={headphones} onChange={(e) => setHeadphones(e.target.checked)} />
-                  I&apos;m wearing headphones
-                </label>
-                {!headphones && <p className="mt-1 text-xs text-warn">Without headphones the beat is filtered out of the mic as well as possible.</p>}
-                <button
-                  className="mt-8 flex h-28 w-28 items-center justify-center rounded-full bg-[#dc2626] text-white shadow-xl shadow-red-500/30 active:scale-95 disabled:opacity-40"
-                  disabled={!beatReady}
-                  onClick={() => void startFlow()}
-                  aria-label="Record your flow"
-                >
-                  <span className="h-10 w-10 rounded-full bg-white" />
-                </button>
-                <p className="mt-3 text-sm font-semibold">{beatReady ? "Tap to start" : "Loading the beat…"}</p>
+                {flowMode === "sing" && (
+                  <>
+                    <label className="mt-4 flex items-center gap-2 text-sm">
+                      <input type="checkbox" checked={headphones} onChange={(e) => setHeadphones(e.target.checked)} />
+                      I&apos;m wearing headphones
+                    </label>
+                    {!headphones && <p className="mt-1 text-xs text-warn">Without headphones the beat is filtered out of the mic as well as possible.</p>}
+                  </>
+                )}
+                {flowMode === "sing" ? (
+                  <button
+                    className="mt-8 flex h-28 w-28 items-center justify-center rounded-full bg-[#dc2626] text-white shadow-xl shadow-red-500/30 active:scale-95 disabled:opacity-40"
+                    disabled={!beatReady}
+                    onClick={() => void startFlow()}
+                    aria-label="Record your flow"
+                  >
+                    <span className="h-10 w-10 rounded-full bg-white" />
+                  </button>
+                ) : (
+                  <button
+                    className="mt-8 flex h-28 w-28 items-center justify-center rounded-full bg-accent text-white shadow-xl shadow-accent/30 active:scale-95 disabled:opacity-40"
+                    disabled={!beatReady}
+                    onClick={() => void startTapping()}
+                    aria-label="Start tapping"
+                  >
+                    <Hand className="h-11 w-11" />
+                  </button>
+                )}
+                <p className="mt-3 text-sm font-semibold">{beatReady ? (flowMode === "tap" ? "Start the beat" : "Tap to start") : "Loading the beat…"}</p>
                 {!part && (
                 <button className="mt-8 flex w-full items-center gap-3 rounded-2xl border border-line bg-panel px-4 py-3.5 text-left" onClick={() => void readVocals()}>
                   <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-panel-2 text-muted">
@@ -691,11 +824,36 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
                 <p className="mt-3 text-sm font-semibold">Tap to finish</p>
               </>
             )}
+            {rec === "tapping" && (
+              <>
+                <p className="font-mono text-3xl font-bold tabular-nums">{fmtTime(Math.max(0, now))}</p>
+                <p className="text-sm text-muted">{part ? (now < part.start ? `${part.name} starts at ${fmtTime(part.start)} — get ready` : `${part.name} ends at ${fmtTime(part.end)}`) : `of ${fmtTime(total)}`}</p>
+                <div className="mt-4 h-1.5 w-full overflow-hidden rounded-full bg-panel-2">
+                  <div className="h-full bg-accent" style={{ width: `${part ? Math.max(0, Math.min(1, (now - part.start) / (part.end - part.start))) * 100 : total ? (Math.max(0, now) / total) * 100 : 0}%` }} />
+                </div>
+                <button
+                  className="mt-6 flex h-72 w-full touch-manipulation select-none flex-col items-center justify-center gap-3 rounded-[2rem] bg-accent text-white shadow-xl shadow-accent/30 active:bg-accent/85"
+                  onPointerDown={(ev) => {
+                    ev.preventDefault();
+                    tapNow();
+                  }}
+                >
+                  <Hand className="h-14 w-14" />
+                  <span className="text-2xl font-extrabold">Tap!</span>
+                  <span className="text-sm tabular-nums opacity-90">
+                    {tapCount} syllable{tapCount === 1 ? "" : "s"}
+                  </span>
+                </button>
+                <button className="btn mt-5 rounded-full border-0 bg-panel-2 px-6 py-3 text-[15px] font-semibold" onClick={() => void finishTapping()}>
+                  <Check className="h-4 w-4" /> Done
+                </button>
+              </>
+            )}
             {rec === "processing" && (
               <>
                 <h2 className="text-2xl font-extrabold">{source === "vocals" ? "Reading your song…" : part ? `Writing ${part.name}…` : "Writing your song…"}</h2>
                 <ul className="mt-6 w-full space-y-2 text-left">
-                  {(source === "vocals" ? VOCAL_STEPS : STEPS).map((s, i, steps) => {
+                  {(source === "vocals" ? VOCAL_STEPS : source === "tap" ? TAP_STEPS : STEPS).map((s, i, steps) => {
                     const cur = steps.findIndex((x) => x.key === step?.key);
                     const state = i < cur ? "done" : i === cur ? "now" : "todo";
                     return (
@@ -770,9 +928,14 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
                           · {fmtTime(r.start)} – {fmtTime(r.end)}
                         </span>
                       </p>
-                      <button className="btn-primary w-full justify-center rounded-2xl py-3 text-[15px]" onClick={() => recordPart(s)}>
-                        <Mic className="h-[18px] w-[18px]" /> Record your flow for this part
-                      </button>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button className="btn-primary justify-center rounded-2xl py-3 text-[15px]" onClick={() => recordPart(s, "sing")}>
+                          <Mic className="h-[18px] w-[18px]" /> Sing it
+                        </button>
+                        <button className="btn-primary justify-center rounded-2xl py-3 text-[15px]" onClick={() => recordPart(s, "tap")}>
+                          <Hand className="h-[18px] w-[18px]" /> Tap it
+                        </button>
+                      </div>
                       <div className="flex gap-2">
                         <button className="btn flex-1 justify-center rounded-2xl border-0 py-2.5 text-sm" disabled={!beatReady} onClick={() => void play(Math.max(0, r.start - bar), r.end)}>
                           <Play className="h-4 w-4" /> Listen
@@ -856,6 +1019,7 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
                               setGridLine(gridLine === l.id ? null : l.id);
                             }}
                             onStartTap={startTap}
+                            onSing={singLine}
                             songTime={songTime}
                             onSaveGrid={(flow, write) =>
                               void lineAction(l.id, async () => {
@@ -967,6 +1131,7 @@ function LineCard(props: {
   gridOpen: boolean;
   onGrid: () => void;
   onStartTap: (g: FlowGridModel) => void;
+  onSing: (g: FlowGridModel) => Promise<number[]>;
   songTime: () => number;
   onSaveGrid: (f: NonNullable<Line["flow"]>, write: boolean) => void;
 }) {
@@ -1012,10 +1177,10 @@ function LineCard(props: {
             </span>
           </button>
           {props.beatGrid && (l.flow || l.audio_at !== null) ? (
-            <button className="group mt-1.5 flex items-center gap-2" onClick={props.onGrid} title="Edit the flow on the beat" aria-expanded={props.gridOpen}>
+            <button className="group mt-1.5 flex items-center gap-2" onClick={props.onGrid} title="Set this line's flow: sing it or tap it" aria-expanded={props.gridOpen}>
               {l.flow?.syllables ? <Pattern flow={l.flow} /> : null}
               <span className={`mt-1.5 flex h-6 items-center gap-1 rounded-full px-2 text-[11px] font-semibold ${props.gridOpen ? "bg-accent text-white" : "bg-panel-2 text-accent group-active:bg-accent-soft"}`}>
-                <Hand className="h-3.5 w-3.5" /> {l.flow?.syllables ? "Tap flow" : "Tap the flow"}
+                <Hand className="h-3.5 w-3.5" /> {l.flow?.syllables ? "Flow" : "Set the flow"}
               </span>
             </button>
           ) : (
@@ -1027,6 +1192,7 @@ function LineCard(props: {
               lang={lang}
               beatGrid={props.beatGrid}
               onStart={props.onStartTap}
+              onSing={props.onSing}
               songTime={props.songTime}
               onSave={props.onSaveGrid}
               onCancel={props.onGrid}
@@ -1143,6 +1309,7 @@ function TapFor({
   lang,
   beatGrid,
   onStart,
+  onSing,
   songTime,
   onSave,
   onCancel,
@@ -1151,6 +1318,7 @@ function TapFor({
   lang: string;
   beatGrid: BeatGrid;
   onStart: (g: FlowGridModel) => void;
+  onSing: (g: FlowGridModel) => Promise<number[]>;
   songTime: () => number;
   onSave: (f: NonNullable<Line["flow"]>, write: boolean) => void;
   onCancel: () => void;
@@ -1158,7 +1326,7 @@ function TapFor({
   const [win] = useState(() => gridFor(line.flow, line.audio_at, beatGrid));
   if (!win) return null;
   return (
-    <TapFlow window={win} flow={line.flow} lang={lang} onStart={() => onStart(win)} songTime={songTime} onSave={onSave} onCancel={onCancel} />
+    <TapFlow window={win} flow={line.flow} lang={lang} onStart={() => onStart(win)} onSing={() => onSing(win)} songTime={songTime} onSave={onSave} onCancel={onCancel} />
   );
 }
 

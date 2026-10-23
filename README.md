@@ -53,7 +53,12 @@ ElevenLabs plan and the key's "Text to Speech" + "Voices" permissions; table `vo
 - **🗣 on** in the player: the whole song in your voice with the beat (asks first when lines still need a call).
 It's a demo-quality guide for hearing whether lyrics fit — rap works best; it doesn't sing melodies.
 
-**Tap the flow** ("Tap flow" under a line): Start → one bar of count-in (clicks), then the line's bar plays and you tap a
+**Sing it or tap it** — every flow can be set either way: the Flow tab has a "Sing it | Tap it" switch (whole song or one
+part; tapped: one tap per syllable while the beat plays, pauses start the next line — `processTaps`, no microphone, no
+word recognition), empty parts offer "Sing it" / "Tap it", and each line's "Flow" panel offers "Sing" (that bar is
+recorded and its syllables found on the phone, free) or "Tap".
+
+**Tap one line** ("Flow" under a line → Tap): one bar of count-in (clicks), then the line's bar plays and you tap a
 big pad once per syllable. Taps snap to 16th notes (two quick taps never merge); a tap on a beat is stressed. Right away
 you see example words with exactly that rhythm — real words from a small built-in bank, no AI
 (`exampleWords` in `src/lib/flow/example.ts`), e.g. "Ricordo piano passo" — "Other example" for another one. "Save"

@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { flowLines, stressPattern } from "./lines";
 import { detectSyllables } from "./syllables";
 import { dropSounds, isSound } from "./fillers";
-import { cycle, flowFromGrid, gridFor } from "./grid";
+import { cycle, flowFromGrid, gridFor, quantizeTaps } from "./grid";
 import { exampleWords } from "./example";
 import { prosody } from "@/lib/rhyme/prosody";
 import { emptyParts, vocalLines } from "./vocals";
@@ -211,4 +211,27 @@ test("example words: exactly the tapped syllables, stressed words on the stresse
   const it = exampleWords(7, [2, 4, 7], "it");
   assert.ok(it.length > 5, it);
   assert.notEqual(exampleWords(8, [1, 5], "it", 1), exampleWords(8, [1, 5], "it", 2), "other examples for another seed");
+});
+
+test("taps: snapped to 16ths, none lost, a tap on a beat is stressed; pauses break the lines", () => {
+  const grid = { bpm: 120, beat_offset: 0.5, beats_per_bar: 4 }; // 16th = 0.125 s
+  const q = quantizeTaps([0.52, 0.61, 0.66, 1.01, 1.24], grid);
+  assert.deepEqual(
+    q.map((x) => [x.t, x.onBeat]),
+    [
+      [0.5, true],
+      [0.625, false],
+      [0.75, false], // would snap to 0.625 too: moved on
+      [1, true],
+      [1.25, false],
+    ],
+  );
+  // two phrases of 6 taps with a pause: two lines
+  const taps = [0, 1].flatMap((p) => [0, 0.25, 0.375, 0.5, 0.75, 1].map((t) => 1 + p * 2 + t));
+  const syl = quantizeTaps(taps, grid).map((x, i, a) => ({ t: x.t, strength: x.onBeat ? 1 : 0.5, dur: Math.min(0.15, (a[i + 1]?.t ?? x.t + 0.3) - x.t) }));
+  const lines = flowLines(syl, [], grid, { lang: "it", duration: 6 });
+  assert.deepEqual(
+    lines.map((l) => l.syllables),
+    [6, 6],
+  );
 });

@@ -8,6 +8,8 @@ import { flowLines } from "./lines";
 import { detectSyllables } from "./syllables";
 import { dropSounds, splitSounds } from "./fillers";
 import { emptyParts, vocalLines } from "./vocals";
+import { quantizeTaps } from "./grid";
+import type { Syllable } from "./syllables";
 
 /** lines suggested per AI call (couplets stay together); the calls run in parallel */
 export const FLOW_CHUNK = 8;
@@ -115,6 +117,39 @@ export async function processFlow(
   const t = await post<ProjectTree>(`/api/projects/${pid}/flow`, { action: "build", lines });
   onTree(t);
   return { tree: await suggestAll(pid, t, onStep, onTree), takeId, wordsFailed };
+}
+
+/**
+ * A tapped flow (one tap per syllable while the beat played, song time):
+ * the taps snap to 16th notes, the pauses between them break the lines —
+ * like a sung flow, without microphone or word recognition. For the whole
+ * song, or one part.
+ */
+export async function processTaps(
+  pid: string,
+  tree: ProjectTree,
+  taps: number[],
+  onStep: (step: FlowStep, progress?: { done: number; total: number }) => void,
+  onTree: (t: ProjectTree) => void,
+  part?: { sectionId: string; start: number; end: number },
+): Promise<ProjectTree> {
+  const audio = tree.audio!;
+  onStep("song");
+  const q = quantizeTaps(taps, audio);
+  if (q.length < 2) throw new Error("Tap at least a few syllables.");
+  // a tap has no length: a syllable lasts until the next tap (at most ~a 16th), so pauses stay pauses
+  const syl: Syllable[] = q.map((x, i) => ({ t: x.t, strength: x.onBeat ? 1 : 0.5, dur: Math.min(0.15, (q[i + 1]?.t ?? x.t + 0.3) - x.t) }));
+  let lines = flowLines(syl, [], audio, { offset: 0, lang: tree.project.language, duration: audio.duration ?? q[q.length - 1].t + 2 });
+  if (part) {
+    lines = lines.filter((l) => l.sungAt >= part.start - 0.4 && l.sungAt < part.end);
+    if (!lines.length) throw new Error("No taps in this part — try again.");
+    const t = await post<ProjectTree>(`/api/projects/${pid}/flow`, { action: "buildPart", sectionId: part.sectionId, lines });
+    onTree(t);
+    return suggestAll(pid, t, onStep, onTree, (l, s) => s.id === part.sectionId);
+  }
+  const t = await post<ProjectTree>(`/api/projects/${pid}/flow`, { action: "build", lines });
+  onTree(t);
+  return suggestAll(pid, t, onStep, onTree);
 }
 
 /**

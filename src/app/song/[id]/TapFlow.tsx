@@ -4,18 +4,20 @@ import { useEffect, useRef, useState } from "react";
 import { exampleWords } from "@/lib/flow/example";
 import { flowFromGrid, STEPS_PER_BEAT, type FlowGridModel } from "@/lib/flow/grid";
 import type { LineFlow } from "@/lib/types";
-import { Check, Hand, Shuffle, Sparkles } from "@/components/icons";
+import { Check, Hand, Mic, Shuffle, Sparkles } from "@/components/icons";
 
 /**
- * Tap a line's flow: the beat plays (one bar to count in, then the line's
- * bar), you tap the pad once per syllable. Taps snap to 16th notes; a tap on
- * a beat is stressed. Right away: example words with exactly that rhythm.
+ * Set a line's flow: the beat plays (one bar to count in, then the line's
+ * bar) and you tap the pad once per syllable — or sing it (the syllables are
+ * found in the recording, on the phone, free). Syllables snap to 16th notes;
+ * one on a beat is stressed. Right away: example words with that rhythm.
  */
 export function TapFlow({
   window: win,
   flow,
   lang,
   onStart,
+  onSing,
   songTime,
   onSave,
   onCancel,
@@ -26,12 +28,14 @@ export function TapFlow({
   lang: string;
   /** plays the count-in + the bar(s) */
   onStart: () => void;
+  /** records the bar sung (count-in first) → where its syllables start (song time) */
+  onSing: () => Promise<number[]>;
   /** the song time you hear now */
   songTime: () => number;
   onSave: (f: LineFlow, write: boolean) => void;
   onCancel: () => void;
 }) {
-  const [phase, setPhase] = useState<"idle" | "running" | "done">("idle");
+  const [phase, setPhase] = useState<"idle" | "running" | "singing" | "done">("idle");
   const [taps, setTaps] = useState<number[]>([]);
   const [now, setNow] = useState(0);
   const [seed, setSeed] = useState(0);
@@ -41,11 +45,11 @@ export function TapFlow({
 
   // the count-in / progress while the beat plays; the bar is over → the result
   useEffect(() => {
-    if (phase !== "running") return;
+    if (phase !== "running" && phase !== "singing") return;
     const id = setInterval(() => {
       const t = songTime();
       setNow(t);
-      if (t > end + 0.15) {
+      if (phase === "running" && t > end + 0.15) {
         if (tapCount.current) setPhase("done");
         else {
           setPhase("idle");
@@ -71,6 +75,27 @@ export function TapFlow({
   const progress = Math.max(0, Math.min(1, (now - win.start) / (end - win.start)));
   const beatsLeft = Math.ceil((win.start - now) / (win.step * STEPS_PER_BEAT));
 
+  const sing = async () => {
+    setTaps([]);
+    setHint(null);
+    setNow(win.start - 2);
+    setPhase("singing");
+    try {
+      const onsets = await onSing();
+      if (onsets.length) {
+        tapCount.current = onsets.length;
+        setTaps(onsets);
+        setPhase("done");
+      } else {
+        setPhase("idle");
+        setHint("Nothing was heard — sing a bit louder, or closer to the phone.");
+      }
+    } catch (err) {
+      setPhase("idle");
+      setHint(err instanceof Error ? `Microphone: ${err.message}` : "The microphone is not available.");
+    }
+  };
+
   const tap = () => {
     const t = songTime();
     if (t < win.start - win.step * 0.75 || t > end) return; // the count-in and after the bar don't count
@@ -84,10 +109,13 @@ export function TapFlow({
       {phase === "idle" && (
         <>
           <p className="text-sm">
-            Tap the rhythm of this line: <b>one tap per syllable</b> while the beat plays. You get one bar to count in.
+            Set the rhythm of this line: <b>tap once per syllable</b>, or <b>sing it</b>, while the beat plays. You get one bar to count in.
           </p>
           {hint && <p className="mt-1 text-xs text-warn">{hint}</p>}
           <div className="mt-3 flex gap-2">
+            <button className="btn-primary flex-1 justify-center rounded-xl py-3 text-[15px]" onClick={() => void sing()}>
+              <Mic className="h-5 w-5" /> Sing
+            </button>
             <button
               className="btn-primary flex-1 justify-center rounded-xl py-3 text-[15px]"
               onClick={() => {
@@ -99,7 +127,7 @@ export function TapFlow({
                 onStart();
               }}
             >
-              <Hand className="h-5 w-5" /> Start
+              <Hand className="h-5 w-5" /> Tap
             </button>
             <button className="btn justify-center rounded-xl border-0 bg-panel px-4" onClick={onCancel}>
               Cancel
@@ -134,6 +162,25 @@ export function TapFlow({
             <span className="block h-full bg-white" style={{ width: `${progress * 100}%` }} />
           </span>
         </button>
+      )}
+
+      {phase === "singing" && (
+        <div className={`flex h-44 w-full flex-col items-center justify-center gap-2 rounded-2xl text-white ${counting ? "bg-fg/80" : "bg-[#dc2626]"}`}>
+          {counting ? (
+            <>
+              <span className="text-5xl font-extrabold tabular-nums">{Math.max(1, beatsLeft)}</span>
+              <span className="text-sm opacity-80">get ready…</span>
+            </>
+          ) : (
+            <>
+              <Mic className="h-10 w-10" />
+              <span className="text-lg font-bold">Sing!</span>
+            </>
+          )}
+          <span className="mt-1 h-1.5 w-3/4 overflow-hidden rounded-full bg-white/25">
+            <span className="block h-full bg-white" style={{ width: `${progress * 100}%` }} />
+          </span>
+        </div>
       )}
 
       {phase === "done" && (
