@@ -85,21 +85,32 @@ function splitWord(w: string, n: number): string[] | null {
 }
 
 export function syllabify(text: string, lang: string): string[] | null {
+  return syllableParts(text, lang)?.map((p) => p.text.replace(/ /g, "‿")) ?? null;
+}
+
+/** a syllable as written: its letters, and whether a word starts with it (a space before it) */
+export interface SyllablePart {
+  text: string;
+  space: boolean;
+}
+
+/** the line's syllables with the spaces between words kept (a merged syllable keeps its inner space: "ne an") */
+export function syllableParts(text: string, lang: string): SyllablePart[] | null {
   if (!ROMANCE.has(lang)) return null;
   const words = text.trim().split(/\s+/).filter(Boolean);
-  const out: string[] = [];
+  const out: SyllablePart[] = [];
   let prevEndsVowel = false;
   for (const [i, raw] of words.entries()) {
     const core = tokenize(raw)[0];
     if (!core) {
       // punctuation alone ("—"): stick it to the previous syllable
-      if (out.length) out[out.length - 1] += raw;
+      if (out.length) out[out.length - 1].text += " " + raw;
       continue;
     }
     const p = analyzeWord(core.replace(/'/g, ""), lang);
     if (!p.syllables) {
-      if (out.length) out[out.length - 1] += raw;
-      else out.push(raw);
+      if (out.length) out[out.length - 1].text += " " + raw;
+      else out.push({ text: raw, space: false });
       continue;
     }
     const lead = raw.slice(0, raw.indexOf(core.charAt(0)));
@@ -109,10 +120,11 @@ export function syllabify(text: string, lang: string): string[] | null {
     parts[0] = lead + parts[0];
     parts[parts.length - 1] += tail;
     // synalepha: this word's first syllable merges into the previous one
-    if (i > 0 && prevEndsVowel && p.startsWithVowel && out.length) {
-      out[out.length - 1] += "‿" + parts.shift();
-    }
-    out.push(...parts);
+    const merged = i > 0 && prevEndsVowel && p.startsWithVowel && out.length > 0;
+    if (merged) out[out.length - 1].text += " " + parts.shift();
+    // the word's first syllable gets the space (unless it merged into the previous word's last one)
+    const firstOfWord = out.length > 0 && !merged;
+    out.push(...parts.map((x, k) => ({ text: x, space: k === 0 && firstOfWord })));
     prevEndsVowel = p.endsWithVowel;
   }
   return out.length === prosody(text, lang).syllables ? out : null;

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { prosody } from "./prosody";
-import { syllabify } from "./syllabify";
+import { syllabify, syllableParts } from "./syllabify";
 
 test("lines split into their sung syllables, as many as the app counts", () => {
   assert.equal(syllabify("Ti scrivo dentro me", "it")?.join("·"), "Ti·scri·vo·den·tro·me");
@@ -28,4 +28,13 @@ test("lines split into their sung syllables, as many as the app counts", () => {
     assert.equal(s.join("").replace(/‿/g, ""), line.replace(/\s+/g, ""), "nothing lost");
   }
   assert.equal(syllabify("Ti scrivo dentro me", "en"), null, "Romance languages only");
+});
+
+test("syllable parts keep the spaces: the line reads as written", () => {
+  const parts = syllableParts("La casa tiene ancora il suono", "it")!;
+  assert.equal(parts.map((p) => (p.space ? " " : "") + p.text).join(""), "La casa tiene ancora il suono");
+  assert.deepEqual(
+    parts.map((p) => p.text),
+    ["La", "ca", "sa", "tie", "ne an", "co", "ra il", "suo", "no"],
+  );
 });

@@ -57,9 +57,10 @@ It's a demo-quality guide for hearing whether lyrics fit — rap works best; it 
 (with "Next line") the lines; the voice moves each tap onto the syllable sung there (±0.12 s), gives its stress, and the
 recognised words go to the AI (`processTaps` with a recording).
 
-**Lyrics in syllables**: every line shows as it is sung — "Ti·scri·vo·den·tro·me", stressed syllables bold, the rhyme
-marked in a couplet, vowels merging across words joined ("den·tro‿il") — split with the same rules that count the
-syllables (`syllabify` in `src/lib/rhyme/syllabify.ts`, Romance languages), so the dots match the flow.
+**Lyrics with their syllables**: every line reads as written, with one short segment under each sung syllable
+(stressed ones in the accent colour, vowels merging across words sharing one — "tiene ancora" = tie·ne an·co·ra) and the
+rhyme word coloured in a couplet — split with the same rules that count the syllables (`syllableParts` in
+`src/lib/rhyme/syllabify.ts`, Romance languages), so the segments match the flow.
 
 **Sing it or tap it** — every flow can be set either way: the Flow tab has a "Sing it | Tap it" switch (whole song or one
 part; tapped on two pads: the big one once per syllable while the beat plays, "Next line" when a line is done — the

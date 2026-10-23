@@ -20,7 +20,7 @@ import { TapFlow } from "./TapFlow";
 import { exampleWords } from "@/lib/flow/example";
 import { coupletsOf } from "@/lib/flow/couplets";
 import { analyzeLine, compareLines } from "@/lib/rhyme/analyze";
-import { syllabify } from "@/lib/rhyme/syllabify";
+import { syllableParts } from "@/lib/rhyme/syllabify";
 import { gridFor, type BeatGrid, type FlowGridModel } from "@/lib/flow/grid";
 import {
   AudioLines,
@@ -1409,26 +1409,37 @@ const rhymesWell = (x: string, y: string, lang: string) => !x.trim() || !y.trim(
 const lastWordOf = (t: string) => t.trim().split(/\s+/).pop()?.replace(/[^\p{L}\p{N}']+/gu, "") ?? "";
 
 /**
- * The line in its sung syllables, as the flow counts them: Ti·scri·vo·den·tro·me — stressed syllables
- * bold, the rhyme (from the last stress on) marked in a couplet. Lines that can't be split show as written.
+ * The line as written, its sung syllables marked underneath: one short segment per syllable (as the flow
+ * counts them — vowels merged across words share one), stressed ones in the accent colour; the rhyme
+ * word coloured in a couplet. Lines that can't be split show as written.
  */
 function Syllables({ text, lang, rhyme }: { text: string; lang: string; rhyme: boolean }) {
-  const syl = syllabify(text, lang);
-  if (!syl) return rhyme ? <RhymeEnd text={text} /> : <>{text}</>;
+  const parts = syllableParts(text, lang);
+  if (!parts) return rhyme ? <RhymeEnd text={text} /> : <>{text}</>;
   const { stresses } = prosody(text, lang);
   const stressed = new Set(stresses);
-  const rhymeFrom = stresses.length ? stresses[stresses.length - 1] : syl.length - 1;
+  // the rhyme word: from where the last word starts (a merged syllable counts as its start)
+  let rhymeFrom = parts.length - 1;
+  while (rhymeFrom > 0 && !parts[rhymeFrom].space && !parts[rhymeFrom].text.includes(" ")) rhymeFrom--;
   return (
-    <span aria-label={text}>
-      {syl.map((x, i) => (
+    <span className="leading-[1.75]">
+      {parts.map((p, i) => (
         <span key={i}>
-          {i > 0 && (
-            <>
-              <span className="text-muted/50">·</span>
-              <wbr />
-            </>
-          )}
-          <span className={`${stressed.has(i) ? "font-semibold" : ""} ${rhyme && i >= rhymeFrom ? "text-accent" : ""}`}>{x}</span>
+          {p.space && " "}
+          <span
+            className={rhyme && i >= rhymeFrom ? "text-accent" : undefined}
+            style={{
+              backgroundImage: `linear-gradient(${stressed.has(i) ? "var(--accent)" : "color-mix(in srgb, var(--muted) 35%, transparent)"}, ${stressed.has(i) ? "var(--accent)" : "color-mix(in srgb, var(--muted) 35%, transparent)"})`,
+              backgroundRepeat: "no-repeat",
+              backgroundPosition: "0 100%",
+              backgroundSize: `calc(100% - 3px) ${stressed.has(i) ? 3 : 2}px`,
+              paddingBottom: 4,
+              boxDecorationBreak: "clone",
+              WebkitBoxDecorationBreak: "clone",
+            }}
+          >
+            {p.text}
+          </span>
         </span>
       ))}
     </span>
