@@ -4,6 +4,7 @@ import { adjustLength } from "@/lib/rhyme/fit";
 import { songRhymeDistance } from "@/lib/scheme";
 import Anthropic from "@anthropic-ai/sdk";
 import { analyzeLine, compareLines, lastWord } from "@/lib/rhyme/analyze";
+import { coupletsOf } from "@/lib/flow/couplets";
 import { describeRhythm, prosody } from "@/lib/rhyme/prosody";
 import { rhymePartners } from "@/lib/scheme";
 import { sectionPattern } from "@/lib/pattern";
@@ -592,7 +593,9 @@ export async function flowSuggest(tree: ProjectTree, lineIds: string[]) {
             ? ` — written: “${l.text}”`
             : recorded(l)
               ? ` — recorded: “${l.flow!.words}”${l.text.trim() !== l.flow!.words.trim() ? `, now: “${l.text}”` : ""}`
-              : "";
+              : f?.draft && want.has(l.id)
+                ? ` — earlier version: “${f.draft}”`
+                : "";
         return `${n}. ${want.has(l.id) ? "[WRITE]" : "[KEEP]"} rhythm: ${rhythm}; sang: ${f?.words?.trim() ? `“${f.words}”` : "(na-na)"}${chosen}`;
       });
       return `${s.name}${performedBy(tree, s)}:\n${rows.join("\n")}`;
@@ -604,11 +607,8 @@ export async function flowSuggest(tree: ProjectTree, lineIds: string[]) {
   const allCouplets: [Line, Line][] = [];
   for (const s of tree.sections) {
     const lyric = s.lines.filter((l) => l.kind === "lyric");
-    const sung = lyric.some((l) => l.flow?.pair !== undefined);
-    const couplets: [Line, Line][] = [];
-    for (let k = 0; k + 1 < lyric.length; k++) {
-      if (sung ? lyric[k].flow?.pair === 1 && lyric[k + 1].flow?.pair === 2 : k % 2 === 0) couplets.push([lyric[k], lyric[k + 1]]);
-    }
+    // as sung, and the lines left over in order: every line has a rhyme partner
+    const couplets = coupletsOf(lyric);
     allCouplets.push(...couplets);
     for (const [a, b] of couplets) {
       if (!want.has(a.id) && !want.has(b.id)) continue;
@@ -641,6 +641,7 @@ For every [WRITE] line write 3 options. Each option must:
 - have exactly the line's number of syllables (sung syllables, ±1) with the stressed syllables on the DUM positions — it must fit the rhythm the writer sang;
 - end on an open, singable vowel when the last note is held (~);
 - respect its rhyme rule and continue the lines around it, so the song reads as one coherent text about the writer's topic.
+Lines with an "earlier version" got a new rhythm: rewrite that version to it — keep its meaning and its key words, shorten or lengthen it to the new syllable count (e.g. "Ti scrivo piano senza chiedere perché" → 6 syllables: "Ti scrivo dentro me"); the FIRST option stays closest to the earlier version. Neighbouring earlier versions may be merged or split.
 The rhyme matters most: the last words of a couplet must truly rhyme — the same ending from the stressed vowel on (cuore / amore, notte / forte), not just one shared vowel — and in a couplet that is written together, option 1 rhymes with option 1, option 2 with option 2, option 3 with option 3.
 When the writer sang real words in a line that isn't recorded, the FIRST option keeps them (completed and corrected into a full line); the others may go further. Make the 3 options clearly different.${
     vocals

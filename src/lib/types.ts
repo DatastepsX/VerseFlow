@@ -209,4 +209,6 @@ export interface LineFlow {
   end?: number;
   /** 1 / 2 = first / second line of a rhyming couplet (the line ends on the rhyme), 0 = on its own */
   pair?: 0 | 1 | 2;
+  /** the line's text before a new flow was set for its part: rewritten to the new rhythm (meaning and key words kept) */
+  draft?: string;
 }

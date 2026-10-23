@@ -18,6 +18,8 @@ import { download, fullText } from "@/components/writer/util";
 import { VoiceSheet, type VoiceInfo } from "./VoiceSheet";
 import { TapFlow } from "./TapFlow";
 import { exampleWords } from "@/lib/flow/example";
+import { coupletsOf } from "@/lib/flow/couplets";
+import { analyzeLine, compareLines } from "@/lib/rhyme/analyze";
 import { gridFor, type BeatGrid, type FlowGridModel } from "@/lib/flow/grid";
 import {
   AudioLines,
@@ -566,6 +568,30 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
     }
   };
   // empty lines outside the empty parts (those have their own buttons)
+  /**
+   * A couplet that doesn't rhyme: switch to the option that rhymes best with the partner (free), from
+   * either line's options; none rhymes → 3 new options for the 2nd line, rhyming with the 1st (1 call)
+   */
+  const makeItRhyme = async (a: LyricLine, b: LyricLine) => {
+    const best = [
+      ...b.alternatives.map((x) => ({ alt: x, line: b, score: rhymeScore(a.text, x.text, lang) })),
+      ...a.alternatives.map((x) => ({ alt: x, line: a, score: rhymeScore(x.text, b.text, lang) })),
+    ].sort((x, y) => y.score - x.score)[0];
+    if (best && best.score >= RHYMES) {
+      await lineAction(best.line.id, () => call(`/api/alternatives/${best.alt.id}`, { action: "swap" }));
+      return;
+    }
+    // no option rhymes yet: 3 new ones for the 2nd line, rhyming with the 1st — then the best one goes in
+    await lineAction(b.id, async () => {
+      const t = await call(`/api/projects/${pid}/flow`, { action: "suggest", lineIds: [b.id] });
+      const fresh = t?.sections.flatMap((s) => s.lines).find((l) => l.id === b.id) as LyricLine | undefined;
+      if (!fresh) return;
+      if (rhymeScore(a.text, fresh.text, lang) >= RHYMES) return;
+      const top = fresh.alternatives.map((x) => ({ x, score: rhymeScore(a.text, x.text, lang) })).sort((p, q) => q.score - p.score)[0];
+      if (top && top.score >= RHYMES) await call(`/api/alternatives/${top.x.id}`, { action: "swap" });
+      else setNote("No rhyming option yet — try “Make it rhyme” again, or edit the line.");
+    });
+  };
   const missing = tree.sections
     .filter((s) => !isEmptyPart(s))
     .flatMap((s) => s.lines.filter((l) => l.kind === "lyric" && !l.text.trim()))
@@ -1020,15 +1046,17 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
                     )}
                   </h3>
                   <div className="space-y-3">
-                    {couplets(lines).map((group) => (
-                      <div key={group[0].id} className={group.length > 1 ? "space-y-1.5 border-l-2 border-accent/30 pl-2" : ""} title={group.length > 1 ? "These two lines rhyme" : undefined}>
+                    {couplets(lines).map((group) => {
+                      const off = group.length > 1 && !rhymesWell(group[0].text, group[1].text, lang);
+                      return (
+                      <div key={group[0].id} className={group.length > 1 ? `space-y-1.5 border-l-2 pl-2 ${off ? "border-warn/60" : "border-accent/30"}` : ""} title={group.length > 1 ? "A couplet: these two lines rhyme" : undefined}>
                         {group.map((l) => (
                           <LineCard
                             key={l.id}
                             line={l}
                             lang={lang}
                             live={live === l.id}
-                            pair={l.flow?.pair}
+                            pair={group.length > 1 ? 1 : 0}
                             busy={busyLine === l.id}
                             editing={editing === l.id}
                             draft={draft}
@@ -1082,8 +1110,23 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
                             }}
                           />
                         ))}
+                        {off && (
+                          <div className="flex items-center gap-2 rounded-2xl bg-warn-soft px-3 py-2 text-xs text-warn">
+                            <span className="flex-1">
+                              “{lastWordOf(group[0].text)}” and “{lastWordOf(group[1].text)}” don&apos;t rhyme
+                            </span>
+                            <button
+                              className="flex shrink-0 items-center gap-1 rounded-full bg-panel px-3 py-1.5 font-semibold text-accent disabled:opacity-50"
+                              disabled={busyLine === group[1].id}
+                              onClick={() => void makeItRhyme(group[0] as LyricLine, group[1] as LyricLine)}
+                            >
+                              <Sparkles className="h-3.5 w-3.5" /> Make it rhyme
+                            </button>
+                          </div>
+                        )}
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </section>
               );
@@ -1327,14 +1370,20 @@ function LineCard(props: {
 }
 
 /** lines in their couplets (as sung: flow.pair) — the two lines of a couplet are shown together */
+/** lines in their couplets (as sung, the rest in order — every line has a rhyme partner), shown together */
 function couplets<T extends Line>(lines: T[]): T[][] {
-  const out: T[][] = [];
-  lines.forEach((l, k) => {
-    if (l.flow?.pair === 2 && lines[k - 1]?.flow?.pair === 1 && out.length) out[out.length - 1].push(l);
-    else out.push([l]);
-  });
-  return out;
+  const pairs = coupletsOf(lines);
+  const partner = new Map(pairs.map(([x, y]) => [x.id, y]));
+  const second = new Set(pairs.map(([, y]) => y.id));
+  return lines.filter((l) => !second.has(l.id)).map((l) => (partner.has(l.id) ? [l, partner.get(l.id)!] : [l]));
 }
+
+/** from this score on two line endings count as a rhyme (assonance or better) */
+const RHYMES = 0.55;
+const rhymeScore = (x: string, y: string, lang: string) => (x.trim() && y.trim() ? compareLines(analyzeLine(x, lang), analyzeLine(y, lang)).score : 0);
+/** both lines written and their endings don't rhyme */
+const rhymesWell = (x: string, y: string, lang: string) => !x.trim() || !y.trim() || rhymeScore(x, y, lang) >= RHYMES;
+const lastWordOf = (t: string) => t.trim().split(/\s+/).pop()?.replace(/[^\p{L}\p{N}']+/gu, "") ?? "";
 
 /** the line with its last word — the rhyme — marked */
 function RhymeEnd({ text }: { text: string }) {

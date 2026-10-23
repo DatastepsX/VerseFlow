@@ -67,6 +67,16 @@ makes it the line's flow (undoable like a text edit); "Write · 1 call" also wri
 lines with a flow show example words as a placeholder, so you see how long each bar is. Grid logic:
 `src/lib/flow/grid.ts`.
 
+**Always rhymes**: every line has a rhyme partner — couplets as sung (`flow.pair`), the lines left over paired in order
+(`coupletsOf` in `src/lib/flow/couplets.ts`, the same pairs on the screen and for the AI). A couplet whose endings
+don't rhyme is marked ("“perché” and “passi” don't rhyme") with **Make it rhyme**: the best rhyming option of either
+line goes in (free); when none rhymes, 3 new options for the 2nd line (1 call) and the best rhyming one goes in.
+Options of a couplet written together stay paired (option i with option i), the best rhyming pair first.
+
+**A new flow for a part with lyrics** (e.g. your recording): new line i gets the part's earlier line i as `flow.draft`,
+and the AI rewrites it to the new rhythm — meaning and key words kept ("Ti scrivo piano senza chiedere perché" →
+6 tapped syllables: "Ti scrivo dentro me").
+
 The full editor (`/p/[id]`), the Studio and the phone remote are still there under **More → Advanced**.
 
 ## What works today (full editor)

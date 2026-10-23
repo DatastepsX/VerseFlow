@@ -1195,6 +1195,8 @@ export interface FlowLineInput {
   words: string;
   times?: number[];
   pair?: 0 | 1 | 2;
+  /** the earlier text sung here (a part given a new flow) */
+  draft?: string;
 }
 
 /** the rows of sung lines (and empty placeholder lines) for one section */
@@ -1229,6 +1231,7 @@ function flowRows(
             times: l.times ?? [],
             end: l.end,
             pair: l.pair,
+            ...(l.draft ? { draft: l.draft.slice(0, 200) } : {}),
           } satisfies LineFlow,
         },
   );
@@ -1303,10 +1306,15 @@ export async function buildFlowSong(
  */
 export async function buildFlowPart(projectId: string, sectionId: string, lines: FlowLineInput[]) {
   const section = check(await db().from("sections").select("id, project_id").eq("id", sectionId).eq("project_id", projectId).single()) as Section;
-  const old = check(await db().from("lines").select("id, text").eq("section_id", section.id).eq("deleted", false)) as { id: string; text: string }[];
+  const old = check(
+    await db().from("lines").select("id, text, audio_at, position").eq("section_id", section.id).eq("deleted", false).order("position"),
+  ) as { id: string; text: string; audio_at: number | null; position: number }[];
   if (old.some((l) => l.text.trim())) await saveVersion(projectId, "Before the new flow for a part");
   for (const l of old) await deleteLine(l.id);
   const sung = [...lines].sort((a, b) => a.start - b.start);
+  // the lyrics the part had: new line i rewrites old line i (spread evenly when there are more or fewer lines now)
+  const written = old.filter((l) => l.text.trim());
+  if (written.length) sung.forEach((l, i) => (l.draft = written[Math.min(written.length - 1, Math.floor((i * written.length) / sung.length))].text));
   const last = check(await db().from("lines").select("position").eq("section_id", section.id).order("position", { ascending: false }).limit(1)) as {
     position: number;
   }[];

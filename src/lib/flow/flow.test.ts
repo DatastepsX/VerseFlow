@@ -5,6 +5,7 @@ import { detectSyllables } from "./syllables";
 import { dropSounds, isSound } from "./fillers";
 import { cycle, flowFromGrid, gridFor, quantizeTaps } from "./grid";
 import { exampleWords } from "./example";
+import { coupletsOf } from "./couplets";
 import { prosody } from "@/lib/rhyme/prosody";
 import { emptyParts, vocalLines } from "./vocals";
 
@@ -253,4 +254,24 @@ test("sounds: an Italian “po'” (un po') is a word, not a sung sound", () => 
   const w = (text: string, i: number) => ({ text, start: i, end: i + 0.2 });
   const line = "suoni risposta tarda un po'.".split(" ").map(w);
   assert.equal(dropSounds(line).length, 5);
+});
+
+test("couplets: as sung, and every line left over paired with the next", () => {
+  const L = (pair?: 0 | 1 | 2) => ({ id: String(Math.random()), flow: pair === undefined ? null : { syllables: 8, stress: [], held: false, words: "", pair } });
+  const lines = [L(0), L(0), L(1), L(2), L(0), L(0), L(0)];
+  const c = coupletsOf(lines).map(([a, b]) => [lines.indexOf(a), lines.indexOf(b)]);
+  assert.deepEqual(c, [
+    [0, 1],
+    [2, 3],
+    [4, 5],
+  ]);
+  // no flow at all: 1+2, 3+4
+  const plain = [L(), L(), L(), L()];
+  assert.deepEqual(
+    coupletsOf(plain).map(([a, b]) => [plain.indexOf(a), plain.indexOf(b)]),
+    [
+      [0, 1],
+      [2, 3],
+    ],
+  );
 });
