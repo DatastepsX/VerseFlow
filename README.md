@@ -82,6 +82,8 @@ lines with a flow show example words as a placeholder, so you see how long each 
 don't rhyme is marked ("“perché” and “passi” don't rhyme") with **Make it rhyme**: the best rhyming option of either
 line goes in (free); when none rhymes, 3 new options for the 2nd line (1 call) and the best rhyming one goes in.
 Options of a couplet written together stay paired (option i with option i), the best rhyming pair first.
+↻ (next option) on a couplet line takes the options that rhyme with the other line *as it is now* first; the button
+shows how many do ("2 · 1 rhyme").
 
 **A new flow for a part with lyrics** (e.g. your recording): new line i gets the part's earlier line i as `flow.draft`,
 and the AI rewrites it to the new rhythm — meaning and key words kept ("Ti scrivo piano senza chiedere perché" →

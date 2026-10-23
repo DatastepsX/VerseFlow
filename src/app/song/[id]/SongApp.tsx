@@ -1075,7 +1075,11 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
                       const off = group.length > 1 && !rhymesWell(group[0].text, group[1].text, lang);
                       return (
                       <div key={group[0].id} className={group.length > 1 ? `border-l-2 pl-1 ${off ? "border-warn/60" : "border-accent/30"}` : "pl-[6px]"} title={group.length > 1 ? "A couplet: these two lines rhyme" : undefined}>
-                        {group.map((l) => (
+                        {group.map((l) => {
+                          // the couplet's other line, as it is now: options are picked to rhyme with it
+                          const partner = group.length > 1 ? (group.find((x) => x.id !== l.id) as LyricLine) : null;
+                          const rhyming = partner?.text.trim() ? l.alternatives.filter((x) => rhymeScore(partner.text, x.text, lang) >= RHYMES) : [];
+                          return (
                           <LineCard
                             key={l.id}
                             line={l}
@@ -1099,7 +1103,11 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
                                 ),
                               )
                             }
-                            onNext={() => void lineAction(l.id, () => call(`/api/alternatives/${l.alternatives[0].id}`, { action: "swap" }))}
+                            rhymingCount={partner?.text.trim() ? rhyming.length : null}
+                            onNext={() =>
+                              // next option: first the ones rhyming with the partner line (in turn), else the next in line
+                              void lineAction(l.id, () => call(`/api/alternatives/${(rhyming[0] ?? l.alternatives[0]).id}`, { action: "swap" }))
+                            }
                             onNew={() => void lineAction(l.id, () => call(`/api/projects/${pid}/flow`, { action: "suggest", lineIds: [l.id] }))}
                             onEdit={() => {
                               setEditing(l.id);
@@ -1136,7 +1144,8 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
                               if (window.confirm("Remove this line?")) void lineAction(l.id, () => call(`/api/lines/${l.id}`, undefined, "DELETE"));
                             }}
                           />
-                        ))}
+                          );
+                        })}
                         {off && (
                           <div className="ml-2 mt-0.5 flex items-center gap-2 rounded-xl bg-warn-soft px-2.5 py-1 text-[11px] text-warn">
                             <span className="flex-1">
@@ -1250,6 +1259,8 @@ function LineCard(props: {
   onSing: (g: FlowGridModel) => Promise<number[]>;
   songTime: () => number;
   onSaveGrid: (f: NonNullable<Line["flow"]>, write: boolean) => void;
+  /** options rhyming with the couplet's other line (null: no partner) */
+  rhymingCount: number | null;
   /** opened: its flow, details and actions show (one line at a time) */
   open: boolean;
   onToggle: () => void;
@@ -1394,11 +1405,18 @@ function LineCard(props: {
               className="flex h-10 flex-1 items-center justify-center gap-1.5 rounded-2xl bg-panel-2 text-sm font-semibold text-fg/80 disabled:opacity-40"
               disabled={props.busy || l.alternatives.length === 0}
               onClick={props.onNext}
-              title="Next option (free)"
+              title={props.rhymingCount !== null ? `Next option rhyming with the other line (${props.rhymingCount} of ${l.alternatives.length} rhyme) — free` : "Next option (free)"}
               aria-label="Next option"
             >
               <Shuffle className="h-4 w-4" />
-              {l.alternatives.length || ""}
+              {props.rhymingCount !== null && l.alternatives.length > 0 ? (
+                <span className="flex flex-col items-start leading-none">
+                  <span>{l.alternatives.length}</span>
+                  <span className={`text-[9px] font-medium ${props.rhymingCount ? "text-ok" : "text-warn"}`}>{props.rhymingCount} rhyme</span>
+                </span>
+              ) : (
+                l.alternatives.length || ""
+              )}
             </button>
             <button
               className="flex h-10 flex-1 items-center justify-center gap-1 rounded-2xl bg-panel-2 text-sm font-semibold text-accent disabled:opacity-40"
