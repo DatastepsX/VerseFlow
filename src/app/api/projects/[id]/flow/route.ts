@@ -1,5 +1,5 @@
 import { flowSuggest } from "@/lib/server/ai";
-import { applyFlowOptions, buildFlowSong, getTree } from "@/lib/server/repo";
+import { applyFlowOptions, buildFlowPart, buildFlowSong, getTree } from "@/lib/server/repo";
 import { storedTranscript, transcribeBeat, transcribeTake } from "@/lib/server/transcribe";
 import { body, handle, treeResponse } from "@/lib/server/http";
 
@@ -9,7 +9,9 @@ export const maxDuration = 300;
  * The song from the writer's flow:
  *  transcribe {takeId}  → {words}  1 ElevenLabs call: the words sung in the flow take
  *  vocals               → {words}  the song's own vocals: 1 ElevenLabs call on the uploaded track (stored, reused)
- *  build {lines, source} → tree    one line per sung bar with its rhythm (no AI); source "vocals" = the words are the text
+ *  build {lines, source, parts} → tree  the song: one line per sung line with its rhythm (no AI); source "vocals" = the
+ *                                       words are the text; parts = the parts without vocals (empty lines to write later)
+ *  buildPart {sectionId, lines} → tree  one part from a flow recorded for it (its lines replaced, the rest stays)
  *  suggest {lineIds}    → tree     1 AI call: 3 options per line (first = the line's text)
  */
 export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]/flow">) {
@@ -21,6 +23,8 @@ export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]/f
       lines?: { start: number; sungAt: number; end?: number; syllables: number; stress: number[]; held: boolean; words: string; times?: number[]; pair?: number }[];
       lineIds?: string[];
       source?: string;
+      sectionId?: string;
+      parts?: { start: number; slots: number[] }[];
     }>(req);
     if (b.action === "vocals") {
       const tree = await getTree(id);
@@ -32,7 +36,7 @@ export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]/f
       const tree = await getTree(id);
       return Response.json({ words: await transcribeTake(id, b.takeId, tree.project.language) });
     }
-    if (b.action === "build") {
+    if (b.action === "build" || b.action === "buildPart") {
       const ok = (v: unknown) => typeof v === "number" && Number.isFinite(v);
       const lines = (b.lines ?? [])
         .filter((l) => l && ok(l.start) && ok(l.syllables))
@@ -49,7 +53,16 @@ export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]/f
           pair: l.pair === 1 || l.pair === 2 || l.pair === 0 ? (l.pair as 0 | 1 | 2) : undefined,
         }));
       if (!lines.length) return Response.json({ error: b.source === "vocals" ? "No vocals were found in the song." : "No singing was found in the recording." }, { status: 400 });
-      await buildFlowSong(id, lines, b.source === "vocals" ? "vocals" : "flow");
+      if (b.action === "buildPart") {
+        if (!b.sectionId) return Response.json({ error: "sectionId required" }, { status: 400 });
+        await buildFlowPart(id, b.sectionId, lines);
+        return treeResponse(id);
+      }
+      const parts = (b.parts ?? [])
+        .filter((p) => p && ok(p.start) && Array.isArray(p.slots))
+        .slice(0, 20)
+        .map((p) => ({ start: p.start, slots: p.slots.filter(ok).slice(0, 40) }));
+      await buildFlowSong(id, lines, b.source === "vocals" ? "vocals" : "flow", parts);
       return treeResponse(id);
     }
     if (b.action === "suggest") {

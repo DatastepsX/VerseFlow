@@ -44,7 +44,10 @@ export function SongApp({ initialTree, autoVocals = false }: { initialTree: Proj
   const lang = tree.project.language;
   const lyricLines = tree.sections.flatMap((s) => s.lines.filter((l) => l.kind === "lyric"));
   const hasLines = lyricLines.length > 0;
-  const flowTake = [...tree.takes].reverse().find((t) => t.lane === "Flow" && t.chosen) ?? null;
+  // your recorded flows: the whole song's, and the ones recorded for single parts (while the part exists)
+  const sectionIds = new Set(tree.sections.map((s) => s.id));
+  const wholeFlow = [...tree.takes].reverse().find((t) => t.lane === "Flow" && t.chosen && !t.section_id) ?? null;
+  const flowTakes = [...(wholeFlow ? [wholeFlow] : []), ...tree.takes.filter((t) => t.lane === "Flow" && t.chosen && t.section_id && sectionIds.has(t.section_id))];
   const [view, setView] = useState<View>(hasLines ? "lyrics" : "flow");
   const [error, setError] = useState<string | null>(null);
 
@@ -66,7 +69,7 @@ export function SongApp({ initialTree, autoVocals = false }: { initialTree: Proj
   // ---------- audio: one engine for playing and recording ----------
   const engine = useRef<StudioEngine | null>(null);
   const beat = useRef<AudioBuffer | null>(null);
-  const flowBuf = useRef<{ id: string; buf: AudioBuffer } | null>(null);
+  const flowBufs = useRef(new Map<string, AudioBuffer>());
   const [beatReady, setBeatReady] = useState(false);
   useEffect(() => {
     const e = new StudioEngine();
@@ -96,12 +99,15 @@ export function SongApp({ initialTree, autoVocals = false }: { initialTree: Proj
   }, [filename, pid]);
 
   const loadFlow = async () => {
-    if (!flowTake || flowBuf.current?.id === flowTake.id) return;
-    const r = (await fetch(`/api/projects/${pid}/takes?ids=${flowTake.id}`).then((x) => x.json())) as { urls: Record<string, string> };
-    const u = r.urls?.[flowTake.id];
-    if (!u) return;
-    const buf = await engine.current!.decode(await fetch(u).then((x) => x.arrayBuffer()));
-    flowBuf.current = { id: flowTake.id, buf };
+    const todo = flowTakes.filter((t) => !flowBufs.current.has(t.id));
+    if (!todo.length) return;
+    const r = (await fetch(`/api/projects/${pid}/takes?ids=${todo.map((t) => t.id).join(",")}`).then((x) => x.json())) as { urls: Record<string, string> };
+    await Promise.all(
+      todo.map(async (t) => {
+        const u = r.urls?.[t.id];
+        if (u) flowBufs.current.set(t.id, await engine.current!.decode(await fetch(u).then((x) => x.arrayBuffer())));
+      }),
+    );
   };
 
   // ---------- playback with the lyrics following ----------
@@ -190,7 +196,8 @@ export function SongApp({ initialTree, autoVocals = false }: { initialTree: Proj
     // your voice replaces your flow (two voices at once are hard to follow)
     const flowOn = (opts.flow ?? withFlow) && !guideL.length;
     if (flowOn) await loadFlow().catch(() => {});
-    const layers = [...(flowOn && flowBuf.current && flowTake ? [{ buffer: flowBuf.current.buf, at: flowTake.start_at, gain: 0.9 }] : []), ...guideL];
+    const flows = flowOn ? flowTakes.flatMap((t) => (flowBufs.current.has(t.id) ? [{ buffer: flowBufs.current.get(t.id)!, at: t.start_at, gain: 0.9 }] : [])) : [];
+    const layers = [...flows, ...guideL];
     e.play(Math.max(0, from), { beat: beat.current, layers, beatGain: guideL.length ? 0.6 : 0.8 });
     stopAt.current = until;
     setPlaying(true);
@@ -205,6 +212,9 @@ export function SongApp({ initialTree, autoVocals = false }: { initialTree: Proj
   const [headphones, setHeadphones] = useState(true);
   const [rec, setRec] = useState<null | "recording" | "processing">(null);
   const [source, setSource] = useState<"flow" | "vocals">("flow");
+  /** recording a flow for one part only (a part without vocals): its time range */
+  const [part, setPart] = useState<{ sectionId: string; name: string; start: number; end: number } | null>(null);
+  const bar = tree.audio?.bpm ? ((tree.audio.beats_per_bar ?? 4) * 60) / tree.audio.bpm : 2.5;
   const [level, setLevel] = useState(0);
   const [step, setStep] = useState<{ key: FlowStep; progress?: { done: number; total: number } } | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -216,15 +226,17 @@ export function SongApp({ initialTree, autoVocals = false }: { initialTree: Proj
       if (!e) return;
       setNow(e.position());
       setLevel(e.level());
-      if (tree.audio?.duration && e.position() >= tree.audio.duration) void stopRef.current?.();
+      const until = part ? part.end + 0.3 : tree.audio?.duration;
+      if (until && e.position() >= until) void stopRef.current?.();
     }, 60);
     return () => clearInterval(id);
-  }, [rec, tree.audio?.duration]);
+  }, [rec, tree.audio?.duration, part]);
 
   const startFlow = async () => {
     const e = engine.current;
     if (!e || !beat.current) return;
-    if (hasLines && !window.confirm("Record a new flow? It replaces the current draft (kept lines are saved as a version).")) return;
+    const partHasText = part && tree.sections.find((s) => s.id === part.sectionId)?.lines.some((l) => l.text.trim());
+    if (part ? partHasText && !window.confirm(`Record a new flow for ${part.name}? It replaces its lines (a version is saved first).`) : hasLines && !window.confirm("Record a new flow? It replaces the current draft (kept lines are saved as a version).")) return;
     setError(null);
     setNote(null);
     try {
@@ -234,7 +246,8 @@ export function SongApp({ initialTree, autoVocals = false }: { initialTree: Proj
       return;
     }
     stopPlay();
-    e.play(0, { beat: beat.current });
+    // a part: the beat starts a bar before it, to come in on time
+    e.play(part ? Math.max(0, part.start - bar) : 0, { beat: beat.current });
     e.startRecording();
     setRec("recording");
   };
@@ -252,13 +265,14 @@ export function SongApp({ initialTree, autoVocals = false }: { initialTree: Proj
       return;
     }
     try {
-      const out = await processFlow(pid, tree, r, (key, progress) => setStep({ key, progress }), setTree);
+      const out = await processFlow(pid, tree, r, (key, progress) => setStep({ key, progress }), setTree, part ?? undefined);
+      setPart(null);
       setTree(out.tree);
       if (out.wordsFailed) setNote(`Your words couldn't be recognised (${out.wordsFailed}) — the lyrics follow your rhythm only.`);
       // keep the fresh recording for playback
       const buf = e.ctx.createBuffer(1, r.samples.length, r.sampleRate);
       buf.copyToChannel(r.samples as Float32Array<ArrayBuffer>, 0);
-      flowBuf.current = { id: out.takeId, buf };
+      flowBufs.current.set(out.takeId, buf);
       setView("lyrics");
       window.scrollTo(0, 0);
     } catch (err) {
@@ -308,6 +322,25 @@ export function SongApp({ initialTree, autoVocals = false }: { initialTree: Proj
     void readVocals();
   });
 
+  // ---------- parts without vocals: written later, from a flow recorded just for them ----------
+  const partRange = (s: ProjectTree["sections"][number]) => {
+    const i = tree.sections.indexOf(s);
+    const lyric = s.lines.filter((l) => l.kind === "lyric");
+    const start = s.audio_start ?? lyric[0]?.audio_at ?? 0;
+    const nextStart = tree.sections.slice(i + 1).find((x) => x.audio_start !== null)?.audio_start ?? null;
+    return { start, end: nextStart ?? total };
+  };
+  const isEmptyPart = (s: ProjectTree["sections"][number]) => {
+    const lyric = s.lines.filter((l) => l.kind === "lyric");
+    return lyric.length > 0 && lyric.every((l) => !l.text.trim() && !l.flow);
+  };
+  const recordPart = (s: ProjectTree["sections"][number]) => {
+    stopPlay();
+    setPart({ sectionId: s.id, name: s.name, ...partRange(s) });
+    setView("flow");
+    window.scrollTo(0, 0);
+  };
+
   // ---------- line actions ----------
   const [busyLine, setBusyLine] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
@@ -320,7 +353,11 @@ export function SongApp({ initialTree, autoVocals = false }: { initialTree: Proj
       setBusyLine(null);
     }
   };
-  const missing = lyricLines.filter((l) => !l.text.trim()).map((l) => l.id);
+  // empty lines outside the empty parts (those have their own buttons)
+  const missing = tree.sections
+    .filter((s) => !isEmptyPart(s))
+    .flatMap((s) => s.lines.filter((l) => l.kind === "lyric" && !l.text.trim()))
+    .map((l) => l.id);
   const missingCalls = tree.sections.flatMap((s) => chunkLines(s.lines.filter((l) => l.kind === "lyric" && missing.includes(l.id)))).length;
   const kept = lyricLines.filter((l) => l.status === "APPROVED" || l.status === "APPROVED_EDITED").length;
 
@@ -369,7 +406,7 @@ export function SongApp({ initialTree, autoVocals = false }: { initialTree: Proj
                 <span>{fmtTime(total)}</span>
               </div>
             </div>
-            {flowTake && !withGuide && (
+            {flowTakes.length > 0 && !withGuide && (
               <button
                 className={`shrink-0 rounded-full px-2.5 py-1.5 text-xs font-semibold ${withFlow ? "bg-accent-soft text-accent" : "bg-panel-2 text-muted"}`}
                 onClick={() => setWithFlow((v) => !v)}
@@ -415,11 +452,21 @@ export function SongApp({ initialTree, autoVocals = false }: { initialTree: Proj
           <div className="flex flex-col items-center text-center">
             {rec === null && (
               <>
-                <h2 className="text-2xl font-extrabold">Record your flow</h2>
-                <p className="mt-2 max-w-sm text-sm text-muted">
-                  The beat plays from the start. Sing or rap anything over it — real words, “na-na”, anything. Your rhythm and your words become
-                  the lyrics.
-                </p>
+                <h2 className="text-2xl font-extrabold">{part ? `Record your flow for ${part.name}` : "Record your flow"}</h2>
+                {part ? (
+                  <p className="mt-2 max-w-sm text-sm text-muted">
+                    {fmtTime(part.start)} – {fmtTime(part.end)}. The beat starts one bar before the part — come in on it and sing or rap anything:
+                    your rhythm and your words become this part&apos;s lyrics. The rest of the song stays.
+                    <button className="mt-1 block w-full text-center text-xs underline" onClick={() => setPart(null)}>
+                      Record the whole song instead
+                    </button>
+                  </p>
+                ) : (
+                  <p className="mt-2 max-w-sm text-sm text-muted">
+                    The beat plays from the start. Sing or rap anything over it — real words, “na-na”, anything. Your rhythm and your words become
+                    the lyrics.
+                  </p>
+                )}
                 <ol className="mt-5 w-full space-y-2 text-left text-sm">
                   <li className="flex gap-3 rounded-2xl bg-panel px-4 py-3">
                     <span>🎧</span>
@@ -427,12 +474,12 @@ export function SongApp({ initialTree, autoVocals = false }: { initialTree: Proj
                   </li>
                   <li className="flex gap-3 rounded-2xl bg-panel px-4 py-3">
                     <span>🎤</span>
-                    <span>Tap record and flow over the whole beat — stop whenever you like.</span>
+                    <span>{part ? "Tap record and flow over the part — it stops by itself at the part's end." : "Tap record and flow over the whole beat — stop whenever you like."}</span>
                   </li>
                   <li className="flex gap-3 rounded-2xl bg-panel px-4 py-3">
                     <span>✨</span>
                     <span>
-                      You get a first version of the song with 3 options for every bar.
+                      {part ? "You get this part's lines with 3 options for every bar." : "You get a first version of the song with 3 options for every bar."}
                       <span className="block text-xs text-muted">· 1 word recognition + 1 AI call per 8 bars</span>
                     </span>
                   </li>
@@ -451,6 +498,7 @@ export function SongApp({ initialTree, autoVocals = false }: { initialTree: Proj
                   <span className="h-10 w-10 rounded-full bg-white" />
                 </button>
                 <p className="mt-3 text-sm font-semibold">{beatReady ? "Tap to start" : "Loading the beat…"}</p>
+                {!part && (
                 <button className="mt-8 flex w-full items-center gap-3 rounded-2xl border border-line bg-panel px-4 py-3.5 text-left" onClick={() => void readVocals()}>
                   <span className="text-2xl">🎙</span>
                   <span className="min-w-0 flex-1">
@@ -459,13 +507,14 @@ export function SongApp({ initialTree, autoVocals = false }: { initialTree: Proj
                   </span>
                   <span className="text-muted">›</span>
                 </button>
+                )}
               </>
             )}
             {rec === "recording" && (
               <>
                 <p className="text-sm font-semibold uppercase tracking-widest text-[#dc2626]">● Recording your flow</p>
                 <p className="mt-2 font-mono text-4xl font-bold tabular-nums">{fmtTime(Math.max(0, now))}</p>
-                <p className="text-sm text-muted">of {fmtTime(total)}</p>
+                <p className="text-sm text-muted">{part ? `${part.name} ends at ${fmtTime(part.end)}` : `of ${fmtTime(total)}`}</p>
                 <div className="mt-6 h-2 w-full overflow-hidden rounded-full bg-panel-2">
                   <div className="h-full bg-[#dc2626]" style={{ width: `${total ? (Math.max(0, now) / total) * 100 : 0}%` }} />
                 </div>
@@ -491,7 +540,7 @@ export function SongApp({ initialTree, autoVocals = false }: { initialTree: Proj
             )}
             {rec === "processing" && (
               <>
-                <h2 className="text-2xl font-extrabold">{source === "vocals" ? "Reading your song…" : "Writing your song…"}</h2>
+                <h2 className="text-2xl font-extrabold">{source === "vocals" ? "Reading your song…" : part ? `Writing ${part.name}…` : "Writing your song…"}</h2>
                 <ul className="mt-6 w-full space-y-2 text-left">
                   {(source === "vocals" ? VOCAL_STEPS : STEPS).map((s, i, steps) => {
                     const cur = steps.findIndex((x) => x.key === step?.key);
@@ -544,9 +593,56 @@ export function SongApp({ initialTree, autoVocals = false }: { initialTree: Proj
             {tree.sections.map((s) => {
               const lines = s.lines.filter((l) => l.kind === "lyric") as LyricLine[];
               if (!lines.length) return null;
+              if (isEmptyPart(s)) {
+                const r = partRange(s);
+                const calls = chunkLines(lines).length;
+                return (
+                  <section key={s.id}>
+                    <h3 className="mb-2 px-1 text-xs font-bold uppercase tracking-widest text-muted">
+                      {s.name} <span className="font-medium normal-case tracking-normal">· no vocals yet</span>
+                    </h3>
+                    <div className="space-y-2.5 rounded-2xl border-2 border-dashed border-accent/40 bg-accent-soft/30 px-4 py-4">
+                      <p className="text-sm">
+                        <b>{lines.length} lines to write</b>
+                        <span className="text-muted">
+                          {" "}
+                          · {fmtTime(r.start)} – {fmtTime(r.end)}
+                        </span>
+                      </p>
+                      <button className="btn-primary w-full justify-center rounded-xl py-3" onClick={() => recordPart(s)}>
+                        🎤 Record your flow for this part
+                      </button>
+                      <div className="flex gap-2">
+                        <button className="btn flex-1 justify-center rounded-xl py-2.5 text-sm" disabled={!beatReady} onClick={() => void play(Math.max(0, r.start - bar), r.end)}>
+                          ▶ Listen
+                        </button>
+                        <button
+                          className="btn flex-1 justify-center rounded-xl py-2.5 text-sm disabled:opacity-50"
+                          disabled={busyLine === s.id}
+                          onClick={() =>
+                            void lineAction(s.id, async () => {
+                              for (const ids of chunkLines(lines)) await call(`/api/projects/${pid}/flow`, { action: "suggest", lineIds: ids });
+                            })
+                          }
+                          title="Write the lines without a flow (free rhythm, fitting the song around them)"
+                        >
+                          {busyLine === s.id ? "Writing…" : `✨ Write them · ${calls} call${calls === 1 ? "" : "s"}`}
+                        </button>
+                      </div>
+                    </div>
+                  </section>
+                );
+              }
               return (
                 <section key={s.id}>
-                  <h3 className="mb-2 px-1 text-xs font-bold uppercase tracking-widest text-muted">{s.name}</h3>
+                  <h3 className="mb-2 flex items-center px-1 text-xs font-bold uppercase tracking-widest text-muted">
+                    <span className="flex-1">{s.name}</span>
+                    {tree.audio && (
+                      <button className="rounded-full px-2 py-0.5 font-semibold normal-case tracking-normal text-accent" onClick={() => recordPart(s)} title="Record a new flow for this part only">
+                        🎤 new flow
+                      </button>
+                    )}
+                  </h3>
                   <div className="space-y-3">
                     {couplets(lines).map((group) => (
                       <div key={group[0].id} className={group.length > 1 ? "relative space-y-1.5 border-l-2 border-accent/40 pl-2" : ""}>

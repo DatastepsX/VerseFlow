@@ -6,7 +6,7 @@ import { encodeWav, peaksOf, resample } from "@/lib/studio/wav";
 import type { Line, ProjectTree } from "@/lib/types";
 import { flowLines } from "./lines";
 import { detectSyllables } from "./syllables";
-import { vocalLines } from "./vocals";
+import { emptyParts, vocalLines } from "./vocals";
 
 /** lines suggested per AI call (couplets stay together); the calls run in parallel */
 export const FLOW_CHUNK = 8;
@@ -46,6 +46,8 @@ export async function processFlow(
   rec: Recording,
   onStep: (step: FlowStep, progress?: { done: number; total: number }) => void,
   onTree: (t: ProjectTree) => void,
+  /** a flow recorded for one part only: its lines are replaced, the rest of the song stays */
+  part?: { sectionId: string; start: number; end: number },
 ): Promise<{ tree: ProjectTree; takeId: string; wordsFailed: string | null }> {
   const audio = tree.audio!;
   onStep("rhythm");
@@ -68,7 +70,7 @@ export async function processFlow(
     body: JSON.stringify({
       action: "save",
       path: up.path,
-      section_id: null,
+      section_id: part?.sectionId ?? null,
       lane: "Flow",
       start_at: Math.round(rec.startAt * 100000) / 100000,
       duration: small.length / 16000,
@@ -92,10 +94,17 @@ export async function processFlow(
   }
 
   onStep("song");
-  const lines = flowLines(syllables, words, audio, { offset: rec.startAt, lang: tree.project.language, duration: audio.duration ?? rec.startAt + rec.samples.length / rec.sampleRate });
+  let lines = flowLines(syllables, words, audio, { offset: rec.startAt, lang: tree.project.language, duration: audio.duration ?? rec.startAt + rec.samples.length / rec.sampleRate });
+  if (part) {
+    // the part's own lines: sung inside it (the count-in bar before it is only for getting in)
+    lines = lines.filter((l) => l.sungAt >= part.start - 0.4 && l.sungAt < part.end);
+    if (!lines.length) throw new Error("No singing was heard in this part — try again.");
+    const t = await post<ProjectTree>(`/api/projects/${pid}/flow`, { action: "buildPart", sectionId: part.sectionId, lines });
+    onTree(t);
+    return { tree: await suggestAll(pid, t, onStep, onTree, (l, s) => s.id === part.sectionId), takeId, wordsFailed };
+  }
   const t = await post<ProjectTree>(`/api/projects/${pid}/flow`, { action: "build", lines });
   onTree(t);
-
   return { tree: await suggestAll(pid, t, onStep, onTree), takeId, wordsFailed };
 }
 
@@ -115,11 +124,14 @@ export async function processVocals(
   onStep("words");
   const { words } = await post<{ words: TimedWord[] }>(`/api/projects/${pid}/flow`, { action: "vocals" });
   onStep("song");
-  const lines = vocalLines(words, audio, { lang: tree.project.language, duration: audio.duration ?? (words.at(-1)?.end ?? 0) + 2 });
+  const duration = audio.duration ?? (words.at(-1)?.end ?? 0) + 2;
+  const lines = vocalLines(words, audio, { lang: tree.project.language, duration });
   if (!lines.length) throw new Error("No vocals were found in this song — record your flow instead.");
-  const t = await post<ProjectTree>(`/api/projects/${pid}/flow`, { action: "build", lines, source: "vocals" });
+  // the parts without vocals: empty lines, written later (record a flow for the part, or ✨)
+  const parts = emptyParts(lines, audio, duration);
+  const t = await post<ProjectTree>(`/api/projects/${pid}/flow`, { action: "build", lines, source: "vocals", parts });
   onTree(t);
-  return suggestAll(pid, t, onStep, onTree);
+  return suggestAll(pid, t, onStep, onTree, (l) => !!l.flow);
 }
 
 /** 3 suggestions per line: chunks of whole couplets per section, all at once */
@@ -128,8 +140,9 @@ async function suggestAll(
   t: ProjectTree,
   onStep: (step: FlowStep, progress?: { done: number; total: number }) => void,
   onTree: (t: ProjectTree) => void,
+  which: (l: Line, s: ProjectTree["sections"][number]) => boolean = () => true,
 ) {
-  const chunks = t.sections.flatMap((s) => chunkLines(s.lines.filter((l) => l.kind === "lyric")));
+  const chunks = t.sections.flatMap((s) => chunkLines(s.lines.filter((l) => l.kind === "lyric" && which(l, s))));
   const total = chunks.reduce((n, c) => n + c.length, 0);
   let done = 0;
   onStep("suggest", { done, total });

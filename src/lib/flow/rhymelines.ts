@@ -3,11 +3,12 @@ import { analyzeLine, compareLines } from "@/lib/rhyme/analyze";
 import { isWeakWord, prosody } from "@/lib/rhyme/prosody";
 
 /**
- * Where the lines of a sung text break: a line ends on its rhyme. The
- * recognised words are split so that lines pair up in couplets whose last
- * words rhyme ("…la notte / …più forte"), each line about a bar long (the
- * flow's unit) and breaking where the singer breathes. Lines that rhyme with
- * nothing are allowed, but cost more than a couplet.
+ * Where the lines of a sung text break. The singing decides first: a pause
+ * (the singer breathes) and the punctuation the recognition put there
+ * ("divide," / "un po'.") end a line. Where the singing runs on without a
+ * break, the rhyme decides: lines pair up in couplets whose last words rhyme
+ * ("…la notte / …più forte"). Every line stays about a bar long and never
+ * ends on "e", "che", "la"…
  *
  * Dynamic programming over (first word of the line, is it the 2nd of a couplet).
  */
@@ -20,73 +21,78 @@ export interface Segment {
   pair: 0 | 1 | 2;
 }
 
-const RHYME: Record<string, number> = { perfect: 3, assonance: 2.2, identical: 1, consonance: 0.6, none: -1.5 };
-const SINGLE = -1.2; // a line outside a couplet
+const COUPLET: Record<string, number> = { perfect: 2, assonance: 1.4, identical: 0.6, consonance: 0.4 };
 const LONG_GAP = 1.6; // a silence this long always ends a line
 const MAX_WORDS = 30;
 const MIN_SYLLABLES = 4;
 /** "da te", "con me": pronouns at the end of a line are stressed and rhyme */
-const STRESSED_AT_END = new Set(["me", "te", "sé", "lui", "lei", "noi", "voi", "you", "me", "moi", "toi"]);
+const STRESSED_AT_END = new Set(["me", "te", "sé", "lui", "lei", "noi", "voi", "you", "moi", "toi"]);
 
 const clean = (w: string) => w.replace(/[^\p{L}\p{N}']+/gu, "");
+
+/** how strongly the singing breaks after a word: its pause and its punctuation */
+function breakAfter(word: TimedWord, gap: number) {
+  const punct = /[.!?…]["»”']*$/.test(word.text) ? 2.5 : /[,;:—–-]["»”']*$/.test(word.text) ? 1.6 : 0;
+  const pause = gap > LONG_GAP ? 3 : gap > 0.6 ? 2 : gap > 0.35 ? 1.2 : gap > 0.2 ? 0.5 : -1;
+  return punct + pause;
+}
 
 export function rhymeSegments(words: TimedWord[], lang: string, unit: number): Segment[] {
   const n = words.length;
   if (!n) return [];
   const gapAfter = (j: number) => (j >= n - 1 ? Infinity : words[j + 1].start - words[j].end);
-  // a line can only end (and rhyme) on a stressed word: never on "e", "che", "la"…
+  // a line can only end (and rhyme) on a stressed word
   const ends = words.map((w) => {
     const c = clean(w.text);
     return c && (!isWeakWord(c, lang) || STRESSED_AT_END.has(c.toLowerCase())) ? analyzeLine(c, lang) : null;
   });
   const syl = words.map((w) => Math.max(1, prosody(clean(w.text) || "a", lang).syllables));
-  const rhyme = (a: number, b: number) => {
+  const couplet = (a: number, b: number) => {
     const x = ends[a];
     const y = ends[b];
-    return x && y ? RHYME[compareLines(x, y).quality] : RHYME.none;
+    return x && y ? (COUPLET[compareLines(x, y).quality] ?? -Infinity) : -Infinity;
   };
-  const pause = (j: number) => {
+  const end = (j: number) => {
+    if (j >= n - 1) return 3;
     const g = gapAfter(j);
-    const p = g > LONG_GAP ? 1.5 : g > 0.6 ? 1 : g > 0.25 ? 0.5 : -0.5;
-    // ending on a function word ("…e", "…che") cuts the phrase — only where the singer stops anyway
-    return ends[j] || g > LONG_GAP ? p : p - 2;
+    // ending on a function word ("…e", "…a") cuts the phrase — only where the singer really stops
+    return ends[j] || g > LONG_GAP ? breakAfter(words[j], g) : breakAfter(words[j], g) - 4;
   };
   const length = (i: number, j: number) => {
     const d = words[j].end - words[i].start;
-    return -1.5 * (Math.abs(d - unit) / unit);
+    // a bar is the natural length; up to ~1.6 bars is fine for a long phrase
+    return d < unit ? -1.2 * ((unit - d) / unit) : -0.8 * Math.max(0, d - 1.3 * unit) / unit;
   };
 
   // best[i][p]: best score for the words from i on, the line starting at i being the 2nd of a couplet (p = 1) or not
   const best = Array.from({ length: n + 1 }, () => [-Infinity, -Infinity]);
-  const next: { j: number; p: number }[][] = Array.from({ length: n + 1 }, () => [
+  const next = Array.from({ length: n + 1 }, () => [
     { j: -1, p: 0 },
     { j: -1, p: 0 },
   ]);
-  best[n] = [0, SINGLE]; // a couplet left open at the end: its first line was single
+  best[n] = [0, -Infinity];
   for (let i = n - 1; i >= 0; i--) {
     let count = 0;
     for (let j = i; j < Math.min(n, i + MAX_WORDS); j++) {
       if (j > i && gapAfter(j - 1) > LONG_GAP) break; // no line across a long silence
-      const d = words[j].end - words[i].start;
-      if (d > 2.2 * unit && j > i) break;
+      if (words[j].end - words[i].start > 2.4 * unit && j > i) break;
       count += syl[j];
       // too short for a line, unless the singing stops here
       if (count < MIN_SYLLABLES && j < n - 1 && gapAfter(j) <= LONG_GAP) continue;
-      const base = length(i, j) + pause(j);
-      // 1st line of a couplet, or a single line
-      const first = base + best[j + 1][1];
-      const single = base + SINGLE + best[j + 1][0];
-      if (first > best[i][0]) {
-        best[i][0] = first;
-        next[i][0] = { j, p: 1 };
+      const base = length(i, j) + end(j);
+      // a line on its own, or the 1st of a couplet (its partner follows)
+      for (const [score, p] of [
+        [base + best[j + 1][0], 0],
+        [base + best[j + 1][1], 1],
+      ] as const) {
+        if (score > best[i][0]) {
+          best[i][0] = score;
+          next[i][0] = { j, p };
+        }
       }
-      if (single > best[i][0]) {
-        best[i][0] = single;
-        next[i][0] = { j, p: 0 };
-      }
-      // 2nd line of a couplet: its last word rhymes with the word before it starts (the 1st line's end)
-      if (i > 0) {
-        const second = base + rhyme(i - 1, j) + best[j + 1][0];
+      // the 2nd line of a couplet: it rhymes with the word before it starts (the 1st line's end)
+      if (i > 0 && gapAfter(i - 1) <= LONG_GAP) {
+        const second = base + couplet(i - 1, j) + best[j + 1][0];
         if (second > best[i][1]) {
           best[i][1] = second;
           next[i][1] = { j, p: 0 };

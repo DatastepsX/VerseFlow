@@ -1184,29 +1184,102 @@ export async function getRemoteState(projectId: string) {
 
 // ---------- flow: the song from the writer's sung flow ----------
 
+/** a sung line of a flow (or of the song's vocals) with its rhythm and the words sung there */
+export interface FlowLineInput {
+  start: number;
+  sungAt: number;
+  end?: number;
+  syllables: number;
+  stress: number[];
+  held: boolean;
+  words: string;
+  times?: number[];
+  pair?: 0 | 1 | 2;
+}
+
+/** the rows of sung lines (and empty placeholder lines) for one section */
+function flowRows(
+  projectId: string,
+  sectionId: string,
+  lines: (FlowLineInput | { start: number; placeholder: true })[],
+  source: "flow" | "vocals",
+  step: number,
+  firstPosition = 1,
+) {
+  const from = lines[0]?.start ?? 0;
+  return lines.map((l, k) =>
+    "placeholder" in l
+      ? // a line to write later (no vocals here yet): no text, no rhythm until a flow is recorded for it
+        { project_id: projectId, section_id: sectionId, position: firstPosition + k, text: "", status: "OPEN" as LineStatus, kind: "lyric", audio_at: l.start, flow: null }
+      : {
+          project_id: projectId,
+          section_id: sectionId,
+          position: firstPosition + k,
+          // vocals from the song: the recorded words are the lyrics
+          text: source === "vocals" ? (l.words ?? "").slice(0, 200) : "",
+          status: (source === "vocals" && l.words?.trim() ? "SUGGESTED" : "OPEN") as LineStatus,
+          kind: "lyric",
+          audio_at: Math.round(Math.max(from, Math.min(l.sungAt, l.start + step)) * 1000) / 1000,
+          flow: {
+            syllables: l.syllables,
+            stress: l.stress.slice(0, 24),
+            held: !!l.held,
+            words: (l.words ?? "").slice(0, 200),
+            source,
+            times: l.times ?? [],
+            end: l.end,
+            pair: l.pair,
+          } satisfies LineFlow,
+        },
+  );
+}
+
+/** inserts rows built by flowRows, with their "create" events (undo / history) */
+async function insertFlowRows(projectId: string, rows: Record<string, unknown>[]) {
+  if (!rows.length) return;
+  const inserted = check(await db().from("lines").insert(rows).select(LINE_COLS)) as Line[];
+  await db().from("line_events").delete().eq("project_id", projectId).eq("undone", true);
+  check(
+    await db()
+      .from("line_events")
+      .insert(inserted.map((line) => ({ project_id: projectId, line_id: line.id, action: "create", before: { deleted: true }, after: snap({ ...line, deleted: false }) }))),
+  );
+}
+
+const medianStep = (starts: number[]) => {
+  const steps = starts
+    .slice(1)
+    .map((t, i) => t - starts[i])
+    .sort((a, b) => a - b);
+  return steps.length ? steps[Math.floor(steps.length / 2)] : 2;
+};
+
 /**
- * Replaces the song's sections + lines with one line per sung bar of a flow
- * take (empty, waiting for suggestions), each knowing its rhythm and the
- * words sung there. Silences of a few bars split sections. A version is
- * saved first when there was text.
+ * The whole song from a flow (or from the song's vocals): a version is saved
+ * first, then sections + lines rebuilt. `parts` = the parts without vocals,
+ * each a section of empty placeholder lines to write later.
  */
 export async function buildFlowSong(
   projectId: string,
-  lines: { start: number; sungAt: number; end?: number; syllables: number; stress: number[]; held: boolean; words: string; times?: number[]; pair?: 0 | 1 | 2 }[],
+  lines: FlowLineInput[],
   source: "flow" | "vocals" = "flow",
+  parts: { start: number; slots: number[] }[] = [],
 ) {
   const tree = await getTree(projectId);
   if (tree.sections.some((s) => s.lines.some((l) => l.text.trim())))
     await saveVersion(projectId, source === "vocals" ? "Before reading the vocals" : "Before the new flow");
   if (tree.sections.length) check(await db().from("sections").delete().in("id", tree.sections.map((s) => s.id)));
-  const sorted = [...lines].sort((a, b) => a.start - b.start);
-  const steps = sorted.slice(1).map((l, i) => l.start - sorted[i].start).sort((a, b) => a - b);
-  const step = steps.length ? steps[Math.floor(steps.length / 2)] : 2;
-  // sections: a gap of more than ~2 lines without singing starts a new one
-  const groups: (typeof sorted)[] = [];
-  for (const [i, l] of sorted.entries()) {
-    // a new section after a long break — never between the two lines of a couplet
-    if (!i || (l.start - sorted[i - 1].start > step * 2.6 && l.pair !== 2)) groups.push([]);
+  const sung = [...lines].sort((a, b) => a.start - b.start);
+  const step = medianStep(sung.map((l) => l.start));
+  type Item = FlowLineInput | { start: number; placeholder: true };
+  const items: Item[] = [...sung, ...parts.flatMap((p) => p.slots.map((t) => ({ start: t, placeholder: true as const })))].sort((a, b) => a.start - b.start);
+  // sections: a gap of more than ~2 lines without singing starts a new one (never inside a couplet), and so does every empty part
+  const groups: Item[][] = [];
+  for (const [i, l] of items.entries()) {
+    const prev = items[i - 1];
+    const empty = "placeholder" in l;
+    const newPart = !prev || empty !== "placeholder" in prev || (!empty && l.start - prev.start > step * 2.6 && l.pair !== 2);
+    if (newPart) groups.push([]);
     groups[groups.length - 1].push(l);
   }
   const secRows = check(
@@ -1216,28 +1289,28 @@ export async function buildFlowSong(
       .select("id, position"),
   ) as { id: string; position: number }[];
   const idAt = new Map(secRows.map((r) => [r.position, r.id]));
-  const rows = groups.flatMap((g, i) =>
-    g.map((l, k) => ({
-      project_id: projectId,
-      section_id: idAt.get(i + 1)!,
-      position: k + 1,
-      // vocals from the song: the recorded words are the lyrics
-      text: source === "vocals" ? (l.words ?? "").slice(0, 200) : "",
-      status: (source === "vocals" && l.words?.trim() ? "SUGGESTED" : "OPEN") as LineStatus,
-      kind: "lyric",
-      audio_at: Math.round(Math.max(g[0].start, Math.min(l.sungAt, l.start + step)) * 1000) / 1000,
-      flow: { syllables: l.syllables, stress: l.stress.slice(0, 24), held: !!l.held, words: (l.words ?? "").slice(0, 200), source, times: l.times ?? [], end: l.end, pair: l.pair },
-    })),
+  await insertFlowRows(
+    projectId,
+    groups.flatMap((g, i) => flowRows(projectId, idAt.get(i + 1)!, g, source, step)),
   );
-  if (rows.length) {
-    const inserted = check(await db().from("lines").insert(rows).select(LINE_COLS)) as Line[];
-    await db().from("line_events").delete().eq("project_id", projectId).eq("undone", true);
-    check(
-      await db()
-        .from("line_events")
-        .insert(inserted.map((line) => ({ project_id: projectId, line_id: line.id, action: "create", before: { deleted: true }, after: snap({ ...line, deleted: false }) }))),
-    );
-  }
+  await touch(projectId);
+}
+
+/**
+ * One part from a flow recorded just for it (a part without vocals, or a
+ * part to redo): its lines are replaced by the sung ones; the rest of the
+ * song stays.
+ */
+export async function buildFlowPart(projectId: string, sectionId: string, lines: FlowLineInput[]) {
+  const section = check(await db().from("sections").select("id, project_id").eq("id", sectionId).eq("project_id", projectId).single()) as Section;
+  const old = check(await db().from("lines").select("id, text").eq("section_id", section.id).eq("deleted", false)) as { id: string; text: string }[];
+  if (old.some((l) => l.text.trim())) await saveVersion(projectId, "Before the new flow for a part");
+  for (const l of old) await deleteLine(l.id);
+  const sung = [...lines].sort((a, b) => a.start - b.start);
+  const last = check(await db().from("lines").select("position").eq("section_id", section.id).order("position", { ascending: false }).limit(1)) as {
+    position: number;
+  }[];
+  await insertFlowRows(projectId, flowRows(projectId, section.id, sung, "flow", medianStep(sung.map((l) => l.start)), (last[0]?.position ?? 0) + 1));
   await touch(projectId);
 }
 

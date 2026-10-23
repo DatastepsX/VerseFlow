@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { flowLines, stressPattern } from "./lines";
 import { detectSyllables } from "./syllables";
-import { vocalLines } from "./vocals";
+import { emptyParts, vocalLines } from "./vocals";
 
 const SR = 16000;
 
@@ -113,4 +113,25 @@ test("the couplets are marked, so suggestions rhyme with the right line", () => 
       ["e poi domani parto via", 0],
     ],
   );
+});
+
+test("the singer's pauses and punctuation break the lines (La Strada, real recognition)", () => {
+  const raw: [string, number, number][] = [["E", 30.08, 30.16], ["se", 30.26, 30.44], ["la", 30.50, 30.62], ["strada", 30.66, 31.28], ["ci", 31.40, 31.74], ["divide,", 31.82, 32.66], ["suoni", 33.66, 34.10], ["risposta", 34.16, 34.96], ["tarda", 35.10, 35.60], ["un", 35.60, 35.74], ["po'.", 35.82, 36.08], ["Qualcosa", 37.36, 37.98], ["muove", 38.04, 38.50], ["ancora", 38.50, 39.26], ["il", 39.28, 39.36], ["mondo", 39.46, 39.92], ["quando", 40.32, 40.64], ["penso", 40.78, 41.06], ["a", 41.10, 41.18], ["noi", 41.26, 41.44], ["due.", 41.52, 42.36]];
+  const words = raw.map(([text, start, end]) => ({ text, start, end }));
+  const lines = vocalLines(words, { bpm: 87.817, beat_offset: 0.757, beats_per_bar: 4 }, { lang: "it", duration: 60 });
+  assert.deepEqual(
+    lines.map((l) => l.words),
+    ["E se la strada ci divide,", "suoni risposta tarda un po'.", "Qualcosa muove ancora il mondo", "quando penso a noi due."],
+  );
+});
+
+test("parts without vocals become empty parts to write later", () => {
+  // 120 bpm (bar 2 s from 0.5): lines every bar from 0.5 to 8.5, silence until 30.5, then 2 more lines; song 40 s
+  const mk = (start: number) => ({ start, sungAt: start, end: start + 1.6, syllables: 8, stress: [2, 6], held: false, words: "x", times: [] });
+  const lines = [0.5, 2.5, 4.5, 6.5, 8.5, 30.5, 32.5].map(mk);
+  const parts = emptyParts(lines, { bpm: 120, beat_offset: 0.5, beats_per_bar: 4 }, 40);
+  assert.equal(parts.length, 1);
+  assert.equal(parts[0].start, 12.5, "on the first bar line after the singing (+ half a bar)");
+  assert.equal(parts[0].slots.length, 8, "one line per bar, an even number");
+  assert.deepEqual(parts[0].slots.slice(0, 2), [12.5, 14.5]);
 });
