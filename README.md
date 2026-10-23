@@ -53,6 +53,14 @@ ElevenLabs plan and the key's "Text to Speech" + "Voices" permissions; table `vo
 - **🗣 on** in the player: the whole song in your voice with the beat (asks first when lines still need a call).
 It's a demo-quality guide for hearing whether lyrics fit — rap works best; it doesn't sing melodies.
 
+**Sing + tap** (Flow tab, third option): you sing or rap while you tap. The taps decide the number of syllables and
+(with "Next line") the lines; the voice moves each tap onto the syllable sung there (±0.12 s), gives its stress, and the
+recognised words go to the AI (`processTaps` with a recording).
+
+**Lyrics in syllables**: every line shows as it is sung — "Ti·scri·vo·den·tro·me", stressed syllables bold, the rhyme
+marked in a couplet, vowels merging across words joined ("den·tro‿il") — split with the same rules that count the
+syllables (`syllabify` in `src/lib/rhyme/syllabify.ts`, Romance languages), so the dots match the flow.
+
 **Sing it or tap it** — every flow can be set either way: the Flow tab has a "Sing it | Tap it" switch (whole song or one
 part; tapped on two pads: the big one once per syllable while the beat plays, "Next line" when a line is done — the
 lines are exactly as marked; without "Next line", pauses start the lines — `processTaps`, no microphone, no word

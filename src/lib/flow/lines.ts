@@ -45,7 +45,8 @@ export function flowLines(
   grid: FlowGrid,
   /** sounds: sung sounds recognised as "words" ("pom pom para") — they count syllables, but aren't lyrics */
   /** breaks: where the writer said a new line starts (syllable indices, from tapping "next line") */
-  opts: { offset?: number; lang: string; duration: number; sounds?: TimedWord[]; breaks?: number[] },
+  /** exact: every syllable given is one (tapped) — the count comes from them, not from the words */
+  opts: { offset?: number; lang: string; duration: number; sounds?: TimedWord[]; breaks?: number[]; exact?: boolean },
 ): FlowLine[] {
   const shift = opts.offset ?? 0; // song time of sample 0
   const sy = syllables.map((s) => ({ ...s, t: s.t + shift }));
@@ -54,7 +55,8 @@ export function flowLines(
   const unit = bar ? (bar < 1.9 ? 2 * bar : bar) : 2.5;
   // the lines: by the words (pauses, punctuation, rhyme) when they cover the singing, else by the singing's own phrases
   const covered = words.length ? sy.filter((s) => words.some((w) => s.t >= w.start - 0.05 && s.t <= w.end + 0.05)).length : 0;
-  const byRhyme = sy.length > 0 && covered / sy.length >= 0.6;
+  // lines marked by the writer ("next line") always win over the words
+  const byRhyme = !opts.breaks?.length && sy.length > 0 && covered / sy.length >= 0.6;
   const groups: { inside: Syllable[]; ws: TimedWord[]; from: number; to: number; start: number; pair?: 0 | 1 | 2 }[] = [];
   if (byRhyme) {
     const segs = rhymeSegments(words, opts.lang, unit);
@@ -100,7 +102,7 @@ export function flowLines(
     const fromWords = (text ? prosody(text, opts.lang).syllables : 0) + snd.reduce((n, w) => n + Math.max(1, prosody(w.text, opts.lang).syllables), 0);
     const counted = [...ws, ...snd];
     const coveredByWords = counted.length ? inside.filter((s) => counted.some((w) => s.t >= w.start - 0.05 && s.t <= w.end + 0.05)).length : 0;
-    const syllableCount = Math.max(1, fromWords + (inside.length - coveredByWords));
+    const syllableCount = opts.exact ? inside.length : Math.max(1, fromWords + (inside.length - coveredByWords));
     // stressed: the loudest of the line, a syllable that stands out from its neighbours, or one leaned into (long); a held last note too
     const durs = inside.map((s) => s.dur).sort((a, b) => a - b);
     const typical = durs[Math.floor(durs.length / 2)] || 0.1;

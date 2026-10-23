@@ -61,6 +61,34 @@ export async function processFlow(
   const syllables = detectSyllables(rec.samples, rec.sampleRate);
   if (syllables.length < 4) throw new Error("No singing was heard in the recording — check the microphone and try again.");
 
+  const { takeId, words, sounds, wordsFailed } = await saveAndHear(pid, rec, onStep, part);
+
+  onStep("song");
+  let lines = flowLines(syllables, words, audio, { offset: rec.startAt, lang: tree.project.language, duration: audio.duration ?? rec.startAt + rec.samples.length / rec.sampleRate, sounds });
+  if (part) {
+    // the part's own lines: sung inside it (the count-in bar before it is only for getting in)
+    lines = lines.filter((l) => l.sungAt >= part.start - 0.4 && l.sungAt < part.end);
+    if (!lines.length) throw new Error("No singing was heard in this part — try again.");
+    const t = await post<ProjectTree>(`/api/projects/${pid}/flow`, { action: "buildPart", sectionId: part.sectionId, lines });
+    onTree(t);
+    return { tree: await suggestAll(pid, t, onStep, onTree, (l, s) => s.id === part.sectionId), takeId, wordsFailed };
+  }
+  const t = await post<ProjectTree>(`/api/projects/${pid}/flow`, { action: "build", lines });
+  onTree(t);
+  return { tree: await suggestAll(pid, t, onStep, onTree), takeId, wordsFailed };
+}
+
+/**
+ * A flow recording: saved as a take (16 kHz, small — lane "Flow"), then the
+ * words sung in it recognised (1 call). Sounds ("pom pom para") only count
+ * syllables; a failed recognition leaves the rhythm alone.
+ */
+async function saveAndHear(
+  pid: string,
+  rec: Recording,
+  onStep: (step: FlowStep, progress?: { done: number; total: number }) => void,
+  part?: { sectionId: string },
+): Promise<{ takeId: string; words: TimedWord[]; sounds: TimedWord[]; wordsFailed: string | null }> {
   onStep("upload");
   const small = resample(rec.samples, rec.sampleRate, 16000);
   const wav = encodeWav([small], 16000, 16);
@@ -104,19 +132,7 @@ export async function processFlow(
     wordsFailed = e instanceof Error ? e.message : "Word recognition failed";
   }
 
-  onStep("song");
-  let lines = flowLines(syllables, words, audio, { offset: rec.startAt, lang: tree.project.language, duration: audio.duration ?? rec.startAt + rec.samples.length / rec.sampleRate, sounds });
-  if (part) {
-    // the part's own lines: sung inside it (the count-in bar before it is only for getting in)
-    lines = lines.filter((l) => l.sungAt >= part.start - 0.4 && l.sungAt < part.end);
-    if (!lines.length) throw new Error("No singing was heard in this part — try again.");
-    const t = await post<ProjectTree>(`/api/projects/${pid}/flow`, { action: "buildPart", sectionId: part.sectionId, lines });
-    onTree(t);
-    return { tree: await suggestAll(pid, t, onStep, onTree, (l, s) => s.id === part.sectionId), takeId, wordsFailed };
-  }
-  const t = await post<ProjectTree>(`/api/projects/${pid}/flow`, { action: "build", lines });
-  onTree(t);
-  return { tree: await suggestAll(pid, t, onStep, onTree), takeId, wordsFailed };
+  return { takeId, words, sounds, wordsFailed };
 }
 
 /**
@@ -134,14 +150,54 @@ export async function processTaps(
   part?: { sectionId: string; start: number; end: number },
   /** where "next line" was tapped: the index of the first tap of each new line */
   breaks?: number[],
+  /** sung while tapping: the voice moves each tap onto the syllable sung there, gives its stress, and the words */
+  rec?: Recording,
 ): Promise<ProjectTree> {
   const audio = tree.audio!;
+  let refined = taps;
+  let strength: (number | null)[] = taps.map(() => null);
+  let words: TimedWord[] = [];
+  let sounds: TimedWord[] = [];
+  if (rec) {
+    onStep("rhythm");
+    await new Promise((r) => setTimeout(r, 30));
+    const voice = detectSyllables(rec.samples, rec.sampleRate).map((x) => ({ ...x, t: x.t + rec.startAt }));
+    // each tap → the sung syllable right there (a tap is a bit late or early; the voice knows when)
+    const used = new Set<number>();
+    const matched = taps.map((t) => {
+      let best = -1;
+      voice.forEach((v, k) => {
+        if (used.has(k) || Math.abs(v.t - t) > 0.12) return;
+        if (best < 0 || Math.abs(v.t - t) < Math.abs(voice[best].t - t)) best = k;
+      });
+      if (best >= 0) used.add(best);
+      return best;
+    });
+    refined = taps.map((t, i) => (matched[i] >= 0 ? voice[matched[i]].t : t));
+    strength = matched.map((k) => (k >= 0 ? voice[k].strength : null));
+    const heard = await saveAndHear(pid, rec, onStep, part);
+    words = heard.words;
+    sounds = heard.sounds;
+  }
   onStep("song");
-  const q = quantizeTaps(taps, audio);
+  const q = quantizeTaps(refined, audio);
   if (q.length < 2) throw new Error("Tap at least a few syllables.");
+  // quantizeTaps sorts; the taps came in order, so index i is still tap i
   // a tap has no length: a syllable lasts until the next tap (at most ~a 16th), so pauses stay pauses
-  const syl: Syllable[] = q.map((x, i) => ({ t: x.t, strength: x.onBeat ? 1 : 0.5, dur: Math.min(0.15, (q[i + 1]?.t ?? x.t + 0.3) - x.t) }));
-  let lines = flowLines(syl, [], audio, { offset: 0, lang: tree.project.language, duration: audio.duration ?? q[q.length - 1].t + 2, breaks });
+  const syl: Syllable[] = q.map((x, i) => ({
+    t: x.t,
+    strength: strength[i] ?? (x.onBeat ? 1 : 0.5),
+    dur: Math.min(0.15, (q[i + 1]?.t ?? x.t + 0.3) - x.t),
+  }));
+  let lines = flowLines(syl, words, audio, {
+    offset: 0,
+    lang: tree.project.language,
+    duration: audio.duration ?? q[q.length - 1].t + 2,
+    breaks,
+    sounds,
+    // the taps are the syllables
+    exact: true,
+  });
   if (part) {
     lines = lines.filter((l) => l.sungAt >= part.start - 0.4 && l.sungAt < part.end);
     if (!lines.length) throw new Error("No taps in this part — try again.");

@@ -20,6 +20,7 @@ import { TapFlow } from "./TapFlow";
 import { exampleWords } from "@/lib/flow/example";
 import { coupletsOf } from "@/lib/flow/couplets";
 import { analyzeLine, compareLines } from "@/lib/rhyme/analyze";
+import { syllabify } from "@/lib/rhyme/syllabify";
 import { gridFor, type BeatGrid, type FlowGridModel } from "@/lib/flow/grid";
 import {
   AudioLines,
@@ -254,7 +255,7 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
   const [rec, setRec] = useState<null | "recording" | "tapping" | "processing">(null);
   const [source, setSource] = useState<"flow" | "tap" | "vocals">("flow");
   /** how the flow is set: sung into the mic, or tapped on the screen */
-  const [flowMode, setFlowMode] = useState<"sing" | "tap">("sing");
+  const [flowMode, setFlowMode] = useState<"sing" | "tap" | "both">("sing");
   const tapsRef = useRef<number[]>([]);
   /** "next line" taps: the index of the first tap of each new line */
   const breaksRef = useRef<number[]>([]);
@@ -342,11 +343,21 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
     setNote(null);
     stopPlay();
     await e.ctx.resume();
+    // sing + tap: the voice is recorded while you tap
+    if (flowMode === "both") {
+      try {
+        await e.arm(undefined, { voiceProcessing: !headphones });
+      } catch (err) {
+        setError(err instanceof Error ? `Microphone: ${err.message}` : "The microphone is not available.");
+        return;
+      }
+    }
     tapsRef.current = [];
     breaksRef.current = [];
     setTapCount(0);
     setTapLine({ n: 1, count: 0 });
     e.play(part ? Math.max(0, part.start - bar) : 0, { beat: beat.current });
+    if (flowMode === "both") e.startRecording();
     setRec("tapping");
   };
   const tapNow = () => {
@@ -372,6 +383,8 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
   const finishTapping = async () => {
     const e = engine.current;
     if (!e || rec !== "tapping") return;
+    const voice = e.armed ? await e.stopRecording(e.reportedLatency, 0, part ? Math.max(0, part.start - 0.3) : 0) : null;
+    if (e.armed) e.disarm();
     e.stop();
     const taps = tapsRef.current;
     if (taps.length < 2) {
@@ -379,7 +392,7 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
       setError("Tap once per syllable while the beat plays — at least a few taps.");
       return;
     }
-    setSource("tap");
+    setSource(voice ? "flow" : "tap");
     setRec("processing");
     try {
       const out = await processTaps(
@@ -390,6 +403,7 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
         setTree,
         part ?? undefined,
         breaksRef.current.length ? breaksRef.current : undefined,
+        voice ?? undefined,
       );
       setTree(out);
       setPart(null);
@@ -743,8 +757,9 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
                 <div className="mb-5 flex w-full rounded-full bg-panel-2 p-1" role="tablist">
                   {(
                     [
-                      ["sing", Mic, "Sing it"],
-                      ["tap", Hand, "Tap it"],
+                      ["sing", Mic, "Sing"],
+                      ["tap", Hand, "Tap"],
+                      ["both", Hand, "Sing + tap"],
                     ] as const
                   ).map(([m, Icon, label]) => (
                     <button
@@ -759,7 +774,7 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
                   ))}
                 </div>
                 <h2 className="text-2xl font-extrabold">
-                  {flowMode === "tap" ? "Tap your flow" : "Record your flow"}
+                  {flowMode === "tap" ? "Tap your flow" : flowMode === "both" ? "Sing and tap your flow" : "Record your flow"}
                   {part ? ` for ${part.name}` : ""}
                 </h2>
                 <p className="mt-2 max-w-sm text-sm text-muted">
@@ -768,6 +783,8 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
                     : "The beat plays from the start. "}
                   {flowMode === "tap"
                     ? "Tap once per syllable in your rhythm, and “Next line” where a line ends. No microphone needed."
+                    : flowMode === "both"
+                      ? "Sing or rap while you tap: your taps count the syllables and mark the lines; your voice fixes the timing and the stresses, and your words go into the lyrics."
                     : "Sing or rap anything over it — real words, “na-na”, anything. Your rhythm and your words become the lyrics."}
                 </p>
                 {part && (
@@ -776,12 +793,13 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
                   </button>
                 )}
                 <ol className="mt-5 w-full space-y-2 text-left text-sm">
-                  {flowMode === "sing" ? (
+                  {flowMode !== "tap" && (
                     <li className="flex items-center gap-3 rounded-2xl bg-panel px-4 py-3">
                       <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent"><Headphones className="h-4 w-4" /></span>
                       <span>Put on headphones (wired is best) so the mic only hears you.</span>
                     </li>
-                  ) : (
+                  )}
+                  {flowMode !== "sing" && (
                     <li className="flex items-center gap-3 rounded-2xl bg-panel px-4 py-3">
                       <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent"><Hand className="h-4 w-4" /></span>
                       <span>Two pads: the big one (right) once per syllable, on the beat you hear — “Next line” (left) when a line is done.</span>
@@ -801,7 +819,7 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
                     </span>
                   </li>
                 </ol>
-                {flowMode === "sing" && (
+                {flowMode !== "tap" && (
                   <>
                     <label className="mt-4 flex items-center gap-2 text-sm">
                       <input type="checkbox" checked={headphones} onChange={(e) => setHeadphones(e.target.checked)} />
@@ -824,12 +842,12 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
                     className="mt-8 flex h-28 w-28 items-center justify-center rounded-full bg-accent text-white shadow-xl shadow-accent/30 active:scale-95 disabled:opacity-40"
                     disabled={!beatReady}
                     onClick={() => void startTapping()}
-                    aria-label="Start tapping"
+                    aria-label={flowMode === "both" ? "Start singing and tapping" : "Start tapping"}
                   >
                     <Hand className="h-11 w-11" />
                   </button>
                 )}
-                <p className="mt-3 text-sm font-semibold">{beatReady ? (flowMode === "tap" ? "Start the beat" : "Tap to start") : "Loading the beat…"}</p>
+                <p className="mt-3 text-sm font-semibold">{beatReady ? (flowMode === "sing" ? "Tap to start" : "Start the beat") : "Loading the beat…"}</p>
                 {!part && (
                 <button className="mt-8 flex w-full items-center gap-3 rounded-2xl border border-line bg-panel px-4 py-3.5 text-left" onClick={() => void readVocals()}>
                   <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-panel-2 text-muted">
@@ -882,7 +900,12 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
                 <div className="mt-4 h-1.5 w-full overflow-hidden rounded-full bg-panel-2">
                   <div className="h-full bg-accent" style={{ width: `${part ? Math.max(0, Math.min(1, (now - part.start) / (part.end - part.start))) * 100 : total ? (Math.max(0, now) / total) * 100 : 0}%` }} />
                 </div>
-                <p className="mt-5 text-sm font-semibold">
+                <p className="mt-5 flex items-center justify-center gap-2 text-sm font-semibold">
+                  {flowMode === "both" && (
+                    <span className="flex items-center gap-1 text-xs font-semibold uppercase tracking-wide text-[#dc2626]">
+                      <span className="h-2 w-2 animate-pulse rounded-full bg-[#dc2626]" /> Voice
+                    </span>
+                  )}
                   Line {tapLine.n} · {tapLine.count} syllable{tapLine.count === 1 ? "" : "s"}
                 </p>
                 {/* two pads: "next line" on the left, syllables on the right */}
@@ -1257,8 +1280,8 @@ function LineCard(props: {
         <>
           <button className="block w-full text-left" onClick={props.onPlay} title="Play this bar">
             <span className={`text-[17px] leading-snug ${l.text.trim() ? "" : "italic text-muted"}`}>
-              {l.text.trim() && props.pair ? (
-                <RhymeEnd text={l.text.trim()} />
+              {l.text.trim() ? (
+                <Syllables text={l.text.trim()} lang={lang} rhyme={!!props.pair} />
               ) : (
                 l.text.trim() ||
                 (props.busy ? "Writing…" : l.flow?.syllables ? `e.g. “${exampleWords(l.flow.syllables, l.flow.stress, lang, l.position)}”` : "…")
@@ -1384,6 +1407,33 @@ const rhymeScore = (x: string, y: string, lang: string) => (x.trim() && y.trim()
 /** both lines written and their endings don't rhyme */
 const rhymesWell = (x: string, y: string, lang: string) => !x.trim() || !y.trim() || rhymeScore(x, y, lang) >= RHYMES;
 const lastWordOf = (t: string) => t.trim().split(/\s+/).pop()?.replace(/[^\p{L}\p{N}']+/gu, "") ?? "";
+
+/**
+ * The line in its sung syllables, as the flow counts them: Ti·scri·vo·den·tro·me — stressed syllables
+ * bold, the rhyme (from the last stress on) marked in a couplet. Lines that can't be split show as written.
+ */
+function Syllables({ text, lang, rhyme }: { text: string; lang: string; rhyme: boolean }) {
+  const syl = syllabify(text, lang);
+  if (!syl) return rhyme ? <RhymeEnd text={text} /> : <>{text}</>;
+  const { stresses } = prosody(text, lang);
+  const stressed = new Set(stresses);
+  const rhymeFrom = stresses.length ? stresses[stresses.length - 1] : syl.length - 1;
+  return (
+    <span aria-label={text}>
+      {syl.map((x, i) => (
+        <span key={i}>
+          {i > 0 && (
+            <>
+              <span className="text-muted/50">·</span>
+              <wbr />
+            </>
+          )}
+          <span className={`${stressed.has(i) ? "font-semibold" : ""} ${rhyme && i >= rhymeFrom ? "text-accent" : ""}`}>{x}</span>
+        </span>
+      ))}
+    </span>
+  );
+}
 
 /** the line with its last word — the rhyme — marked */
 function RhymeEnd({ text }: { text: string }) {
