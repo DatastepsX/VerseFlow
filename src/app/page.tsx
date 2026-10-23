@@ -22,7 +22,6 @@ export default function Home() {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [beat, setBeat] = useState<File | null>(null);
-  const [vocals, setVocals] = useState(false);
   const [form, setForm] = useState({
     title: "",
     language: "it",
@@ -65,8 +64,8 @@ export default function Home() {
           window.alert(`The song was created, but the beat: ${(err as Error).message}`);
         }
       }
-      // with vocals on the track, the song opens reading its lyrics and flow
-      router.push(`/song/${p.id}${uploaded && vocals && !form.text.trim() ? "?vocals=1" : ""}`);
+      // the song opens checking whether the track has lyrics (then it reads them and the flow)
+      router.push(`/song/${p.id}${uploaded && !form.text.trim() ? "?detect=1" : ""}`);
     } catch (err) {
       setError((err as Error).message);
       setBusy(false);
@@ -133,7 +132,10 @@ export default function Home() {
               <span className="text-3xl">🎵</span>
               <span className="min-w-0 flex-1">
                 <span className="block font-semibold">{beat ? beat.name : "Choose your beat"}</span>
-                <span className="text-xs text-muted">{beat ? `${(beat.size / 1024 / 1024).toFixed(1)} MB` : "MP3 or any audio file, up to 50 MB"}</span>
+                <span className="text-xs text-muted">
+                  {beat ? `${(beat.size / 1024 / 1024).toFixed(1)} MB` : "A beat, or a song with your vocals — up to 50 MB"}
+                  <span className="block">Vocals are recognised automatically · 1 recognition</span>
+                </span>
               </span>
               <input
                 type="file"
@@ -151,17 +153,6 @@ export default function Home() {
               />
             </label>
 
-            {beat && (
-              <label className="flex cursor-pointer items-start gap-3 rounded-2xl bg-panel-2 px-4 py-3">
-                <input type="checkbox" className="mt-1" checked={vocals} onChange={(e) => setVocals(e.target.checked)} />
-                <span className="min-w-0 flex-1">
-                  <span className="block text-sm font-semibold">🎙 It has vocals on it</span>
-                  <span className="block text-xs text-muted">
-                    Read the lyrics and the flow from the recording · 1 recognition + 1 AI call per 8 lines
-                  </span>
-                </span>
-              </label>
-            )}
             <div>
               <label className="label">Name</label>
               <input

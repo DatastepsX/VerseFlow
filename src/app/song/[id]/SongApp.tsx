@@ -27,7 +27,7 @@ const STEPS: { key: FlowStep; label: string }[] = [
   { key: "suggest", label: "Writing lyrics for every bar" },
 ];
 const VOCAL_STEPS: { key: FlowStep; label: string }[] = [
-  { key: "words", label: "Reading the lyrics from your song" },
+  { key: "words", label: "Listening for lyrics in your song" },
   { key: "song", label: "Finding the flow of every line" },
   { key: "suggest", label: "Writing 3 alternatives per line" },
 ];
@@ -37,7 +37,7 @@ const VOCAL_STEPS: { key: FlowStep; label: string }[] = [
  * → a first version of the lyrics, written to your rhythm and your words →
  * go through it bar by bar: keep, next option, new options, edit, remove.
  */
-export function SongApp({ initialTree, autoVocals = false }: { initialTree: ProjectTree; autoVocals?: boolean }) {
+export function SongApp({ initialTree, autoDetect = false }: { initialTree: ProjectTree; autoDetect?: boolean }) {
   const router = useRouter();
   const [tree, setTree] = useState(initialTree);
   const pid = tree.project.id;
@@ -288,22 +288,32 @@ export function SongApp({ initialTree, autoVocals = false }: { initialTree: Proj
   });
 
   // ---------- the song's own vocals ----------
-  const readVocals = async () => {
-    if (!tree.audio) return;
-    if (hasLines && !window.confirm("Read the lyrics from the song? It replaces the current draft (a version is saved first).")) return;
+  /** auto: the check right after uploading — no lyrics in the track means it's a beat: record your flow */
+  const readVocals = async (auto = false, base: ProjectTree = tree) => {
+    if (!base.audio) return;
+    if (!auto && hasLines && !window.confirm("Read the lyrics from the song? It replaces the current draft (a version is saved first).")) return;
     stopPlay();
     setError(null);
     setNote(null);
     setSource("vocals");
     setRec("processing");
     setView("flow");
-    let latest = tree;
+    let latest = base;
     try {
-      latest = await processVocals(pid, tree, (key, progress) => setStep({ key, progress }), (t) => {
-        latest = t;
-        setTree(t);
-      });
-      setTree(latest);
+      const out = await processVocals(
+        pid,
+        base,
+        (key, progress) => setStep({ key, progress }),
+        (t) => {
+          latest = t;
+          setTree(t);
+        },
+        { auto },
+      );
+      if (out) {
+        latest = out;
+        setTree(out);
+      } else setNote("No vocals in this track — it's a beat. Record your flow over it to write the lyrics.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
     } finally {
@@ -316,10 +326,10 @@ export function SongApp({ initialTree, autoVocals = false }: { initialTree: Proj
   };
   const autoStarted = useRef(false);
   useEffect(() => {
-    if (!autoVocals || autoStarted.current || hasLines || !tree.audio) return;
+    if (!autoDetect || autoStarted.current || hasLines || !tree.audio) return;
     autoStarted.current = true;
     router.replace(`/song/${pid}`);
-    void readVocals();
+    void readVocals(true);
   });
 
   // ---------- parts without vocals: written later, from a flow recorded just for them ----------
@@ -439,7 +449,7 @@ export function SongApp({ initialTree, autoVocals = false }: { initialTree: Proj
           {error}
         </p>
       )}
-      {note && view === "lyrics" && (
+      {note && rec === null && (view === "lyrics" || view === "flow") && (
         <p className="mx-4 mt-3 rounded-xl bg-warn-soft px-3 py-2 text-xs text-warn" onClick={() => setNote(null)}>
           {note}
         </p>
@@ -447,7 +457,16 @@ export function SongApp({ initialTree, autoVocals = false }: { initialTree: Proj
 
       <main className="flex-1 px-4 pb-32 pt-4">
         {/* ----- FLOW ----- */}
-        {view === "flow" && !tree.audio && <BeatUpload pid={pid} onDone={(t) => setTree(t)} />}
+        {view === "flow" && !tree.audio && (
+          <BeatUpload
+            pid={pid}
+            onDone={(t) => {
+              setTree(t);
+              // a new track: does it have lyrics?
+              if (!hasLines) void readVocals(true, t);
+            }}
+          />
+        )}
         {view === "flow" && tree.audio && (
           <div className="flex flex-col items-center text-center">
             {rec === null && (
@@ -502,8 +521,8 @@ export function SongApp({ initialTree, autoVocals = false }: { initialTree: Proj
                 <button className="mt-8 flex w-full items-center gap-3 rounded-2xl border border-line bg-panel px-4 py-3.5 text-left" onClick={() => void readVocals()}>
                   <span className="text-2xl">🎙</span>
                   <span className="min-w-0 flex-1">
-                    <span className="block text-sm font-semibold">The track already has vocals?</span>
-                    <span className="block text-xs text-muted">Read the lyrics and the flow from it · 1 recognition + 1 AI call per 8 lines</span>
+                    <span className="block text-sm font-semibold">Read the lyrics from the track</span>
+                    <span className="block text-xs text-muted">Done automatically when you upload — tap if vocals were missed · 1 AI call per 8 lines</span>
                   </span>
                   <span className="text-muted">›</span>
                 </button>

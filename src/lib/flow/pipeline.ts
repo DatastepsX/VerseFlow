@@ -34,6 +34,9 @@ export function chunkLines(lines: Pick<Line, "id" | "flow">[]): string[][] {
   return chunks;
 }
 
+/** fewer recognised words than this: the track has no lyrics (a beat) */
+export const MIN_LYRIC_WORDS = 8;
+
 export type FlowStep = "rhythm" | "upload" | "words" | "song" | "suggest";
 
 /**
@@ -125,14 +128,24 @@ export async function processVocals(
   tree: ProjectTree,
   onStep: (step: FlowStep, progress?: { done: number; total: number }) => void,
   onTree: (t: ProjectTree) => void,
-): Promise<ProjectTree> {
+  /** auto: the check after uploading — a track without lyrics returns null (it's a beat: record your flow) */
+  opts: { auto?: boolean } = {},
+): Promise<ProjectTree | null> {
   const audio = tree.audio!;
   onStep("words");
   const words = dropSounds((await post<{ words: TimedWord[] }>(`/api/projects/${pid}/flow`, { action: "vocals" })).words);
+  // a few stray words (a sample, an ad-lib, a misheard hi-hat) don't make lyrics
+  if (words.length < MIN_LYRIC_WORDS) {
+    if (opts.auto) return null;
+    throw new Error("No vocals were found in this song — record your flow instead.");
+  }
   onStep("song");
   const duration = audio.duration ?? (words.at(-1)?.end ?? 0) + 2;
   const lines = vocalLines(words, audio, { lang: tree.project.language, duration });
-  if (!lines.length) throw new Error("No vocals were found in this song — record your flow instead.");
+  if (!lines.length) {
+    if (opts.auto) return null;
+    throw new Error("No vocals were found in this song — record your flow instead.");
+  }
   // the parts without vocals: empty lines, written later (record a flow for the part, or ✨)
   const parts = emptyParts(lines, audio, duration);
   const t = await post<ProjectTree>(`/api/projects/${pid}/flow`, { action: "build", lines, source: "vocals", parts });

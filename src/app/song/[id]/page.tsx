@@ -19,8 +19,8 @@ async function SongView({
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const { id } = await params;
-  // ?vocals=1 (new song "it has vocals on it"): read the lyrics and the flow from the track right away
-  const autoVocals = (await searchParams).vocals === "1";
+  // ?detect=1 (a new song with a track): check whether the track has lyrics; if so, read them and the flow right away
+  const autoDetect = (await searchParams).detect === "1";
   let tree;
   try {
     tree = await getTree(id);
@@ -28,5 +28,5 @@ async function SongView({
     if (e instanceof NotFound || (e instanceof Error && /invalid input syntax/.test(e.message))) notFound();
     throw e;
   }
-  return <SongApp initialTree={tree} autoVocals={autoVocals} />;
+  return <SongApp initialTree={tree} autoDetect={autoDetect} />;
 }

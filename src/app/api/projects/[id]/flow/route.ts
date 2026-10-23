@@ -29,7 +29,8 @@ export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]/f
     if (b.action === "vocals") {
       const tree = await getTree(id);
       const stored = await storedTranscript(id);
-      return Response.json({ words: stored?.words.length ? stored.words : await transcribeBeat(id, tree.project.language) });
+      // stored = listened to already (also a track without lyrics: no words): free
+      return Response.json({ words: stored ? stored.words : await transcribeBeat(id, tree.project.language) });
     }
     if (b.action === "transcribe") {
       if (!b.takeId) return Response.json({ error: "takeId required" }, { status: 400 });

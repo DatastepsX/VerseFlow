@@ -31,9 +31,10 @@ The home screen is a simple, app-like flow for the phone:
 4. **Bar by bar**: ✓ keep · ↻ next option (free) · ✨ 3 new options (1 call) · ✎ edit · 🗑 remove. The player plays the
    beat with your flow and highlights the line being sung; tap a line to hear its bar.
 
-**A track that already has vocals** (a demo with your voice): tick "🎙 It has vocals on it" when creating the song, or
-"The track already has vocals?" on the Flow tab. The lyrics are read from the track (1 ElevenLabs call, stored and
-reused), every sung bar becomes a line with **your recorded words as its text** and their rhythm as its pattern
+**A track that already has vocals** (a demo with your voice) **is recognised automatically**: after uploading, the track
+is listened to once (1 ElevenLabs call, stored and reused — also when there are no lyrics). Fewer than 8 recognised
+words (after dropping sounds like "yeah", "oh") = a beat: the Flow tab asks for your flow. Otherwise the lyrics are
+read from the track, every sung bar becomes a line with **your recorded words as its text** and their rhythm as its pattern
 (`vocalLines` in `src/lib/flow/vocals.ts`; `lines.flow.source = "vocals"`), then 3 alternatives per line that fit that
 rhythm and rhyme with the recorded partner line. **Parts without vocals** (4+ bars of silence between sung lines, 8+
 before the first / after the last) become empty parts — placeholder lines at the song's line spacing (`emptyParts`).
