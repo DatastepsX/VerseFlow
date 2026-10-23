@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { flowLines, stressPattern } from "./lines";
 import { detectSyllables } from "./syllables";
+import { dropSounds, isSound } from "./fillers";
 import { emptyParts, vocalLines } from "./vocals";
 
 const SR = 16000;
@@ -151,4 +152,17 @@ test("na-na flows: the pauses break the lines, not the bars (“Pam Pam Pa-ra Pa
   );
   assert.ok(Math.abs(lines[1].start - 2.2) < 0.06);
   assert.deepEqual(lines[0].stress, [1, 2, 3, 7]);
+});
+
+test("sung sounds (pom pom para…) are not lyrics", () => {
+  const w = (text: string, start = 0) => ({ text, start, end: start + 0.2 });
+  const take = "Pom pom para pa pa pom. Pom pom, pom pom pa pa pa pom.".split(" ").map((t, i) => w(t, i * 0.25));
+  assert.deepEqual(dropSounds(take), []);
+  // real words with a few sounds in between: the words stay, the sounds go
+  const mixed = "Lo so quando parti tu yeah nanana la notte".split(" ").map((t, i) => w(t, i * 0.25));
+  assert.deepEqual(
+    dropSounds(mixed).map((x) => x.text),
+    ["Lo", "so", "quando", "parti", "tu", "la", "notte"],
+  );
+  assert.ok(isSound("Pom.") && isSound("papapa") && isSound("Yeah,") && !isSound("parti") && !isSound("notte"));
 });

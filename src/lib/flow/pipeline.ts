@@ -6,6 +6,7 @@ import { encodeWav, peaksOf, resample } from "@/lib/studio/wav";
 import type { Line, ProjectTree } from "@/lib/types";
 import { flowLines } from "./lines";
 import { detectSyllables } from "./syllables";
+import { dropSounds, splitSounds } from "./fillers";
 import { emptyParts, vocalLines } from "./vocals";
 
 /** lines suggested per AI call (couplets stay together); the calls run in parallel */
@@ -83,18 +84,23 @@ export async function processFlow(
 
   onStep("words");
   let words: TimedWord[] = [];
+  let sounds: TimedWord[] = [];
   let wordsFailed: string | null = null;
   try {
     const r = await post<{ words: TimedWord[] }>(`/api/projects/${pid}/flow`, { action: "transcribe", takeId });
     // word times are from the start of the recording → song time
-    words = r.words.map((w) => ({ ...w, start: w.start + rec.startAt, end: w.end + rec.startAt }));
+    // "pom pom para…" is the flow, not lyrics: it only helps counting the syllables
+    const toSong = (w: TimedWord) => ({ ...w, start: w.start + rec.startAt, end: w.end + rec.startAt });
+    const split = splitSounds(r.words);
+    words = split.words.map(toSong);
+    sounds = split.sounds.map(toSong);
   } catch (e) {
     // the rhythm alone still makes a song: carry on without words
     wordsFailed = e instanceof Error ? e.message : "Word recognition failed";
   }
 
   onStep("song");
-  let lines = flowLines(syllables, words, audio, { offset: rec.startAt, lang: tree.project.language, duration: audio.duration ?? rec.startAt + rec.samples.length / rec.sampleRate });
+  let lines = flowLines(syllables, words, audio, { offset: rec.startAt, lang: tree.project.language, duration: audio.duration ?? rec.startAt + rec.samples.length / rec.sampleRate, sounds });
   if (part) {
     // the part's own lines: sung inside it (the count-in bar before it is only for getting in)
     lines = lines.filter((l) => l.sungAt >= part.start - 0.4 && l.sungAt < part.end);
@@ -122,7 +128,7 @@ export async function processVocals(
 ): Promise<ProjectTree> {
   const audio = tree.audio!;
   onStep("words");
-  const { words } = await post<{ words: TimedWord[] }>(`/api/projects/${pid}/flow`, { action: "vocals" });
+  const words = dropSounds((await post<{ words: TimedWord[] }>(`/api/projects/${pid}/flow`, { action: "vocals" })).words);
   onStep("song");
   const duration = audio.duration ?? (words.at(-1)?.end ?? 0) + 2;
   const lines = vocalLines(words, audio, { lang: tree.project.language, duration });

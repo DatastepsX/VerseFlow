@@ -43,7 +43,8 @@ export function flowLines(
   syllables: Syllable[],
   words: TimedWord[],
   grid: FlowGrid,
-  opts: { offset?: number; lang: string; duration: number },
+  /** sounds: sung sounds recognised as "words" ("pom pom para") — they count syllables, but aren't lyrics */
+  opts: { offset?: number; lang: string; duration: number; sounds?: TimedWord[] },
 ): FlowLine[] {
   const shift = opts.offset ?? 0; // song time of sample 0
   const sy = syllables.map((s) => ({ ...s, t: s.t + shift }));
@@ -53,7 +54,7 @@ export function flowLines(
   // the lines: by the words (pauses, punctuation, rhyme) when they cover the singing, else by the singing's own phrases
   const covered = words.length ? sy.filter((s) => words.some((w) => s.t >= w.start - 0.05 && s.t <= w.end + 0.05)).length : 0;
   const byRhyme = sy.length > 0 && covered / sy.length >= 0.6;
-  const groups: { inside: Syllable[]; ws: TimedWord[]; start: number; pair?: 0 | 1 | 2 }[] = [];
+  const groups: { inside: Syllable[]; ws: TimedWord[]; from: number; to: number; start: number; pair?: 0 | 1 | 2 }[] = [];
   if (byRhyme) {
     const segs = rhymeSegments(words, opts.lang, unit);
     segs.forEach((g, k) => {
@@ -63,6 +64,8 @@ export function flowLines(
       groups.push({
         inside: sy.filter((s) => s.t >= from && s.t < to),
         ws: words.slice(g.from, g.to + 1),
+        from,
+        to,
         start: Math.round(Math.max(0, first) * 1000) / 1000,
         pair: g.pair,
       });
@@ -73,11 +76,15 @@ export function flowLines(
       const inside = sy.slice(g.from, g.to + 1);
       const from = inside[0].t - 0.1;
       const to = k + 1 < segs.length ? sy[segs[k + 1].from].t - 0.1 : Infinity;
-      groups.push({ inside, ws: words.filter((w) => w.start >= from && w.start < to), start: Math.round(Math.max(0, inside[0].t) * 1000) / 1000 });
+      // couplets in order (1+2, 3+4…), restarting after a long silence
+      const prevEnd = k > 0 ? sy[segs[k - 1].to].t + sy[segs[k - 1].to].dur : -Infinity;
+      const prevPair = groups[groups.length - 1]?.pair;
+      const pair: 1 | 2 = prevPair === 1 && inside[0].t - prevEnd <= 1.6 ? 2 : 1;
+      groups.push({ inside, ws: words.filter((w) => w.start >= from && w.start < to), from, to, start: Math.round(Math.max(0, inside[0].t) * 1000) / 1000, pair });
     });
   }
   const out: FlowLine[] = [];
-  for (const { inside, ws, start, pair } of groups) {
+  for (const { inside, ws, from, to, start, pair } of groups) {
     if (inside.length < 2) continue;
     const text = ws
       .map((w) => w.text)
@@ -85,8 +92,11 @@ export function flowLines(
       .replace(/\s+([,.!?;:])/g, "$1")
       .trim();
     // recognised words count their syllables better than the envelope; "na-na" parts only the envelope
-    const fromWords = text ? prosody(text, opts.lang).syllables : 0;
-    const coveredByWords = ws.length ? inside.filter((s) => ws.some((w) => s.t >= w.start - 0.05 && s.t <= w.end + 0.05)).length : 0;
+    // sung sounds ("pom", "para") count like words: "para" = 2 syllables even when the envelope heard one
+    const snd = (opts.sounds ?? []).filter((w) => w.start >= from && w.start < to);
+    const fromWords = (text ? prosody(text, opts.lang).syllables : 0) + snd.reduce((n, w) => n + Math.max(1, prosody(w.text, opts.lang).syllables), 0);
+    const counted = [...ws, ...snd];
+    const coveredByWords = counted.length ? inside.filter((s) => counted.some((w) => s.t >= w.start - 0.05 && s.t <= w.end + 0.05)).length : 0;
     const syllableCount = Math.max(1, fromWords + (inside.length - coveredByWords));
     // stressed: the loudest of the line, a syllable that stands out from its neighbours, or one leaned into (long); a held last note too
     const durs = inside.map((s) => s.dur).sort((a, b) => a - b);
@@ -118,7 +128,7 @@ export function flowLines(
       pair,
     });
   }
-  return byRhyme ? fixPairs(out) : out;
+  return fixPairs(out);
 }
 
 /** "da-DUM-da-da-DUM…" for prompts and the pattern view */
