@@ -2293,6 +2293,7 @@ function MoreView({
           {vocals.split && <p className="px-1 text-xs text-muted">Playing, recording and flows use what you choose here, part by part. The vocals are still read for lyrics and flow.</p>}
         </div>
       )}
+      <ElevenAccount />
       <div className="space-y-2">
         <p className="label">Appearance</p>
         <ThemePicker />
@@ -2367,4 +2368,53 @@ function withoutVocals(ctx: BaseAudioContext, full: AudioBuffer, music: AudioBuf
     for (let i = 0; i < n; i++) o[i] = mix[i] ? f[i] * (1 - mix[i]) + (m[i] ?? 0) * mix[i] : f[i];
   }
   return out;
+}
+
+/** the ElevenLabs account the app uses (lyrics reading, your voice, vocal removal): shown on request */
+function ElevenAccount() {
+  type Info = { connected: boolean; error?: string; name?: string | null; email?: string | null; userId?: string | null; plan?: string | null; used?: number | null; limit?: number | null; resets?: number | null };
+  const [info, setInfo] = useState<Info | null>(null);
+  const [loading, setLoading] = useState(false);
+  const row = "flex w-full items-center gap-3 rounded-2xl bg-panel px-4 py-3 text-left ring-1 ring-line/60";
+  return (
+    <div className="space-y-2">
+      <p className="label">ElevenLabs account</p>
+      {!info ? (
+        <button
+          className={row}
+          disabled={loading}
+          onClick={async () => {
+            setLoading(true);
+            try {
+              setInfo((await fetch("/api/voice?account").then((r) => r.json())) as Info);
+            } finally {
+              setLoading(false);
+            }
+          }}
+        >
+          <span className="flex-1 text-sm">{loading ? "Asking ElevenLabs…" : "Show which account the app uses"}</span>
+          <ChevronRight className="h-4 w-4 text-muted" />
+        </button>
+      ) : (
+        <div className="rounded-2xl bg-panel px-4 py-3 text-sm ring-1 ring-line/60">
+          {!info.connected ? (
+            "No ElevenLabs key is set up."
+          ) : info.error ? (
+            <span className="text-warn">{info.error}</span>
+          ) : (
+            <>
+              <b>{info.email || info.name || "Account"}</b>
+              {info.email && info.name ? ` · ${info.name}` : ""}
+              {info.userId ? <span className="text-muted"> · id {info.userId}</span> : null}
+              <span className="block text-xs text-muted">
+                {info.plan ? `Plan: ${info.plan}` : ""}
+                {info.limit ? ` · ${(info.used ?? 0).toLocaleString()} of ${info.limit.toLocaleString()} credits used` : ""}
+                {info.resets ? ` · resets ${new Date(info.resets * 1000).toLocaleDateString()}` : ""}
+              </span>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }

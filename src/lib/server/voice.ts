@@ -168,3 +168,30 @@ export async function speakLines(tree: ProjectTree, lineIds: string[]): Promise<
   await Promise.all([worker(), worker(), worker()]);
   return out;
 }
+
+/**
+ * Which ElevenLabs account the app's key belongs to, and its credits — only
+ * these fields; the key itself never leaves the server.
+ */
+export async function elevenAccount() {
+  const key = process.env.ELEVENLABS_API_KEY;
+  if (!key) return { connected: false as const };
+  const res = await fetch(`${API}/user`, { headers: { "xi-api-key": key } });
+  if (!res.ok) return { connected: true as const, error: `ElevenLabs answered ${res.status} (the key may not be allowed to read the account)` };
+  const u = (await res.json()) as {
+    user_id?: string;
+    first_name?: string | null;
+    email?: string | null;
+    subscription?: { tier?: string; character_count?: number; character_limit?: number; next_character_count_reset_unix?: number };
+  };
+  return {
+    connected: true as const,
+    name: u.first_name ?? null,
+    email: u.email ?? null,
+    userId: u.user_id ? `…${u.user_id.slice(-6)}` : null,
+    plan: u.subscription?.tier ?? null,
+    used: u.subscription?.character_count ?? null,
+    limit: u.subscription?.character_limit ?? null,
+    resets: u.subscription?.next_character_count_reset_unix ?? null,
+  };
+}

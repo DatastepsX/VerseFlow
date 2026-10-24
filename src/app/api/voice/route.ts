@@ -1,13 +1,16 @@
 import { body, handle } from "@/lib/server/http";
-import { cloneVoice, deleteVoice, getVoice, voiceUploadUrl } from "@/lib/server/voice";
+import { cloneVoice, deleteVoice, elevenAccount, getVoice, voiceUploadUrl } from "@/lib/server/voice";
 
 export const maxDuration = 120;
 
 const pub = (v: Awaited<ReturnType<typeof getVoice>>) => (v ? { name: v.name, created_at: v.created_at } : null);
 
-/** the writer's cloned voice: GET → {voice} */
-export async function GET() {
-  return handle(async () => Response.json({ voice: pub(await getVoice()) }));
+/** the writer's cloned voice: GET → {voice}; ?account → the ElevenLabs account the app uses (name, plan, credits) */
+export async function GET(req: Request) {
+  return handle(async () => {
+    if (new URL(req.url).searchParams.has("account")) return Response.json(await elevenAccount());
+    return Response.json({ voice: pub(await getVoice()) });
+  });
 }
 
 /**
