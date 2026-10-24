@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { barsPerLine, chipsOf, lineFromText, linesFromBreaks, linesFromOnsets, ownWords, relayout } from "@/lib/flow/pattern";
 import { quantizeTaps } from "@/lib/flow/grid";
 import type { FlowPattern, PatternLine, SongFlow } from "@/lib/types";
-import { Check, Hand, LineBreak, Mic, Pencil, Play, Sparkles } from "@/components/icons";
+import { Check, Hand, LineBreak, Mic, Pencil, Play, Restart, Sparkles } from "@/components/icons";
 
 type Mode = "write" | "sing" | "tap" | "both";
 
@@ -83,6 +83,8 @@ export function FlowSheet({
   /** "Next line": when it was tapped, and how many syllables were tapped by then */
   const breaksRef = useRef<{ t: number; taps: number }[]>([]);
   const [breaks, setBreaks] = useState(0);
+  /** a take was sung / tapped: the button does it again */
+  const [recorded, setRecorded] = useState(false);
   const seed = useRef(0);
   const p = lines.length;
   const end = barStart + p * bar;
@@ -91,6 +93,7 @@ export function FlowSheet({
 
   const pickMode = (m: Mode) => {
     setMode(m);
+    setRecorded(false);
     try {
       localStorage.setItem(MODE_KEY, m);
     } catch {}
@@ -186,6 +189,7 @@ export function FlowSheet({
         setHint(mode === "sing" ? "Nothing was heard — sing a bit louder, or closer to the phone." : "No taps — tap once per syllable while the bars play.");
         return;
       }
+      setRecorded(true);
       const missing = got.filter((l) => !l.syllables).length;
       if (br.length && missing) setHint(`${p - missing} of ${p} lines — tap “Next line” after each line (or type the missing one).`);
       edit(got);
@@ -332,9 +336,15 @@ export function FlowSheet({
 
         {/* sing / tap: the first bars of the part */}
         {mode !== "write" && phase === "idle" && (
-          <button className="btn-primary w-full justify-center rounded-2xl py-3 text-[15px]" disabled={!audio.ready} onClick={() => void start()}>
-            {mode === "tap" ? <Hand className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
-            {!audio.ready ? "Loading the beat…" : mode === "sing" ? `Sing ${p} bars` : mode === "tap" ? `Tap ${p} bars` : `Sing and tap ${p} bars`}
+          <button
+            className={`w-full justify-center rounded-2xl py-3 text-[15px] ${recorded ? "btn border-0 bg-panel-2" : "btn-primary"}`}
+            disabled={!audio.ready}
+            onClick={() => void start()}
+          >
+            {recorded ? <Restart className="h-5 w-5" /> : mode === "tap" ? <Hand className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
+            {!audio.ready
+              ? "Loading the beat…"
+              : `${recorded ? "Again: " : ""}${mode === "sing" ? `sing ${p} bars` : mode === "tap" ? `tap ${p} bars` : `sing and tap ${p} bars`}`.replace(/^./, (c) => c.toUpperCase())}
             <span className="text-xs font-normal opacity-80">· 1 bar to count in</span>
           </button>
         )}

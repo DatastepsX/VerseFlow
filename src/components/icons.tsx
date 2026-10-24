@@ -85,6 +85,18 @@ export const Restart = (p: P) => (
     <path d="M3 3v5h5" />
   </Icon>
 );
+export const Undo = (p: P) => (
+  <Icon {...p}>
+    <path d="M9 14 4 9l5-5" />
+    <path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11" />
+  </Icon>
+);
+export const Redo = (p: P) => (
+  <Icon {...p}>
+    <path d="m15 14 5-5-5-5" />
+    <path d="M20 9H9.5A5.5 5.5 0 0 0 4 14.5A5.5 5.5 0 0 0 9.5 20H13" />
+  </Icon>
+);
 export const Check = (p: P) => (
   <Icon {...p}>
     <path d="M20 6 9 17l-5-5" />

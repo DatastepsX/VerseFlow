@@ -28,6 +28,9 @@ interface Props {
   initialOn?: On;
   /** recording: the tabs wait */
   onBusy: (busy: boolean) => void;
+  /** the part being worked on (shared with Flow and Lyrics) */
+  part: string | null;
+  onPart: (id: string) => void;
 }
 
 const SUGGESTED_LANES = ["Harmony", "Backing", "Hook"];
@@ -44,8 +47,8 @@ export function RecordView(props: Props) {
   // a computer records itself (and your phone can drive it)
   const where: On = phone ? on : "here";
   const parts = props.tree.sections;
-  const [sectionId, setSectionId] = useState<string | null>(parts[0]?.id ?? null);
-  const section: [string | null, (id: string) => void] = [sectionId, setSectionId];
+  const sectionId = props.part && parts.some((p) => p.id === props.part) ? props.part : (parts[0]?.id ?? null);
+  const section: [string | null, (id: string) => void] = [sectionId, props.onPart];
   return (
     <div className="space-y-4">
       {phone ? (

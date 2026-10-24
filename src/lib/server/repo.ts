@@ -1,4 +1,6 @@
 import "server-only";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { headers } from "next/headers";
 import { check, db } from "./db";
 import { orderSections } from "@/lib/order";
 import type {
@@ -29,6 +31,89 @@ const LINE_COLS = "id, project_id, section_id, position, text, status, kind, not
 const SNAPSHOT_FIELDS = ["text", "status", "kind", "note", "deleted", "flow"] as const;
 
 export class NotFound extends Error {}
+
+// ---------- undo steps: one per user action ----------
+
+/**
+ * Every API request runs in a scope (see http.ts `handle`): the line changes it makes form one undo step.
+ * An action that takes several requests (a new flow: its lines, then their lyrics) sends the same
+ * `x-undo-step` id (and an `x-undo-label`) with each, so it stays one step.
+ */
+export const requestScope = new AsyncLocalStorage<{ key: string; steps: Map<string, number> }>();
+
+const ACTION_LABELS: Record<string, string> = {
+  approve: "Keep",
+  unkeep: "Unkeep",
+  swap: "Next option",
+  edit: "Edit",
+  delete: "Remove line",
+  create: "New line",
+  flow: "New lyrics",
+  restore: "Restore",
+  move: "Move line",
+};
+
+async function currentStep(projectId: string, action: string): Promise<number | null> {
+  const scope = requestScope.getStore();
+  let key: string | undefined;
+  let label = ACTION_LABELS[action] ?? "Change";
+  try {
+    const h = await headers();
+    key = h.get("x-undo-step") ?? undefined;
+    const l = h.get("x-undo-label");
+    if (l) label = decodeURIComponent(l).slice(0, 80);
+  } catch {
+    // outside a request (scripts): no step
+  }
+  key = key ?? scope?.key;
+  if (!key) return null;
+  const cached = scope?.steps.get(`${projectId}|${key}`);
+  if (cached) return cached;
+  let row = check(await db().from("undo_steps").select("id").eq("project_id", projectId).eq("key", key).maybeSingle()) as { id: number } | null;
+  if (!row) {
+    // a new action: what could have been redone is gone
+    await db().from("undo_steps").delete().eq("project_id", projectId).eq("undone", true);
+    await db().from("undo_steps").upsert({ project_id: projectId, key, label }, { onConflict: "project_id,key", ignoreDuplicates: true });
+    row = check(await db().from("undo_steps").select("id").eq("project_id", projectId).eq("key", key).single()) as { id: number };
+  }
+  scope?.steps.set(`${projectId}|${key}`, row.id);
+  return row.id;
+}
+
+/** a whole-song rebuild: its undo brings back the version saved before it */
+async function markRebuild(projectId: string, versionId: string, label: string) {
+  const step = await currentStep(projectId, "rebuild");
+  if (step) check(await db().from("undo_steps").update({ version_id: versionId, label }).eq("id", step));
+}
+
+/** the sections and lines of a version in place of the current ones — the same ids (undo / redo of a rebuild) */
+async function replaceWithVersion(projectId: string, versionId: string) {
+  const v = await getVersion(versionId);
+  check(await db().from("sections").delete().eq("project_id", projectId));
+  await insertSnapshot(projectId, v.snapshot, true);
+}
+
+/** what undo / redo can do now (for the buttons) */
+async function historyOf(projectId: string): Promise<ProjectTree["history"]> {
+  const steps = check(
+    await db()
+      .from("undo_steps")
+      .select("id, label, undone, version_id, line_events(count)")
+      .eq("project_id", projectId)
+      .order("id", { ascending: false })
+      .limit(100),
+  ) as { id: number; label: string; undone: boolean; version_id: string | null; line_events: { count: number }[] }[];
+  const live = steps.filter((x) => x.version_id || (x.line_events[0]?.count ?? 0) > 0);
+  const undo = live.filter((x) => !x.undone);
+  const redo = live.filter((x) => x.undone);
+  // changes made before steps existed: still undoable one by one
+  let legacy = 0;
+  if (!undo.length) {
+    const ev = check(await db().from("line_events").select("id").eq("project_id", projectId).eq("undone", false).is("step_id", null).limit(50)) as { id: number }[];
+    legacy = ev.length;
+  }
+  return { undo: undo.length + legacy, redo: redo.length, undoLabel: undo[0]?.label ?? (legacy ? "Last change" : null), redoLabel: redo[redo.length - 1]?.label ?? null };
+}
 
 // ---------- projects ----------
 
@@ -143,6 +228,7 @@ export async function getTree(projectId: string): Promise<ProjectTree> {
     audio: check(au) as AudioTrack | null,
     takes: check(tk) as Take[],
     flows: check(fl) as SongFlow[],
+    history: await historyOf(projectId),
   };
 }
 
@@ -249,9 +335,10 @@ function snap(line: Partial<Line> & { deleted?: boolean }): Partial<LineSnapshot
 }
 
 async function recordEvent(projectId: string, lineId: string, action: string, before: object | null, after: object | null) {
+  const step = await currentStep(projectId, action);
   // a new action invalidates anything that could have been redone
   await db().from("line_events").delete().eq("project_id", projectId).eq("undone", true);
-  check(await db().from("line_events").insert({ project_id: projectId, line_id: lineId, action, before, after }));
+  check(await db().from("line_events").insert({ project_id: projectId, line_id: lineId, action, before, after, step_id: step }));
 }
 
 async function getLine(id: string) {
@@ -399,13 +486,86 @@ async function applySnapshot(lineId: string, s: Partial<LineSnapshot> | null) {
   check(await db().from("lines").update({ ...s, updated_at: new Date().toISOString() }).eq("id", lineId));
 }
 
-export async function undo(projectId: string) {
+/** undoes the last step (all its line changes, or the rebuild it was); its label, or null when there's nothing */
+export async function undo(projectId: string): Promise<string | null> {
+  for (let guard = 0; guard < 100; guard++) {
+    const [step] = check(
+      await db().from("undo_steps").select("id, label, version_id").eq("project_id", projectId).eq("undone", false).order("id", { ascending: false }).limit(1),
+    ) as { id: number; label: string; version_id: string | null }[];
+    if (!step) return (await undoLegacy(projectId)) ? "Last change" : null;
+    if (step.version_id) {
+      // a rebuilt song: back to the version saved before it (the song as it is now is kept for redo)
+      const redoVersion = await saveVersion(projectId, `Before undoing “${step.label}”`);
+      await replaceWithVersion(projectId, step.version_id);
+      check(await db().from("undo_steps").update({ undone: true, redo_version_id: redoVersion }).eq("id", step.id));
+      await touch(projectId);
+      return step.label;
+    }
+    const evs = check(
+      await db().from("line_events").select("id, line_id, before").eq("step_id", step.id).eq("undone", false).order("id", { ascending: false }),
+    ) as LineEvent[];
+    // nothing left in it (its lines went with a rebuilt song): skip it
+    if (!evs.length) {
+      check(await db().from("undo_steps").delete().eq("id", step.id));
+      continue;
+    }
+    for (const ev of evs) await applySnapshot(ev.line_id, ev.before as Partial<LineSnapshot>);
+    check(await db().from("line_events").update({ undone: true }).eq("step_id", step.id));
+    check(await db().from("undo_steps").update({ undone: true }).eq("id", step.id));
+    await touch(projectId);
+    return step.label;
+  }
+  return null;
+}
+
+/** redoes the step undone last; its label, or null */
+export async function redo(projectId: string): Promise<string | null> {
+  for (let guard = 0; guard < 100; guard++) {
+    const [step] = check(
+      await db()
+        .from("undo_steps")
+        .select("id, label, version_id, redo_version_id")
+        .eq("project_id", projectId)
+        .eq("undone", true)
+        .order("id", { ascending: true })
+        .limit(1),
+    ) as { id: number; label: string; version_id: string | null; redo_version_id: string | null }[];
+    if (!step) return (await redoLegacy(projectId)) ? "Last change" : null;
+    if (step.version_id) {
+      if (!step.redo_version_id) {
+        check(await db().from("undo_steps").delete().eq("id", step.id));
+        continue;
+      }
+      await replaceWithVersion(projectId, step.redo_version_id);
+      check(await db().from("undo_steps").update({ undone: false }).eq("id", step.id));
+      await touch(projectId);
+      return step.label;
+    }
+    const evs = check(
+      await db().from("line_events").select("id, line_id, after").eq("step_id", step.id).eq("undone", true).order("id", { ascending: true }),
+    ) as LineEvent[];
+    if (!evs.length) {
+      check(await db().from("undo_steps").delete().eq("id", step.id));
+      continue;
+    }
+    for (const ev of evs) await applySnapshot(ev.line_id, ev.after as Partial<LineSnapshot>);
+    check(await db().from("line_events").update({ undone: false }).eq("step_id", step.id));
+    check(await db().from("undo_steps").update({ undone: false }).eq("id", step.id));
+    await touch(projectId);
+    return step.label;
+  }
+  return null;
+}
+
+/** changes from before undo steps existed: one line event at a time */
+async function undoLegacy(projectId: string) {
   const ev = check(
     await db()
       .from("line_events")
       .select("id, line_id, before")
       .eq("project_id", projectId)
       .eq("undone", false)
+      .is("step_id", null)
       .order("id", { ascending: false })
       .limit(1),
   ) as LineEvent[];
@@ -416,13 +576,14 @@ export async function undo(projectId: string) {
   return true;
 }
 
-export async function redo(projectId: string) {
+async function redoLegacy(projectId: string) {
   const ev = check(
     await db()
       .from("line_events")
       .select("id, line_id, after")
       .eq("project_id", projectId)
       .eq("undone", true)
+      .is("step_id", null)
       .order("id", { ascending: true })
       .limit(1),
   ) as LineEvent[];
@@ -529,7 +690,10 @@ export async function saveVersion(projectId: string, label: string) {
       lines: lines.map(({ alternatives: _a, ...l }) => l),
     })),
   };
-  check(await db().from("project_versions").insert({ project_id: projectId, label: label.trim() || "Version", snapshot }));
+  const row = check(await db().from("project_versions").insert({ project_id: projectId, label: label.trim() || "Version", snapshot }).select("id").single()) as {
+    id: string;
+  };
+  return row.id;
 }
 
 export async function getVersion(versionId: string) {
@@ -568,6 +732,7 @@ async function insertSnapshot(projectId: string, tree: { sections: (Section & { 
           .from("lines")
           .insert(
             s.lines.map((l) => ({
+              ...(keepIds ? { id: l.id } : {}),
               project_id: projectId,
               section_id: sec.id,
               position: l.position,
@@ -576,6 +741,7 @@ async function insertSnapshot(projectId: string, tree: { sections: (Section & { 
               kind: l.kind,
               note: l.note,
               audio_at: l.audio_at ?? null,
+              flow: l.flow ?? null,
             })),
           ),
       );
@@ -838,7 +1004,7 @@ export async function rebuildSong(
   sections: { name: string; start: number; lines: { text: string; at: number }[] }[],
   groupSize: number,
 ) {
-  await saveVersion(projectId, "Before rebuilding from the vocals");
+  await markRebuild(projectId, await saveVersion(projectId, "Before rebuilding from the vocals"), "Song rebuilt from the vocals");
   const old = check(await db().from("sections").select("id").eq("project_id", projectId)) as { id: string }[];
   for (const s of old) await deleteSection(s.id);
   for (const s of sections) {
@@ -1259,11 +1425,14 @@ function flowRows(
 async function insertFlowRows(projectId: string, rows: Record<string, unknown>[]) {
   if (!rows.length) return;
   const inserted = check(await db().from("lines").insert(rows).select(LINE_COLS)) as Line[];
+  const step = await currentStep(projectId, "create");
   await db().from("line_events").delete().eq("project_id", projectId).eq("undone", true);
   check(
     await db()
       .from("line_events")
-      .insert(inserted.map((line) => ({ project_id: projectId, line_id: line.id, action: "create", before: { deleted: true }, after: snap({ ...line, deleted: false }) }))),
+      .insert(
+        inserted.map((line) => ({ project_id: projectId, line_id: line.id, action: "create", before: { deleted: true }, after: snap({ ...line, deleted: false }), step_id: step })),
+      ),
   );
 }
 
@@ -1287,8 +1456,9 @@ export async function buildFlowSong(
   parts: { start: number; slots: number[] }[] = [],
 ) {
   const tree = await getTree(projectId);
-  if (tree.sections.some((s) => s.lines.some((l) => l.text.trim())))
-    await saveVersion(projectId, source === "vocals" ? "Before reading the vocals" : "Before the new flow");
+  // the song before: a version (to restore by hand) and what undo brings back
+  const label = source === "vocals" ? "Lyrics read from the song" : "New flow for the song";
+  await markRebuild(projectId, await saveVersion(projectId, source === "vocals" ? "Before reading the vocals" : "Before the new flow"), label);
   if (tree.sections.length) check(await db().from("sections").delete().in("id", tree.sections.map((s) => s.id)));
   const sung = [...lines].sort((a, b) => a.start - b.start);
   const step = medianStep(sung.map((l) => l.start));

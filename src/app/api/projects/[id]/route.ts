@@ -49,11 +49,13 @@ export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]">
     const b = await body<{ action: string; name?: string; group_size?: number; label?: string; audio_start?: number | null; times?: { id: string; at: number | null }[]; text?: string; artistId?: string; color?: string; notes?: string; lanes?: string[]; lane?: string; preset?: string; key?: unknown }>(req);
     switch (b.action) {
       case "undo":
-        await undo(id);
-        break;
-      case "redo":
-        await redo(id);
-        break;
+      case "redo": {
+        // the tree, and what was undone / redone (x-undo-label)
+        const label = b.action === "undo" ? await undo(id) : await redo(id);
+        const res = await treeResponse(id);
+        if (label) res.headers.set("x-undo-label", encodeURIComponent(label));
+        return res;
+      }
       case "duplicate":
         return Response.json(await duplicateProject(id), { status: 201 });
       case "addSection":

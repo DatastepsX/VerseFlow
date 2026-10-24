@@ -18,6 +18,7 @@ import { download, fullText } from "@/components/writer/util";
 import { VoiceSheet, type VoiceInfo } from "./VoiceSheet";
 import { ThemePicker } from "@/components/ThemePicker";
 import { RecordView } from "./Record";
+import { undoHeaders, undoStep } from "@/lib/undo-group";
 import { TapFlow } from "./TapFlow";
 import { FlowSheet, type SheetAudio } from "./FlowSheet";
 import { exampleWords } from "@/lib/flow/example";
@@ -46,6 +47,9 @@ import {
   Shuffle,
   Sparkles,
   Trash,
+  Redo,
+  Restart,
+  Undo,
   User,
   Waveform,
 } from "@/components/icons";
@@ -105,7 +109,7 @@ export function SongApp({
   const call = async (path: string, body?: unknown, method = "POST") => {
     const res = await fetch(path, {
       method,
-      headers: body !== undefined ? { "content-type": "application/json" } : undefined,
+      headers: { ...(body !== undefined ? { "content-type": "application/json" } : {}), ...undoHeaders() },
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
     const data = (await res.json().catch(() => ({}))) as ProjectTree & { error?: string };
@@ -266,6 +270,47 @@ export function SongApp({
     setLive(null);
   };
 
+  // ---------- undo / redo: one step per action ----------
+  const history = tree.history ?? { undo: 0, redo: 0, undoLabel: null, redoLabel: null };
+  const [undoing, setUndoing] = useState(false);
+  const [toast, setToast] = useState<{ text: string; then: "undo" | "redo" } | null>(null);
+  /** right after a new flow: take it back, or do it again */
+  const [lastFlow, setLastFlow] = useState<{ label: string; again: () => void } | null>(null);
+  const undoRedo = async (which: "undo" | "redo") => {
+    if (undoing) return;
+    if (playing) stopPlay();
+    setUndoing(true);
+    try {
+      const res = await fetch(`/api/projects/${pid}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: which }) });
+      const data = (await res.json().catch(() => ({}))) as ProjectTree & { error?: string };
+      if (!res.ok) return setError(data.error ?? "Something went wrong");
+      setTree(data);
+      setLastFlow(null);
+      const label = res.headers.get("x-undo-label");
+      setToast(label ? { text: `${which === "undo" ? "Undone" : "Redone"}: ${decodeURIComponent(label)}`, then: which === "undo" ? "redo" : "undo" } : null);
+    } finally {
+      setUndoing(false);
+    }
+  };
+  useEffect(() => {
+    if (!toast) return;
+    const id = setTimeout(() => setToast(null), 5000);
+    return () => clearTimeout(id);
+  }, [toast]);
+  // a computer: ⌘Z / Ctrl+Z undo, with ⇧ redo
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement;
+      if (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable) return;
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") {
+        e.preventDefault();
+        void undoRedo(e.shiftKey ? "redo" : "undo");
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
   // ---------- recording the flow ----------
   const [headphones, setHeadphones] = useState(true);
   const [rec, setRec] = useState<null | "recording" | "tapping" | "processing">(null);
@@ -331,9 +376,14 @@ export function SongApp({
       return;
     }
     try {
-      const out = await processFlow(pid, tree, r, (key, progress) => setStep({ key, progress }), setTree, part ?? undefined);
+      // one undo step: the whole new flow (the song before comes back)
+      const out = await undoStep(part ? `Flow for ${part.name}` : "New flow for the song", () =>
+        processFlow(pid, tree, r, (key, progress) => setStep({ key, progress }), setTree, part ?? undefined),
+      );
+      const again = part;
       setPart(null);
       setTree(out.tree);
+      setLastFlow({ label: again ? `New flow · ${again.name}` : "New flow for the song", again: () => setView("flow") });
       if (out.wordsFailed) setNote(`Your words couldn't be recognised (${out.wordsFailed}) — the lyrics follow your rhythm only.`);
       // keep the fresh recording for playback
       const buf = e.ctx.createBuffer(1, r.samples.length, r.sampleRate);
@@ -411,7 +461,7 @@ export function SongApp({
     setSource(voice ? "flow" : "tap");
     setRec("processing");
     try {
-      const out = await processTaps(
+      const out = await undoStep(part ? `Tapped flow for ${part.name}` : "Tapped flow for the song", () => processTaps(
         pid,
         tree,
         taps,
@@ -420,8 +470,9 @@ export function SongApp({
         part ?? undefined,
         breaksRef.current.length ? breaksRef.current : undefined,
         voice ?? undefined,
-      );
+      ));
       setTree(out);
+      setLastFlow({ label: part ? `Tapped flow · ${part.name}` : "Tapped flow for the song", again: () => setView("flow") });
       setPart(null);
       setView("lyrics");
       window.scrollTo(0, 0);
@@ -450,7 +501,7 @@ export function SongApp({
     setView("flow");
     let latest = base;
     try {
-      const out = await processVocals(
+      const out = await undoStep("Lyrics read from the song", () => processVocals(
         pid,
         base,
         (key, progress) => setStep({ key, progress }),
@@ -459,7 +510,7 @@ export function SongApp({
           setTree(t);
         },
         { auto },
-      );
+      ));
       if (out) {
         latest = out;
         setTree(out);
@@ -496,7 +547,21 @@ export function SongApp({
   };
 
   // ---------- the parts bar: where you are, tap to jump ----------
+  /** the part being worked on — the same in Flow, Lyrics and Record */
   const [activePart, setActivePart] = useState<string | null>(null);
+  const activePartRef = useRef(activePart);
+  useEffect(() => {
+    activePartRef.current = activePart;
+  });
+  // opening Lyrics: straight to that part (the scroll doesn't pick another one meanwhile)
+  const restoringPart = useRef(false);
+  useEffect(() => {
+    if (view !== "lyrics" || !activePartRef.current) return;
+    restoringPart.current = true;
+    document.getElementById(`part-${activePartRef.current}`)?.scrollIntoView({ block: "start" });
+    const id = setTimeout(() => (restoringPart.current = false), 500);
+    return () => clearTimeout(id);
+  }, [view]);
   const partsRow = useRef<HTMLDivElement | null>(null);
   const liveSection = live ? (tree.sections.find((s) => s.lines.some((l) => l.id === live))?.id ?? null) : null;
   // while scrolling: the part at the top of the screen
@@ -507,7 +572,7 @@ export function SongApp({
     const io = new IntersectionObserver(
       (entries) => {
         const top = entries.filter((e) => e.isIntersecting).sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)[0];
-        if (top) setActivePart((top.target as HTMLElement).dataset.partSection ?? null);
+        if (top && !restoringPart.current) setActivePart((top.target as HTMLElement).dataset.partSection ?? null);
       },
       { rootMargin: "-170px 0px -55% 0px" },
     );
@@ -585,6 +650,10 @@ export function SongApp({
 
   // ---------- flows: a part (or a stretch of it) follows a pattern of 2 or 4 lines ----------
   const [flowSheet, setFlowSheet] = useState<{ sectionId: string; fromLineId: string | null; flowId: string | null } | null>(null);
+  const openFlowSheet = (v: { sectionId: string; fromLineId: string | null; flowId: string | null }) => {
+    setFlowSheet(v);
+    setActivePart(v.sectionId);
+  };
   /** where a flow would apply: from the part's (or the line's) bar line to where the part — or the flow it follows — ends */
   const stretchOf = (s: ProjectTree["sections"][number], fromLineId: string | null) => {
     const lyric = s.lines.filter((l) => l.kind === "lyric");
@@ -622,8 +691,18 @@ export function SongApp({
   };
   const useFlow = async (use: { flowId: string } | { pattern: import("@/lib/types").FlowPattern }) => {
     if (!flowSheet) return;
+    const sec0 = tree.sections.find((x) => x.id === flowSheet.sectionId);
+    // one undo step: the part's new lines and their lyrics
+    const sheet = flowSheet;
+    await undoStep(`New flow · ${sec0?.name ?? "part"}`, () => applyFlowSheet(use));
+    setLastFlow({ label: `New flow · ${sec0?.name ?? "part"}`, again: () => openFlowSheet({ ...sheet, flowId: null }) });
+    // the result: the part's new lines (Lyrics opens on it)
+    setView("lyrics");
+  };
+  const applyFlowSheet = async (use: { flowId: string } | { pattern: import("@/lib/types").FlowPattern }) => {
+    if (!flowSheet) return;
     const post = async <T,>(body: unknown): Promise<T> => {
-      const res = await fetch(`/api/projects/${pid}/flows`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      const res = await fetch(`/api/projects/${pid}/flows`, { method: "POST", headers: { "content-type": "application/json", ...undoHeaders() }, body: JSON.stringify(body) });
       const data = (await res.json().catch(() => ({}))) as T & { error?: string };
       if (!res.ok) throw new Error(data.error ?? "Something went wrong");
       return data;
@@ -646,10 +725,11 @@ export function SongApp({
 
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
-  const lineAction = async (id: string, fn: () => Promise<unknown>) => {
+  /** a change to a line (or a part): busy while it runs, one undo step with this label */
+  const lineAction = async (id: string, fn: () => Promise<unknown>, label = "Change") => {
     setBusyLine(id);
     try {
-      await fn();
+      await undoStep(label, fn);
     } finally {
       setBusyLine(null);
     }
@@ -664,7 +744,7 @@ export function SongApp({
       const top = fresh.alternatives.map((x) => ({ x, score: rhymeScore(partner.text, x.text, lang) })).sort((p, q) => q.score - p.score)[0];
       if (top && top.score >= RHYMES) await call(`/api/alternatives/${top.x.id}`, { action: "swap" });
       else setNote("No rhyming option yet — try again, or edit the line.");
-    });
+    }, "New rhyming options");
   /**
    * The whole couplet again: 3 new rhyming pairs for both lines (1 call), the best pair in. A kept line is
    * replaced only when the writer says so (it's un-kept first; the AI never changes a kept line).
@@ -692,28 +772,29 @@ export function SongApp({
           await call(`/api/alternatives/${m.alt.id}`, { action: "swap" });
         }
       }
-    });
+    }, "New couplet");
   };
   /** a rhyming couplet from the options: this line's option, and the other line's when it changes too (free) */
   const applyMove = (l: LyricLine, m: RhymeMove) =>
     lineAction(l.id, async () => {
       if (m.partnerAlt) await call(`/api/alternatives/${m.partnerAlt.id}`, { action: "swap" });
       await call(`/api/alternatives/${m.alt.id}`, { action: "swap" });
-    });
+    }, m.partnerAlt ? "Next pair" : "Next option");
   /**
    * A couplet that doesn't rhyme: the 2nd line's next rhyming option (or a rhyming pair of options for both
    * lines), else the 1st line's option rhyming with the 2nd — free; none → 3 new options rhyming with the
    * other line (1 call). A kept line stays as it is.
    */
-  const makeItRhyme = async (a: LyricLine, b: LyricLine) => {
-    const [line, other] = isKept(b) && !isKept(a) ? [a, b] : [b, a];
-    const mine = rhymeMoves(line, other, lang)[0];
-    if (mine) return applyMove(line, mine);
-    // the other line's option that rhymes with this one as it is
-    const theirs = isKept(other) ? undefined : rhymeMoves(other, line, lang).find((m) => !m.partnerAlt);
-    if (theirs) return applyMove(other, theirs);
-    await newRhyming(line, other);
-  };
+  const makeItRhyme = (a: LyricLine, b: LyricLine) =>
+    undoStep("Make it rhyme", async () => {
+      const [line, other] = isKept(b) && !isKept(a) ? [a, b] : [b, a];
+      const mine = rhymeMoves(line, other, lang)[0];
+      if (mine) return applyMove(line, mine);
+      // the other line's option that rhymes with this one as it is
+      const theirs = isKept(other) ? undefined : rhymeMoves(other, line, lang).find((m) => !m.partnerAlt);
+      if (theirs) return applyMove(other, theirs);
+      await newRhyming(line, other);
+    });
   const missing = tree.sections
     .filter((s) => !isEmptyPart(s))
     .flatMap((s) => s.lines.filter((l) => l.kind === "lyric" && !l.text.trim()))
@@ -732,6 +813,31 @@ export function SongApp({
             <ChevronLeft className="h-6 w-6" />
           </Link>
           <h1 className="min-w-0 flex-1 truncate text-[17px] font-bold tracking-tight">{tree.project.title}</h1>
+          {/* undo / redo: whole actions ("New couplet", "New flow · Part 2"…), as many as you like */}
+          {rec === null && (
+            <div className="flex shrink-0 items-center">
+              <button
+                className="flex h-9 items-center gap-0.5 rounded-full px-2 text-fg/70 active:bg-panel-2 disabled:opacity-30"
+                disabled={!history.undo || undoing || recBusy || busyLine !== null}
+                onClick={() => void undoRedo("undo")}
+                title={history.undoLabel ? `Undo: ${history.undoLabel}` : "Nothing to undo"}
+                aria-label={history.undoLabel ? `Undo ${history.undoLabel}` : "Undo"}
+              >
+                <Undo className="h-5 w-5" />
+                {history.undo > 1 && <span className="text-[11px] font-semibold tabular-nums">{Math.min(history.undo, 99)}</span>}
+              </button>
+              <button
+                className="flex h-9 items-center gap-0.5 rounded-full px-2 text-fg/70 active:bg-panel-2 disabled:opacity-30"
+                disabled={!history.redo || undoing || recBusy || busyLine !== null}
+                onClick={() => void undoRedo("redo")}
+                title={history.redoLabel ? `Redo: ${history.redoLabel}` : "Nothing to redo"}
+                aria-label={history.redoLabel ? `Redo ${history.redoLabel}` : "Redo"}
+              >
+                <Redo className="h-5 w-5" />
+                {history.redo > 1 && <span className="text-[11px] font-semibold tabular-nums">{Math.min(history.redo, 99)}</span>}
+              </button>
+            </div>
+          )}
           {view === "lyrics" && hasLines && (
             <span className="flex shrink-0 items-center gap-1 rounded-full bg-panel-2 px-2.5 py-1 text-xs font-semibold text-muted" title="Lines kept">
               <Check className="h-3.5 w-3.5" />
@@ -845,6 +951,37 @@ export function SongApp({
         </p>
       )}
 
+      {toast && (
+        <div className="fixed left-1/2 top-[calc(env(safe-area-inset-top)+4.25rem)] z-40 flex max-w-[92%] -translate-x-1/2 items-center gap-3 rounded-full bg-fg py-1.5 pl-4 pr-1.5 text-sm text-bg shadow-lg">
+          <span className="truncate">{toast.text}</span>
+          <button className="shrink-0 rounded-full bg-bg/15 px-3 py-1 text-xs font-semibold" onClick={() => void undoRedo(toast.then)}>
+            {toast.then === "redo" ? "Redo" : "Undo"}
+          </button>
+        </div>
+      )}
+      {/* right after a new flow: not happy? take it back, or do it again */}
+      {lastFlow && rec === null && view === "lyrics" && (
+        <div className="mx-4 mt-3 flex items-center gap-1.5 rounded-2xl bg-accent-soft py-1.5 pl-3.5 pr-1.5 text-sm">
+          <span className="min-w-0 flex-1 truncate font-semibold text-accent">{lastFlow.label}</span>
+          <button className="flex shrink-0 items-center gap-1 rounded-full bg-panel px-3 py-1.5 text-xs font-semibold" disabled={undoing} onClick={() => void undoRedo("undo")}>
+            <Undo className="h-3.5 w-3.5" /> Undo
+          </button>
+          <button
+            className="flex shrink-0 items-center gap-1 rounded-full bg-panel px-3 py-1.5 text-xs font-semibold"
+            onClick={() => {
+              const again = lastFlow.again;
+              setLastFlow(null);
+              again();
+            }}
+          >
+            <Restart className="h-3.5 w-3.5" /> Again
+          </button>
+          <button className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-muted" onClick={() => setLastFlow(null)} aria-label="Close">
+            ×
+          </button>
+        </div>
+      )}
+
       <main className="flex-1 px-4 pb-32 pt-4">
         {/* ----- FLOW ----- */}
         {view === "flow" && !tree.audio && (
@@ -873,8 +1010,8 @@ export function SongApp({
                           return (
                             <button
                               key={x.id}
-                              className="flex w-full items-center gap-3 rounded-2xl bg-panel px-4 py-2.5 text-left ring-1 ring-line/60"
-                              onClick={() => setFlowSheet({ sectionId: x.id, fromLineId: null, flowId: x.lines.find((l) => l.flow?.flowId)?.flow?.flowId ?? null })}
+                              className={`flex w-full items-center gap-3 rounded-2xl px-4 py-2.5 text-left ring-1 ${x.id === activePart ? "bg-accent-soft ring-accent" : "bg-panel ring-line/60"}`}
+                              onClick={() => openFlowSheet({ sectionId: x.id, fromLineId: null, flowId: x.lines.find((l) => l.flow?.flowId)?.flow?.flowId ?? null })}
                             >
                               <span className="min-w-0 flex-1">
                                 <span className="block text-sm font-semibold">{x.name}</span>
@@ -1130,7 +1267,7 @@ export function SongApp({
                 onClick={() =>
                   void lineAction("missing", async () => {
                     for (const ids of chunkLines(lyricLines.filter((l) => missing.includes(l.id)))) await call(`/api/projects/${pid}/flow`, { action: "suggest", lineIds: ids });
-                  })
+                  }, "Missing lines written")
                 }
               >
                 <Sparkles className="h-4 w-4" />
@@ -1159,7 +1296,7 @@ export function SongApp({
                       <button
                         className="btn-primary w-full justify-center rounded-2xl py-3 text-[15px] disabled:opacity-50"
                         disabled={!beatGrid}
-                        onClick={() => setFlowSheet({ sectionId: s.id, fromLineId: null, flowId: null })}
+                        onClick={() => openFlowSheet({ sectionId: s.id, fromLineId: null, flowId: null })}
                       >
                         <AudioLines className="h-[18px] w-[18px]" /> Set the flow
                         <span className="text-xs font-normal opacity-80">write · sing · tap</span>
@@ -1174,7 +1311,7 @@ export function SongApp({
                           onClick={() =>
                             void lineAction(s.id, async () => {
                               for (const ids of chunkLines(lines)) await call(`/api/projects/${pid}/flow`, { action: "suggest", lineIds: ids });
-                            })
+                            }, `Lines for ${s.name}`)
                           }
                           title="Write the lines without a flow (free rhythm, fitting the song around them)"
                         >
@@ -1199,7 +1336,7 @@ export function SongApp({
                     {beatGrid && (
                       <button
                         className="flex shrink-0 items-center gap-1 rounded-full bg-panel-2 px-2.5 py-1 text-xs font-semibold text-accent"
-                        onClick={() => setFlowSheet({ sectionId: s.id, fromLineId: null, flowId: lines[0]?.flow?.flowId ?? null })}
+                        onClick={() => openFlowSheet({ sectionId: s.id, fromLineId: null, flowId: lines[0]?.flow?.flowId ?? null })}
                         title="The flow of this part: write, sing or tap it"
                       >
                         <AudioLines className="h-3.5 w-3.5" />
@@ -1223,7 +1360,7 @@ export function SongApp({
                       {flowStart && (
                         <button
                           className="mb-1.5 ml-1 flex items-center gap-1.5 rounded-full bg-accent-soft px-2.5 py-0.5 text-[11px] font-semibold text-accent"
-                          onClick={() => setFlowSheet({ sectionId: s.id, fromLineId: group[0].id, flowId: flowStart.id })}
+                          onClick={() => openFlowSheet({ sectionId: s.id, fromLineId: group[0].id, flowId: flowStart.id })}
                           title="The flow changes here — tap to change it"
                         >
                           <AudioLines className="h-3 w-3" /> {flowStart.name} from here
@@ -1258,6 +1395,7 @@ export function SongApp({
                                   l.status === "APPROVED" || l.status === "APPROVED_EDITED" ? { status: "SUGGESTED", action: "unkeep" } : { status: "APPROVED", action: "approve" },
                                   "PATCH",
                                 ),
+                                isKept(l) ? "Unkeep" : "Keep",
                               )
                             }
                             rhymingCount={partner?.text.trim() ? moves.length : null}
@@ -1276,12 +1414,12 @@ export function SongApp({
                             }
                             onNext={() => {
                               // no other line to rhyme with: the next option in line
-                              if (!partner?.text.trim()) return void lineAction(l.id, () => call(`/api/alternatives/${l.alternatives[0].id}`, { action: "swap" }));
+                              if (!partner?.text.trim()) return void lineAction(l.id, () => call(`/api/alternatives/${l.alternatives[0].id}`, { action: "swap" }), "Next option");
                               // never a couplet that doesn't rhyme: none of the options does → 3 new ones that do (1 call)
                               if (moves.length) void applyMove(l, moves[0]);
                               else void newRhyming(l, partner);
                             }}
-                            onNew={() => void lineAction(l.id, () => call(`/api/projects/${pid}/flow`, { action: "suggest", lineIds: [l.id] }))}
+                            onNew={() => void lineAction(l.id, () => call(`/api/projects/${pid}/flow`, { action: "suggest", lineIds: [l.id] }), "New options")}
                             onEdit={() => {
                               setEditing(l.id);
                               setDraft(l.text);
@@ -1289,7 +1427,7 @@ export function SongApp({
                             onSave={() => {
                               setEditing(null);
                               if (draft.trim() && draft.trim() !== l.text.trim())
-                                void lineAction(l.id, () => call(`/api/lines/${l.id}`, { text: draft.trim(), status: "APPROVED_EDITED", action: "edit" }, "PATCH"));
+                                void lineAction(l.id, () => call(`/api/lines/${l.id}`, { text: draft.trim(), status: "APPROVED_EDITED", action: "edit" }, "PATCH"), "Edit");
                             }}
                             onCancel={() => setEditing(null)}
                             beatGrid={beatGrid}
@@ -1303,19 +1441,19 @@ export function SongApp({
                             songTime={songTime}
                             open={openLine === l.id}
                             onToggle={() => setOpenLine(openLine === l.id ? null : l.id)}
-                            onFlowFromHere={beatGrid ? () => setFlowSheet({ sectionId: s.id, fromLineId: l.id, flowId: l.flow?.flowId ?? null }) : undefined}
+                            onFlowFromHere={beatGrid ? () => openFlowSheet({ sectionId: s.id, fromLineId: l.id, flowId: l.flow?.flowId ?? null }) : undefined}
                             onSaveGrid={(flow, write) =>
                               void lineAction(l.id, async () => {
                                 setGridLine(null);
                                 await call(`/api/lines/${l.id}`, { flow, action: "flow" }, "PATCH");
                                 if (write) await call(`/api/projects/${pid}/flow`, { action: "suggest", lineIds: [l.id] });
-                              })
+                              }, "Flow of a line")
                             }
                             voiceLabel={voice && !spoken.has(l.id) ? "1 call" : ""}
                             voiceBusy={guideBusy === l.id}
                             onVoice={() => void hearLine(l)}
                             onRemove={() => {
-                              if (window.confirm("Remove this line?")) void lineAction(l.id, () => call(`/api/lines/${l.id}`, undefined, "DELETE"));
+                              if (window.confirm("Remove this line?")) void lineAction(l.id, () => call(`/api/lines/${l.id}`, undefined, "DELETE"), "Remove line");
                             }}
                           />
                           );
@@ -1349,6 +1487,8 @@ export function SongApp({
         {view === "record" &&
           (tree.audio ? (
             <RecordView
+              part={activePart}
+              onPart={setActivePart}
               tree={tree}
               setTree={setTree}
               engine={engine}

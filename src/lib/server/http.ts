@@ -1,13 +1,15 @@
 import "server-only";
+import { randomUUID } from "node:crypto";
 import { AiUnavailable } from "./ai";
-import { getTree, NotFound } from "./repo";
+import { getTree, NotFound, requestScope } from "./repo";
 
 export async function treeResponse(projectId: string) {
   return Response.json(await getTree(projectId));
 }
 
+/** a route's work: its line changes are one undo step (unless the request names its step) */
 export function handle(fn: () => Promise<Response>): Promise<Response> {
-  return fn().catch((e: unknown) => {
+  return requestScope.run({ key: randomUUID(), steps: new Map() }, () => fn()).catch((e: unknown) => {
     const message = e instanceof Error ? e.message : "Unexpected error";
     const status = e instanceof NotFound ? 404 : e instanceof AiUnavailable ? 503 : 500;
     if (status === 500) console.error(e);

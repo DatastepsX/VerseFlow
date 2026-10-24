@@ -10,12 +10,14 @@ import { dropSounds, splitSounds } from "./fillers";
 import { emptyParts, vocalLines } from "./vocals";
 import { quantizeTaps } from "./grid";
 import type { Syllable } from "./syllables";
+import { undoHeaders } from "@/lib/undo-group";
 
 /** lines suggested per AI call (couplets stay together); the calls run in parallel */
 export const FLOW_CHUNK = 8;
 
 async function post<T>(url: string, body: unknown): Promise<T> {
-  const res = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  // part of the action's undo step (see undoStep)
+  const res = await fetch(url, { method: "POST", headers: { "content-type": "application/json", ...undoHeaders() }, body: JSON.stringify(body) });
   const data = (await res.json().catch(() => ({}))) as T & { error?: string };
   if (!res.ok) throw new Error(data.error ?? `Request failed (${res.status})`);
   return data;

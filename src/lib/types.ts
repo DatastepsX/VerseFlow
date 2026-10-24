@@ -165,6 +165,8 @@ export interface ProjectTree {
   takes: Take[];
   /** the song's flows (patterns parts follow) */
   flows: SongFlow[];
+  /** undo / redo: how many steps each way, and what the next one is */
+  history?: { undo: number; redo: number; undoLabel: string | null; redoLabel: string | null };
 }
 
 /** a recorded vocal take of a section on one layer (Lead, Double, Ad-libs…) */
@@ -191,6 +193,8 @@ export interface LineEvent {
   after: Partial<Line> | null;
   undone: boolean;
   created_at: string;
+  /** the undo step (user action) it belongs to */
+  step_id?: number | null;
 }
 
 export interface ProjectVersion {
