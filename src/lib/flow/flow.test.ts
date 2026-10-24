@@ -357,7 +357,10 @@ test("Next line: lines split where it was tapped, not at the bar lines", () => {
   assert.equal(a.offsets[9], 2.25, "line 1 runs past its bar");
   // line 2 is timed from the bar line it starts in (12 s)
   assert.deepEqual(b.offsets, [0.75, 1, 1.25, 1.5]);
-  assert.equal(barsPerLine({ lines: [a, b], scheme: "AABB", bar, source: "tap" }), 2);
+  // line 1 runs into bar 2 but ends before line 2 starts there: still a line per bar
+  assert.equal(barsPerLine({ lines: [a, b], scheme: "AABB", bar, source: "tap" }), 1);
+  // lines that would overlap get two bars each
+  assert.equal(barsPerLine({ lines: [a, { ...b, offsets: [0.1, 0.3, 0.5, 0.7] }], scheme: "AABB", bar, source: "tap" }), 2);
   // by bars instead, line 1 would have been cut at 12 s
   assert.deepEqual(
     linesFromOnsets(onsets, 10, bar, 2, "it").map((l) => l.syllables),

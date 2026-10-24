@@ -179,10 +179,23 @@ function sungLine(on: { t: number; strength?: number | null }[], start: number, 
   };
 }
 
-/** how many bars one pattern line takes (most lines: one) */
+/**
+ * How many bars one pattern line takes (most lines: one). A line may start
+ * late in its bar or run on into the next one — as tapped — as long as it
+ * ends before the next line starts; only when lines would overlap does each
+ * get more bars.
+ */
 export function barsPerLine(pattern: FlowPattern): number {
-  const longest = Math.max(0, ...pattern.lines.map((l) => (l.offsets.length ? l.offsets[l.offsets.length - 1] : 0)));
-  return Math.max(1, Math.ceil((longest + 0.05) / pattern.bar - 0.02));
+  const ls = pattern.lines.filter((l) => l.offsets.length);
+  if (!ls.length) return 1;
+  for (let k = 1; k < 4; k++) {
+    const fits = ls.every((l, i) => {
+      const next = ls[(i + 1) % ls.length];
+      return l.offsets[l.offsets.length - 1] + 0.05 < k * pattern.bar + next.offsets[0];
+    });
+    if (fits) return k;
+  }
+  return 4;
 }
 
 /** line i of a part following the pattern: its flow, starting at the given bar line */
