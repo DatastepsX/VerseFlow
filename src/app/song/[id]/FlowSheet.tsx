@@ -40,6 +40,7 @@ export function FlowSheet({
   lang,
   bar,
   barStart,
+  comesIn,
   linesInStretch,
   audio,
   onUse,
@@ -55,6 +56,8 @@ export function FlowSheet({
   bar: number;
   /** the bar line where the stretch starts: the pattern is sung / tapped / heard there */
   barStart: number;
+  /** where the voice comes in (the first line's start on the beat), if known */
+  comesIn?: number | null;
   /** how many lines the stretch will get with a 1-bar pattern line */
   linesInStretch: number;
   audio: SheetAudio;
@@ -244,6 +247,8 @@ export function FlowSheet({
   };
 
   const counting = now < barStart - 0.02;
+  // the voice comes in after the bar line: wait for it (a tap still counts — a pickup)
+  const waiting = !counting && comesIn != null && comesIn - barStart > bar / 8 && comesIn < end && now < comesIn - 0.05;
   const progress = Math.max(0, Math.min(1, (now - barStart) / (end - barStart)));
 
   return (
@@ -364,6 +369,12 @@ export function FlowSheet({
               <>
                 <span className="text-5xl font-extrabold tabular-nums">{Math.max(1, Math.ceil((barStart - now) / (bar / 4)))}</span>
                 <span className="text-sm opacity-80">get ready…</span>
+              </>
+            ) : waiting ? (
+              <>
+                <span className="text-5xl font-extrabold tabular-nums">{Math.max(1, Math.ceil((comesIn! - now) / (bar / 4)))}</span>
+                <span className="text-sm opacity-90">the voice comes in…</span>
+                {taps > 0 && <span className="text-sm tabular-nums opacity-90">{taps} syllables</span>}
               </>
             ) : (
               <>
