@@ -16,6 +16,7 @@ import { LANGUAGES, type Line, type ProjectTree } from "@/lib/types";
 import { followTo } from "@/components/writer/follow";
 import { download, fullText } from "@/components/writer/util";
 import { VoiceSheet, type VoiceInfo } from "./VoiceSheet";
+import { ThemePicker } from "@/components/ThemePicker";
 import { TapFlow } from "./TapFlow";
 import { FlowSheet, type SheetAudio } from "./FlowSheet";
 import { exampleWords } from "@/lib/flow/example";
@@ -969,11 +970,11 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
                 </div>
                 <p className="mt-2 text-xs text-muted">{level < 0.02 ? "Not hearing you yet — sing or rap!" : "Hearing you"}</p>
                 <button
-                  className="mt-8 flex h-28 w-28 items-center justify-center rounded-full bg-[#1f1f24] text-white shadow-xl active:scale-95"
+                  className="mt-8 flex h-28 w-28 items-center justify-center rounded-full bg-fg text-bg shadow-xl active:scale-95"
                   onClick={() => void stopFlow()}
                   aria-label="Stop"
                 >
-                  <span className="h-9 w-9 rounded-md bg-white" />
+                  <span className="h-9 w-9 rounded-md bg-bg" />
                 </button>
                 <p className="mt-3 text-sm font-semibold">Tap to finish</p>
               </>
@@ -1822,6 +1823,10 @@ function MoreView({
             </button>
           ))}
         </div>
+      </div>
+      <div className="space-y-2">
+        <p className="label">Appearance</p>
+        <ThemePicker />
       </div>
       <div className="space-y-2">
         <button

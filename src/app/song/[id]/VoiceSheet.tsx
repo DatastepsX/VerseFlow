@@ -174,8 +174,8 @@ export function VoiceSheet({
               <div className="h-full bg-[#dc2626] transition-all" style={{ width: `${Math.min(100, level * 160)}%` }} />
             </div>
             <p className="mt-1 text-xs text-muted">{secs < MIN_SECONDS ? `Keep going — at least ${MIN_SECONDS} s, a minute is best` : "Good — stop whenever you like"}</p>
-            <button className="mt-4 flex h-20 w-20 items-center justify-center rounded-full bg-[#1f1f24] text-white" onClick={() => void stop()} aria-label="Stop">
-              <span className="h-7 w-7 rounded-md bg-white" />
+            <button className="mt-4 flex h-20 w-20 items-center justify-center rounded-full bg-fg text-bg" onClick={() => void stop()} aria-label="Stop">
+              <span className="h-7 w-7 rounded-md bg-bg" />
             </button>
           </div>
         ) : (

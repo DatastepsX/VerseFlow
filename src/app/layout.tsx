@@ -28,12 +28,15 @@ export const viewport: Viewport = {
   ],
 };
 
+// the theme set in the app (More → Appearance) before the first paint; the status bar colour follows it
+const THEME_SCRIPT = `try{var t=localStorage.getItem("verseflow.theme");if(t==="light"||t==="dark"){document.documentElement.dataset.theme=t;document.addEventListener("DOMContentLoaded",function(){document.querySelectorAll('meta[name="theme-color"]').forEach(function(m){m.content=t==="dark"?"#111113":"#f7f6f3"})})}}catch(e){}`;
+
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    <html
-      lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
-    >
+    <html lang="en" className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`} suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
+      </head>
       <body className="min-h-full flex flex-col">{children}</body>
     </html>
   );

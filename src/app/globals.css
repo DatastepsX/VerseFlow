@@ -1,6 +1,7 @@
 @import "tailwindcss";
 
 :root {
+  color-scheme: light;
   --bg: #f7f6f3;
   --panel: #ffffff;
   --panel-2: #f1efea;
@@ -17,8 +18,10 @@
   --bad-soft: #fde8e8;
 }
 
+/* dark: the device's setting ("Automatic"), unless the app is set to light — or set to dark */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
     --bg: #111113;
     --panel: #18181b;
     --panel-2: #212126;
@@ -34,6 +37,23 @@
     --bad: #f87171;
     --bad-soft: #3b1717;
   }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #111113;
+  --panel: #18181b;
+  --panel-2: #212126;
+  --text: #ededee;
+  --muted: #9b9ba3;
+  --border: #2c2c33;
+  --accent: #9b85ff;
+  --accent-soft: #2a2447;
+  --ok: #4ade80;
+  --ok-soft: #15301f;
+  --warn: #f6c453;
+  --warn-soft: #3a2f12;
+  --bad: #f87171;
+  --bad-soft: #3b1717;
 }
 
 @theme inline {
