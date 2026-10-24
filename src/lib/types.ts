@@ -109,6 +109,8 @@ export interface AudioTrack {
   beats_per_bar: number;
   /** bar starts where the arrangement changes (detected from the beat) */
   changes: { t: number; s: number }[] | null;
+  /** the song without its vocals (stem separation), when made */
+  instrumental_path?: string | null;
 }
 
 export interface Line {

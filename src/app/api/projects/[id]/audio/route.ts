@@ -2,10 +2,14 @@ import { alignStarts } from "@/lib/audio/structure";
 import { audioPlaybackUrl, audioUploadUrl, deleteAudio, getTree, saveAudio, updateAudio, updateSection } from "@/lib/server/repo";
 import type { AudioTrack } from "@/lib/types";
 import { body, handle, treeResponse } from "@/lib/server/http";
+import { separateVocals } from "@/lib/server/transcribe";
+
+// removing the vocals waits for ElevenLabs (up to a minute or two for a song)
+export const maxDuration = 300;
 
 /** Signed URL to stream the project's beat */
 export async function GET(_req: Request, ctx: RouteContext<"/api/projects/[id]/audio">) {
-  return handle(async () => Response.json({ url: await audioPlaybackUrl((await ctx.params).id) }));
+  return handle(async () => Response.json(await audioPlaybackUrl((await ctx.params).id)));
 }
 
 /**
@@ -14,6 +18,7 @@ export async function GET(_req: Request, ctx: RouteContext<"/api/projects/[id]/a
  *  save {path, filename, duration, bpm, beat_offset} → tree (after upload + in-browser analysis)
  *  update {bpm?, beat_offset?, beats_per_bar?, changes?} → tree
  *  alignSections                    → tree: every section start moves to the nearest beat change / bar start
+ *  separate                         → tree: the song without its vocals (1 ElevenLabs call)
  */
 export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]/audio">) {
   return handle(async () => {
@@ -52,6 +57,9 @@ export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]/a
         await updateAudio(id, patch);
         return treeResponse(id);
       }
+      case "separate":
+        await separateVocals(id);
+        return treeResponse(id);
       case "alignSections": {
         const tree = await getTree(id);
         if (!tree.audio?.bpm) return Response.json({ error: "Set the tempo first." }, { status: 400 });

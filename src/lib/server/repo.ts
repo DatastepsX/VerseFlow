@@ -194,7 +194,7 @@ export async function getTree(projectId: string): Promise<ProjectTree> {
     db().from("ai_calls").select("input_tokens, output_tokens").eq("project_id", projectId),
     db()
       .from("audio_tracks")
-      .select("filename, duration, bpm, beat_offset, beats_per_bar, changes")
+      .select("filename, duration, bpm, beat_offset, beats_per_bar, changes, instrumental_path")
       .eq("project_id", projectId)
       .maybeSingle(),
     db().from("takes").select(TAKE_COLS).eq("project_id", projectId).order("created_at"),
@@ -849,13 +849,19 @@ export async function saveAudio(
   },
 ) {
   if (!t.path.startsWith(`${projectId}/`)) throw new Error("Invalid audio path");
-  const old = check(await db().from("audio_tracks").select("path").eq("project_id", projectId).maybeSingle()) as {
+  const old = check(await db().from("audio_tracks").select("path, instrumental_path, vocals_path").eq("project_id", projectId).maybeSingle()) as {
     path: string;
+    instrumental_path: string | null;
+    vocals_path: string | null;
   } | null;
+  // a new song: its old stems go
+  const stems = old && old.path !== t.path ? [old.instrumental_path, old.vocals_path].filter((x): x is string => !!x) : [];
+  if (stems.length) await db().storage.from(BUCKET).remove(stems);
   check(
     await db()
       .from("audio_tracks")
       .upsert({
+        ...(old && old.path !== t.path ? { instrumental_path: null, vocals_path: null } : {}),
         project_id: projectId,
         path: t.path,
         filename: t.filename,
@@ -873,24 +879,30 @@ export async function updateAudio(projectId: string, patch: Partial<Pick<AudioTr
 }
 
 export async function deleteAudio(projectId: string) {
-  const old = check(await db().from("audio_tracks").select("path").eq("project_id", projectId).maybeSingle()) as {
+  const old = check(await db().from("audio_tracks").select("path, instrumental_path, vocals_path").eq("project_id", projectId).maybeSingle()) as {
     path: string;
+    instrumental_path: string | null;
+    vocals_path: string | null;
   } | null;
   if (!old) return;
-  await db().storage.from(BUCKET).remove([old.path]);
+  await db().storage.from(BUCKET).remove([old.path, old.instrumental_path, old.vocals_path].filter((x): x is string => !!x));
   check(await db().from("audio_tracks").delete().eq("project_id", projectId));
   check(await db().from("sections").update({ audio_start: null }).eq("project_id", projectId));
 }
 
-/** Short-lived URL the browser can stream the beat from. */
+/** Short-lived URLs the browser can stream the song from — and the song without its vocals, when made. */
 export async function audioPlaybackUrl(projectId: string) {
-  const row = check(await db().from("audio_tracks").select("path").eq("project_id", projectId).maybeSingle()) as {
+  const row = check(await db().from("audio_tracks").select("path, instrumental_path").eq("project_id", projectId).maybeSingle()) as {
     path: string;
+    instrumental_path: string | null;
   } | null;
-  if (!row) return null;
-  const { data, error } = await db().storage.from(BUCKET).createSignedUrl(row.path, 60 * 60 * 6);
-  if (error || !data) throw new Error(error?.message ?? "Could not create playback URL");
-  return data.signedUrl;
+  if (!row) return { url: null, instrumentalUrl: null };
+  const sign = async (path: string) => {
+    const { data, error } = await db().storage.from(BUCKET).createSignedUrl(path, 60 * 60 * 6);
+    if (error || !data) throw new Error(error?.message ?? "Could not create playback URL");
+    return data.signedUrl;
+  };
+  return { url: await sign(row.path), instrumentalUrl: row.instrumental_path ? await sign(row.instrumental_path) : null };
 }
 
 // ---------- lyrics from the beat ----------

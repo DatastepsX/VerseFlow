@@ -18,6 +18,7 @@ import { download, fullText } from "@/components/writer/util";
 import { VoiceSheet, type VoiceInfo } from "./VoiceSheet";
 import { ThemePicker } from "@/components/ThemePicker";
 import { RecordView } from "./Record";
+import { usePref } from "./recorder";
 import { undoHeaders, undoStep } from "@/lib/undo-group";
 import { TapFlow } from "./TapFlow";
 import { FlowSheet, type SheetAudio } from "./FlowSheet";
@@ -132,16 +133,30 @@ export function SongApp({
     return () => e.close();
   }, []);
   const filename = tree.audio?.filename;
+  // the song, and the song without its vocals (when removed): what plays is the music alone unless you want the vocals
+  const instrumental = tree.audio?.instrumental_path ?? null;
+  const [withVocals, setWithVocals] = usePref(`vf.vocals.${pid}`, false);
+  const songBufs = useRef<{ full: AudioBuffer | null; music: AudioBuffer | null }>({ full: null, music: null });
+  const [bufsLoaded, setBufsLoaded] = useState(0);
+  useEffect(() => {
+    const { full, music } = songBufs.current;
+    beat.current = !withVocals && music ? music : full;
+  }, [withVocals, bufsLoaded]);
   useEffect(() => {
     if (!filename) return;
     let cancelled = false;
     (async () => {
       try {
-        const { url } = (await fetch(`/api/projects/${pid}/audio`).then((r) => r.json())) as { url: string | null };
+        const { url, instrumentalUrl } = (await fetch(`/api/projects/${pid}/audio`).then((r) => r.json())) as { url: string | null; instrumentalUrl: string | null };
         if (!url || cancelled) return;
-        const buf = await engine.current!.decode(await fetch(url).then((r) => r.arrayBuffer()));
+        const [buf, music] = await Promise.all([
+          engine.current!.decode(await fetch(url).then((r) => r.arrayBuffer())),
+          instrumentalUrl ? fetch(instrumentalUrl).then((r) => r.arrayBuffer()).then((d) => engine.current!.decode(d)) : null,
+        ]);
         if (!cancelled) {
-          beat.current = buf;
+          songBufs.current = { full: buf, music };
+          beat.current = music && !withVocals ? music : buf;
+          setBufsLoaded((n) => n + 1);
           setBeatReady(true);
         }
       } catch {
@@ -151,7 +166,21 @@ export function SongApp({
     return () => {
       cancelled = true;
     };
-  }, [filename, pid]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the vocals choice switches buffers above, no reload
+  }, [filename, pid, instrumental]);
+  /** the song without its vocals: 1 ElevenLabs call */
+  const [separating, setSeparating] = useState(false);
+  const separate = async () => {
+    if (!window.confirm("Remove the vocals from the song? The song stays as uploaded; the music without vocals is added. · 1 call (ElevenLabs)")) return;
+    stopPlay();
+    setSeparating(true);
+    try {
+      await call(`/api/projects/${pid}/audio`, { action: "separate" });
+      setWithVocals(false);
+    } finally {
+      setSeparating(false);
+    }
+  };
 
   const loadFlow = async () => {
     const todo = flowTakes.filter((t) => !flowBufs.current.has(t.id));
@@ -1521,6 +1550,7 @@ export function SongApp({
             onVoice={() => setVoiceSheet(true)}
             onRename={(title) => void call(`/api/projects/${pid}`, { title }, "PATCH")}
             onLanguage={(language) => void call(`/api/projects/${pid}`, { language }, "PATCH")}
+            vocals={{ split: !!instrumental, on: withVocals, set: setWithVocals, separate: () => void separate(), busy: separating }}
             onDelete={async () => {
               if (!window.confirm(`Delete “${tree.project.title}” for good?`)) return;
               await fetch(`/api/projects/${pid}`, { method: "DELETE" });
@@ -2093,7 +2123,9 @@ function MoreView({
   onRename,
   onLanguage,
   onDelete,
+  vocals,
 }: {
+  vocals: { split: boolean; on: boolean; set: (on: boolean) => void; separate: () => void; busy: boolean };
   tree: ProjectTree;
   voice: VoiceInfo | null;
   onVoice: () => void;
@@ -2124,6 +2156,42 @@ function MoreView({
           ))}
         </div>
       </div>
+      {tree.audio && (
+        <div className="space-y-2">
+          <p className="label">The song&apos;s vocals</p>
+          {vocals.split ? (
+            <div className="flex rounded-full bg-panel-2 p-1" role="radiogroup" aria-label="Play the song">
+              {(
+                [
+                  [false, "Music only"],
+                  [true, "With the vocals"],
+                ] as const
+              ).map(([on, label]) => (
+                <button
+                  key={label}
+                  role="radio"
+                  aria-checked={vocals.on === on}
+                  className={`flex-1 rounded-full py-2 text-sm font-semibold transition-colors ${vocals.on === on ? "bg-panel text-fg shadow-sm" : "text-muted"}`}
+                  onClick={() => vocals.set(on)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <button className={row} disabled={vocals.busy} onClick={vocals.separate}>
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-panel-2 text-accent">
+                {vocals.busy ? <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-accent border-r-transparent" /> : <Mic className="h-[18px] w-[18px]" />}
+              </span>
+              <span className="flex-1">
+                {vocals.busy ? "Removing the vocals… (about a minute)" : "Remove the vocals"}
+                <span className="block text-xs text-muted">The music alone, for your own flow, lyrics and takes · 1 call</span>
+              </span>
+            </button>
+          )}
+          {vocals.split && <p className="px-1 text-xs text-muted">Playing, recording and flows use what you choose here. The vocals are still read for lyrics and flow.</p>}
+        </div>
+      )}
       <div className="space-y-2">
         <p className="label">Appearance</p>
         <ThemePicker />

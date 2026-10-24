@@ -118,6 +118,14 @@ generated reverb, echoes on the song's tempo, stereo width; loudness-matched pre
 down re-pitch the take in the browser (YIN pitch + TD-PSOLA, `tune.ts`) to the key found in the beat (`key.ts`,
 changeable). The recording itself never changes. No API calls.
 
+**Remove the vocals** (More → "The song's vocals"; `separateVocals` in `src/lib/server/transcribe.ts`): one
+ElevenLabs stem-separation call (`two_stems_v1`) splits the uploaded song into its vocals and the music without them;
+both are stored next to the song (`audio_tracks.instrumental_path` / `vocals_path`), which stays as uploaded. Then
+"Music only" / "With the vocals" chooses what plays, records and flows use (saved per song on the device).
+
+**Undo / redo** (top bar, ⌘Z): one step per action (`undo_steps`; a multi-request action sends one `x-undo-step`).
+A rebuilt song is undone by restoring the version saved before it.
+
 **Appearance** (More): Automatic / Light / Dark, saved on the device (`ThemePicker.tsx`, `data-theme` on `<html>`).
 
 The full editor (`/p/[id]`) is still there under **More → Advanced**.

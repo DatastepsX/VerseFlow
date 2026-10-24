@@ -5,6 +5,7 @@ import { alignLines } from "@/lib/audio/timeline";
 import type { ProjectTree } from "@/lib/types";
 import { check, db } from "./db";
 import { AiUnavailable } from "./ai";
+import { unzip } from "./unzip";
 
 const MODEL = "scribe_v2";
 
@@ -135,4 +136,59 @@ export async function transcribeTake(projectId: string, takeId: string, language
     .from("ai_calls")
     .insert({ project_id: projectId, kind: "transcribe_flow", model: MODEL, audio_seconds: body.audio_duration_secs ?? 0 });
   return cleanWords(body.words ?? []);
+}
+
+/**
+ * The song split in two (1 ElevenLabs stem-separation call): its vocals and
+ * the music without them. Both are stored next to the song, which stays as
+ * uploaded; playing, recording and flows can then use the music alone.
+ */
+export async function separateVocals(projectId: string) {
+  const key = process.env.ELEVENLABS_API_KEY;
+  if (!key) throw new AiUnavailable("Vocal removal is not configured yet (ELEVENLABS_API_KEY missing).");
+  const track = check(await db().from("audio_tracks").select("path, filename, duration").eq("project_id", projectId).maybeSingle()) as {
+    path: string;
+    filename: string;
+    duration: number | null;
+  } | null;
+  if (!track) throw new Error("Upload a song first.");
+  const { data: file, error } = await db().storage.from("beats").download(track.path);
+  if (error || !file) throw new Error(error?.message ?? "Could not read the song");
+  const form = new FormData();
+  form.append("file", file, track.filename || "song.mp3");
+  form.append("stem_variation_id", "two_stems_v1");
+  const res = await fetch(`${process.env.ELEVENLABS_BASE_URL || "https://api.elevenlabs.io/v1"}/music/stem-separation?output_format=mp3_44100_128`, {
+    method: "POST",
+    headers: { "xi-api-key": key },
+    body: form,
+  });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { detail?: unknown };
+    const detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail ?? res.statusText);
+    throw new Error(`Vocal removal failed (${res.status}): ${detail.slice(0, 300)}`);
+  }
+  const stems = unzip(Buffer.from(await res.arrayBuffer())).filter((f) => /\.(mp3|wav|m4a|ogg|opus|flac)$/i.test(f.name));
+  const vocals = stems.find((f) => /vocal/i.test(f.name) && !/no[_\s-]?vocal|instrumental|accompan/i.test(f.name));
+  const music = stems.filter((f) => f !== vocals);
+  if (!vocals || !music.length) throw new Error(`Unexpected stems: ${stems.map((f) => f.name).join(", ") || "none"}`);
+  // one instrumental: the non-vocal stem (two stems), or the first of several
+  const instrumental = music.find((f) => /instrumental|accompan|no[_\s-]?vocal|music/i.test(f.name)) ?? music[0];
+  const stamp = Date.now();
+  const ext = (f: { name: string }) => f.name.split(".").pop()!.toLowerCase();
+  const put = async (name: string, f: { name: string; data: Buffer }) => {
+    const path = `${projectId}/${name}-${stamp}.${ext(f)}`;
+    const up = await db().storage.from("beats").upload(path, f.data, { contentType: ext(f) === "mp3" ? "audio/mpeg" : `audio/${ext(f)}` });
+    if (up.error) throw new Error(up.error.message);
+    return path;
+  };
+  const instrumental_path = await put("instrumental", instrumental);
+  const vocals_path = await put("vocals", vocals);
+  const old = check(await db().from("audio_tracks").select("instrumental_path, vocals_path").eq("project_id", projectId).single()) as {
+    instrumental_path: string | null;
+    vocals_path: string | null;
+  };
+  check(await db().from("audio_tracks").update({ instrumental_path, vocals_path }).eq("project_id", projectId));
+  const stale = [old.instrumental_path, old.vocals_path].filter((x): x is string => !!x);
+  if (stale.length) await db().storage.from("beats").remove(stale);
+  await db().from("ai_calls").insert({ project_id: projectId, kind: "stems", model: "two_stems_v1", audio_seconds: track.duration ?? 0 });
 }
