@@ -115,32 +115,68 @@ export function linesFromOnsets(
   return Array.from({ length: bars }, (_, b) => {
     const start = from + b * bar;
     const inBar = onsets.filter((o) => o.t >= start - beat / 4 && o.t < start + bar - beat / 4).sort((x, y) => x.t - y.t);
-    const offsets = inBar.map((o) => round(Math.max(0, o.t - start)));
-    const top = Math.max(0, ...inBar.map((o) => o.strength ?? 0));
-    const loudness = (i: number) => inBar[i]?.strength ?? 0;
-    const onBeat = offsets.map((o) => Math.abs(o / beat - Math.round(o / beat)) < 0.15);
-    // stressed: on a beat, or sung clearly louder than the syllables around it (a few per line, as spoken)
-    const marked = inBar.map((o, i) => {
-      const s = o.strength ?? 0;
-      const peak = top > 0 && s / top >= 0.8 && s > loudness(i - 1) && s >= loudness(i + 1);
-      return onBeat[i] || peak;
-    });
-    // two stresses in a row only when both fall on beats
-    for (let i = 1; i < marked.length; i++) if (marked[i] && marked[i - 1] && !onBeat[i]) marked[i] = false;
-    const stress = marked.map((m, i) => (m ? i + 1 : 0)).filter(Boolean);
-    const long = offsets.map((t, i) => ((offsets[i + 1] ?? bar) - t >= beat * 0.95 ? i + 1 : 0)).filter(Boolean);
-    const n = inBar.length;
-    return {
-      text: n ? exampleWords(n, stress, lang, seed + b) : "",
-      written: false,
-      sung: true,
-      syllables: n,
-      stress,
-      long,
-      pauses: [],
-      offsets,
-    };
+    return sungLine(inBar, start, bar, lang, seed + b);
   });
+}
+
+/**
+ * Sung or tapped lines split where "Next line" was tapped (`firsts`: the
+ * index of the first onset of each new line, in time order) instead of at
+ * the bar lines: a line can be shorter or longer than a bar. Each line is
+ * timed from the bar line it starts in (a little early still counts as on it).
+ */
+export function linesFromBreaks(
+  onsets: { t: number; strength?: number | null }[],
+  firsts: number[],
+  from: number,
+  bar: number,
+  lines: number,
+  lang: string,
+  seed = 0,
+): PatternLine[] {
+  const sorted = [...onsets].sort((x, y) => x.t - y.t);
+  const cuts = [...new Set([0, ...firsts.filter((k) => k > 0 && k < sorted.length)])].sort((a, b) => a - b);
+  const groups = cuts.map((c, k) => sorted.slice(c, cuts[k + 1] ?? sorted.length));
+  return Array.from({ length: lines }, (_, k) => {
+    const g = groups[k] ?? [];
+    if (!g.length) return sungLine([], from + k * bar, bar, lang, seed + k);
+    const ref = from + bar * Math.max(0, Math.floor((g[0].t - from) / bar + 0.125));
+    const next = groups[k + 1]?.[0]?.t;
+    const last = g[g.length - 1].t - ref;
+    // how long the last syllable can last: to the next line, or to the end of the bar it ends in
+    const until = next !== undefined ? next - ref : Math.max(1, Math.ceil((last + 0.05) / bar)) * bar;
+    return sungLine(g, ref, bar, lang, seed + k, until);
+  });
+}
+
+/** one sung / tapped line: its onsets timed from the bar line `start` */
+function sungLine(on: { t: number; strength?: number | null }[], start: number, bar: number, lang: string, seed: number, until = bar): PatternLine {
+  const beat = bar / 4;
+  const offsets = on.map((o) => round(Math.max(0, o.t - start)));
+  const top = Math.max(0, ...on.map((o) => o.strength ?? 0));
+  const loudness = (i: number) => on[i]?.strength ?? 0;
+  const onBeat = offsets.map((o) => Math.abs(o / beat - Math.round(o / beat)) < 0.15);
+  // stressed: on a beat, or sung clearly louder than the syllables around it (a few per line, as spoken)
+  const marked = on.map((o, i) => {
+    const s = o.strength ?? 0;
+    const peak = top > 0 && s / top >= 0.8 && s > loudness(i - 1) && s >= loudness(i + 1);
+    return onBeat[i] || peak;
+  });
+  // two stresses in a row only when both fall on beats
+  for (let i = 1; i < marked.length; i++) if (marked[i] && marked[i - 1] && !onBeat[i]) marked[i] = false;
+  const stress = marked.map((m, i) => (m ? i + 1 : 0)).filter(Boolean);
+  const long = offsets.map((t, i) => ((offsets[i + 1] ?? until) - t >= beat * 0.95 ? i + 1 : 0)).filter(Boolean);
+  const n = on.length;
+  return {
+    text: n ? exampleWords(n, stress, lang, seed) : "",
+    written: false,
+    sung: true,
+    syllables: n,
+    stress,
+    long,
+    pauses: [],
+    offsets,
+  };
 }
 
 /** how many bars one pattern line takes (most lines: one) */

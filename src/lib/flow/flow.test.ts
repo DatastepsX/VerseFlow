@@ -6,7 +6,7 @@ import { dropSounds, isSound } from "./fillers";
 import { cycle, flowFromGrid, gridFor, quantizeTaps } from "./grid";
 import { exampleWords, isExampleText } from "./example";
 import { coupletsOf } from "./couplets";
-import { barsPerLine, chipsOf, lineFlowFrom, lineFromText, linesFromOnsets, nextFlowName, ownWords, relayout } from "./pattern";
+import { barsPerLine, chipsOf, lineFlowFrom, lineFromText, linesFromBreaks, linesFromOnsets, nextFlowName, ownWords, relayout } from "./pattern";
 import { prosody } from "@/lib/rhyme/prosody";
 import { emptyParts, vocalLines } from "./vocals";
 
@@ -344,4 +344,28 @@ test("sung bars: a few stresses — on the beats and clear peaks, no run of stre
   const onsets = strengths.map((strength, i) => ({ t: 10 + i * 0.25, strength }));
   const [l] = linesFromOnsets(onsets, 10, bar, 1, "it");
   assert.deepEqual(l.stress, [1, 3, 5, 7]);
+});
+
+test("Next line: lines split where it was tapped, not at the bar lines", () => {
+  const bar = 2; // 120 bpm, beat 0.5
+  // line 1: 10 syllables on 8ths from 10 s — longer than a bar; "Next line"; line 2: 4 syllables from 12.75 s
+  const l1 = Array.from({ length: 10 }, (_, i) => 10 + i * 0.25);
+  const l2 = [12.75, 13, 13.25, 13.5];
+  const onsets = [...l1, ...l2].map((t) => ({ t }));
+  const [a, b] = linesFromBreaks(onsets, [10], 10, bar, 2, "it");
+  assert.deepEqual([a.syllables, b.syllables], [10, 4]);
+  assert.equal(a.offsets[9], 2.25, "line 1 runs past its bar");
+  // line 2 is timed from the bar line it starts in (12 s)
+  assert.deepEqual(b.offsets, [0.75, 1, 1.25, 1.5]);
+  assert.equal(barsPerLine({ lines: [a, b], scheme: "AABB", bar, source: "tap" }), 2);
+  // by bars instead, line 1 would have been cut at 12 s
+  assert.deepEqual(
+    linesFromOnsets(onsets, 10, bar, 2, "it").map((l) => l.syllables),
+    [8, 6],
+  );
+  // fewer lines tapped than the pattern has: the missing one stays empty
+  assert.deepEqual(
+    linesFromBreaks(onsets, [], 10, bar, 2, "it").map((l) => l.syllables),
+    [14, 0],
+  );
 });

@@ -1,14 +1,16 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { chipsOf, lineFromText, linesFromOnsets, ownWords, relayout } from "@/lib/flow/pattern";
+import { barsPerLine, chipsOf, lineFromText, linesFromBreaks, linesFromOnsets, ownWords, relayout } from "@/lib/flow/pattern";
 import { quantizeTaps } from "@/lib/flow/grid";
 import type { FlowPattern, PatternLine, SongFlow } from "@/lib/types";
-import { Check, Hand, Mic, Pencil, Play, Sparkles } from "@/components/icons";
+import { Check, Hand, LineBreak, Mic, Pencil, Play, Sparkles } from "@/components/icons";
 
 type Mode = "write" | "sing" | "tap" | "both";
 
 export interface SheetAudio {
+  /** the beat is loaded (until then nothing can be sung or tapped over it) */
+  ready: boolean;
   /** plays the beat from `from` to `until` with clicks (no recorded voices) */
   play: (from: number, until: number, clicks: { at: number; accent: boolean }[]) => void;
   stop: () => void;
@@ -78,9 +80,14 @@ export function FlowSheet({
   const [busy, setBusy] = useState(false);
   const [hint, setHint] = useState<string | null>(null);
   const tapsRef = useRef<number[]>([]);
+  /** "Next line": when it was tapped, and how many syllables were tapped by then */
+  const breaksRef = useRef<{ t: number; taps: number }[]>([]);
+  const [breaks, setBreaks] = useState(0);
   const seed = useRef(0);
   const p = lines.length;
   const end = barStart + p * bar;
+  /** with "Next line" a line can be longer than a bar: it may take up to two each */
+  const limit = barStart + 2 * p * bar;
 
   const pickMode = (m: Mode) => {
     setMode(m);
@@ -108,15 +115,28 @@ export function FlowSheet({
     const id = setInterval(() => {
       const t = audioRef.current.songTime();
       setNow(t);
-      if (t > end + 0.15) void finish.current?.();
+      const br = breaksRef.current;
+      // no "Next line": a line per bar, over after the last bar
+      if (!br.length) {
+        if (t > end + 0.15) void finish.current?.();
+        return;
+      }
+      // the last line: over when it rests a bar (tapping) or after two (singing) — or at the latest
+      const lastTap = tapsRef.current[tapsRef.current.length - 1] ?? 0;
+      const lastStart = br[br.length - 1].t;
+      const rest = mode === "sing" ? t > lastStart + 2 * bar : lastTap > lastStart && t > lastTap + bar;
+      if (t > limit || (br.length >= p - 1 && t > end && rest)) void finish.current?.();
     }, 40);
     return () => clearInterval(id);
-  }, [phase, end]);
+  }, [phase, end, limit, p, bar, mode]);
 
   const start = async () => {
     setHint(null);
     tapsRef.current = [];
     setTaps(0);
+    breaksRef.current = [];
+    setBreaks(0);
+    finishing.current = false;
     try {
       if (mode !== "tap") await audio.armMic();
     } catch (err) {
@@ -125,13 +145,17 @@ export function FlowSheet({
     }
     const from = barStart - bar;
     const clicks = [0, 1, 2, 3].map((k) => ({ at: from + (k * bar) / 4, accent: k === 0 })).filter((c) => c.at >= 0);
-    audio.play(Math.max(0, from), end + 0.3, clicks);
+    audio.play(Math.max(0, from), limit + 0.3, clicks);
     if (mode !== "tap") audio.startRec();
     setNow(from);
     setPhase("running");
   };
+  const finishing = useRef(false);
   useEffect(() => {
     finish.current = async () => {
+      // once (the clock and "Done" can both end it)
+      if (finishing.current) return;
+      finishing.current = true;
       setPhase("idle");
       const voice = mode !== "tap" ? await audio.stopRec(Math.max(0, barStart - 0.4)) : [];
       audio.stop();
@@ -154,30 +178,50 @@ export function FlowSheet({
         );
         onsets = q.map((x, i) => ({ t: x.t, strength: refined[i]?.strength ?? null }));
       }
-      const got = linesFromOnsets(onsets, barStart, bar, p, lang, seed.current++);
+      // "Next line" splits the lines (else the bar lines do): where the next line's first syllable is
+      const br = breaksRef.current;
+      const firsts = br.map((b) => (mode === "sing" ? onsets.filter((o) => o.t < b.t).length : b.taps));
+      const got = br.length ? linesFromBreaks(onsets, firsts, barStart, bar, p, lang, seed.current++) : linesFromOnsets(onsets, barStart, bar, p, lang, seed.current++);
       if (got.every((l) => !l.syllables)) {
         setHint(mode === "sing" ? "Nothing was heard — sing a bit louder, or closer to the phone." : "No taps — tap once per syllable while the bars play.");
         return;
       }
+      const missing = got.filter((l) => !l.syllables).length;
+      if (br.length && missing) setHint(`${p - missing} of ${p} lines — tap “Next line” after each line (or type the missing one).`);
       edit(got);
     };
   });
 
   const tap = () => {
     const t = audio.songTime();
-    if (t < barStart - bar / 16 || t > end) return;
+    if (t < barStart - bar / 16 || t > limit) return;
     tapsRef.current.push(t);
     setTaps(tapsRef.current.length);
     navigator.vibrate?.(8);
   };
+  /** the line is done: the next syllable starts the next line (after the last line: done) */
+  const nextLine = () => {
+    const t = audio.songTime();
+    if (t < barStart) return;
+    const br = breaksRef.current;
+    // a second tap right away, or before any syllable of the new line, changes nothing
+    const prev = br[br.length - 1];
+    if (prev && (t - prev.t < 0.25 || (mode !== "sing" && prev.taps === tapsRef.current.length))) return;
+    br.push({ t, taps: tapsRef.current.length });
+    setBreaks(br.length);
+    navigator.vibrate?.([6, 40, 6]);
+    if (br.length >= p) void finish.current?.();
+  };
 
   const listen = () => {
     const from = barStart - bar;
+    // a line per bar — or per two, when a line is longer than a bar
+    const per = barsPerLine({ lines, scheme, bar, source: mode }) * bar;
     const clicks = [
       ...[0, 1, 2, 3].map((k) => ({ at: from + (k * bar) / 4, accent: false })),
-      ...lines.flatMap((l, i) => l.offsets.map((o, k) => ({ at: barStart + i * bar + o, accent: l.stress.includes(k + 1) }))),
+      ...lines.flatMap((l, i) => l.offsets.map((o, k) => ({ at: barStart + i * per + o, accent: l.stress.includes(k + 1) }))),
     ].filter((c) => c.at >= 0);
-    audio.play(Math.max(0, from), end + 0.4, clicks);
+    audio.play(Math.max(0, from), barStart + p * per + 0.4, clicks);
   };
 
   const ready = lines.every((l) => l.syllables > 0);
@@ -288,19 +332,23 @@ export function FlowSheet({
 
         {/* sing / tap: the first bars of the part */}
         {mode !== "write" && phase === "idle" && (
-          <button className="btn-primary w-full justify-center rounded-2xl py-3 text-[15px]" onClick={() => void start()}>
+          <button className="btn-primary w-full justify-center rounded-2xl py-3 text-[15px]" disabled={!audio.ready} onClick={() => void start()}>
             {mode === "tap" ? <Hand className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
-            {mode === "sing" ? `Sing ${p} bars` : mode === "tap" ? `Tap ${p} bars` : `Sing and tap ${p} bars`}
+            {!audio.ready ? "Loading the beat…" : mode === "sing" ? `Sing ${p} bars` : mode === "tap" ? `Tap ${p} bars` : `Sing and tap ${p} bars`}
             <span className="text-xs font-normal opacity-80">· 1 bar to count in</span>
           </button>
         )}
         {phase === "running" && (
+          <div className="space-y-1.5">
+          {/* two pads: "Next line" on the left, the syllables (or the singing) on the right */}
+          <div className="flex gap-2.5">
           <button
-            className={`flex h-44 w-full touch-manipulation select-none flex-col items-center justify-center gap-2 rounded-3xl text-white ${counting ? "bg-fg/80" : mode === "sing" ? "bg-[#dc2626]" : "bg-accent active:bg-accent/85"}`}
+            className={`flex h-44 flex-[2] touch-manipulation select-none flex-col items-center justify-center gap-2 rounded-3xl text-white ${counting ? "bg-fg/80" : mode === "sing" ? "bg-[#dc2626]" : "bg-accent active:bg-accent/85"}`}
             onPointerDown={(e) => {
               e.preventDefault();
               if (mode !== "sing") tap();
             }}
+            aria-label={mode === "sing" ? "Singing" : "Syllable"}
           >
             {counting ? (
               <>
@@ -311,7 +359,7 @@ export function FlowSheet({
               <>
                 {mode === "sing" ? <Mic className="h-10 w-10" /> : <Hand className="h-10 w-10" />}
                 <span className="text-lg font-bold">
-                  {mode === "sing" ? "Sing!" : "Tap!"} · line {Math.min(p, Math.floor((now - barStart) / bar) + 1)}
+                  {mode === "sing" ? "Sing!" : "Tap!"} · {breaks ? `line ${Math.min(p, breaks + 1)} of ${p}` : `bar ${Math.min(p, Math.floor((now - barStart) / bar) + 1)}`}
                 </span>
                 {mode !== "sing" && <span className="text-sm tabular-nums opacity-90">{taps} syllables</span>}
               </>
@@ -320,6 +368,21 @@ export function FlowSheet({
               <span className="block h-full bg-white" style={{ width: `${progress * 100}%` }} />
             </span>
           </button>
+          <button
+            className="order-first flex h-44 flex-1 touch-manipulation select-none flex-col items-center justify-center gap-2 rounded-3xl bg-fg text-bg active:opacity-85 disabled:opacity-40"
+            disabled={counting}
+            onPointerDown={(e) => {
+              e.preventDefault();
+              nextLine();
+            }}
+            aria-label={breaks >= p - 1 ? "Done" : "Next line"}
+          >
+            {breaks >= p - 1 ? <Check className="h-9 w-9" /> : <LineBreak className="h-9 w-9" />}
+            <span className="text-base font-bold leading-tight">{breaks >= p - 1 ? "Done" : <>Next<br />line</>}</span>
+          </button>
+          </div>
+          <p className="text-center text-[11px] text-muted">“Next line” when a line is done — or leave it: each bar is a line.</p>
+          </div>
         )}
 
         {/* the pattern lines: always as text, each syllable a chip */}

@@ -602,6 +602,7 @@ export function SongApp({
     usedIn: tree.sections.filter((s) => s.lines.some((l) => l.flow?.flowId === f.id)).map((s) => s.name),
   }));
   const sheetAudio: SheetAudio = {
+    ready: beatReady,
     play: (from, until, clicks) => void play(from, until, { guide: [], flow: false, clicks }),
     stop: () => stopPlay(),
     songTime,
