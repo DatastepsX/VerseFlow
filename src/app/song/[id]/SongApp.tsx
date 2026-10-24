@@ -739,9 +739,7 @@ export function SongApp({
     const change = current ? lyric.findIndex((l, k) => k > from && l.flow?.flowId !== current) : -1;
     const start = barLine(fromLineId ? (lyric[from]?.audio_at ?? r.start) : r.start);
     const end = change > 0 ? barLine(lyric[change].audio_at ?? r.end) : r.end;
-    // where the voice comes in: often after the bar line (a pickup, or a rest first)
-    const voiceAt = lyric[from]?.audio_at ?? null;
-    return { start, end, lines: Math.max(1, Math.floor((end - start) / bar + 0.3)), lineNo: from + 1, voiceAt };
+    return { start, end, lines: Math.max(1, Math.floor((end - start) / bar + 0.3)), lineNo: from + 1 };
   };
   const flowsUsed = tree.flows.map((f) => ({
     ...f,
@@ -1674,7 +1672,6 @@ export function SongApp({
               lang={lang}
               bar={bar}
               barStart={st.start}
-              comesIn={st.voiceAt}
               linesInStretch={st.lines}
               audio={sheetAudio}
               onUse={useFlow}
