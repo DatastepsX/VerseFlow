@@ -1100,6 +1100,18 @@ export async function takeUrls(projectId: string, ids: string[]) {
   return out;
 }
 
+/** the sound (effect preset) of a layer, and / or the song's key for autotune */
+export async function setSound(projectId: string, s: { lane?: string; preset?: string; key?: ProjectSettings["songKey"] }) {
+  const settings = await projectSettings(projectId);
+  const fx = { ...(settings.fx ?? {}) };
+  if (s.lane && s.preset) {
+    const lane = s.lane.trim().slice(0, 30);
+    if (s.preset === "raw") delete fx[lane];
+    else fx[lane] = s.preset;
+  }
+  await updateProject(projectId, { settings: { ...settings, fx, ...(s.key !== undefined ? { songKey: s.key } : {}) } });
+}
+
 export async function setLanes(projectId: string, lanes: string[]) {
   const settings = await projectSettings(projectId);
   const clean = [...new Set(lanes.map((l) => l.trim().slice(0, 30)).filter(Boolean))].slice(0, 12);

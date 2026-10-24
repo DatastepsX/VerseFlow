@@ -15,7 +15,9 @@ export type RemoteCmd =
   | { t: "playTake"; takeId: string }
   | { t: "stop" }
   | { t: "addLane"; name: string }
-  | { t: "countIn"; bars: number };
+  | { t: "countIn"; bars: number }
+  | { t: "sound"; lane: string; preset: string }
+  | { t: "key"; key: "chromatic" | { root: number; minor: boolean } };
 
 export interface RemoteTake {
   id: string;
@@ -51,6 +53,11 @@ export interface RemoteState {
   playingTake?: string | null;
   /** beats left in the count-in */
   beatsLeft?: number | null;
+  /** each layer's sound (effect preset id) and the song's key for autotune */
+  sounds?: Record<string, string>;
+  songKey?: "chromatic" | { root: number; minor: boolean } | null;
+  /** a voice is being tuned (autotune / pitch) */
+  tuning?: boolean;
 }
 
 /** the last take of a layer (highest number) — what "retake" / "discard" act on */

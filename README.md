@@ -109,6 +109,15 @@ records. Settings: count-in, click, lyrics size, microphone (+ interface input),
 speaker is filtered out), timing (estimated, or measured once). The old `/p/[id]/studio` and `/p/[id]/remote` URLs
 redirect there.
 
+**Sound library** (Record → "Sound of the Lead"; `src/lib/fx`): every layer gets a sound from a library of
+modern vocal chains — Clean (Studio vocal, Pop shine, Rap upfront), Space (R&B smooth, Dreamy), Autotune (Trap
+autotune = hard-tuned to the song's key, Melodic rap, Soft tune), Character (Phone / lo-fi, Megaphone, Dark & close,
+Deep voice, High voice) and for layers (Wide double, Ad-lib echo). Tap one: it's saved for the song
+(`settings.fx`) and plays at once on the layer's take. Built with Web Audio (EQ, compressor, saturation, a
+generated reverb, echoes on the song's tempo, stereo width; loudness-matched presets); autotune and voice up /
+down re-pitch the take in the browser (YIN pitch + TD-PSOLA, `tune.ts`) to the key found in the beat (`key.ts`,
+changeable). The recording itself never changes. No API calls.
+
 **Appearance** (More): Automatic / Light / Dark, saved on the device (`ThemePicker.tsx`, `data-theme` on `<html>`).
 
 The full editor (`/p/[id]`) is still there under **More → Advanced**.

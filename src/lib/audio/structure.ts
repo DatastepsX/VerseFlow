@@ -102,7 +102,7 @@ export function fitGrid(samples: Float32Array, sampleRate: number, approxBpm: nu
 const N = 2048;
 const BANDS = 16;
 
-function fft(re: Float64Array, im: Float64Array) {
+export function fft(re: Float64Array, im: Float64Array) {
   const n = re.length;
   for (let i = 1, j = 0; i < n; i++) {
     let bit = n >> 1;

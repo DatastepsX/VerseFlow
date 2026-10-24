@@ -6,7 +6,11 @@ import type { PlayLayer, StudioEngine } from "@/lib/studio/engine";
 import { lastTake, type RemoteCmd, type RemoteState, type RemoteTake } from "@/lib/studio/remote";
 import { takeWindow } from "@/lib/studio/timing";
 import { encodeWav, peaksOf } from "@/lib/studio/wav";
-import type { ProjectTree, Take } from "@/lib/types";
+import type { ProjectSettings, ProjectTree, Take } from "@/lib/types";
+import { buildChain } from "@/lib/fx/chain";
+import { detectKey } from "@/lib/fx/key";
+import { layerPreset, presetById, type FxPreset } from "@/lib/fx/presets";
+import { retune, type MusicKey } from "@/lib/fx/tune";
 
 /**
  * Recording vocals per part (Lead, Double, Ad-libs…), on this device or on
@@ -66,6 +70,15 @@ export interface Recorder {
   choose: (id: string) => void;
   remove: (id: string) => void;
   addLane: (name: string) => void;
+  /** each layer's sound (effect preset id; none: raw) */
+  sounds: Record<string, string>;
+  /** the song's key for autotune: chosen or found in the beat (null: not looked for yet) */
+  songKey: ProjectSettings["songKey"] | null;
+  /** a layer gets this sound — heard at once on its take in this part */
+  trySound: (lane: string, preset: string) => void;
+  setKey: (key: NonNullable<ProjectSettings["songKey"]>) => void;
+  /** a voice is being tuned (autotune / pitch) */
+  tuning: boolean;
   /** turn the microphone on (on this device) */
   arm: () => void;
   /** on this device only */
@@ -247,13 +260,65 @@ export function useLocalRecorder(o: {
       }),
     );
   };
-  /** the takes used in the song that sound in the window (other layers than the one recorded) */
-  const layersFor = async (from: number, to: number, skipLane?: string, only?: Take) => {
+  // ---- each layer's sound: an effect chain, after autotune / pitch where the preset has it ----
+  const sounds = tree.project.settings?.fx ?? {};
+  const bpm = tree.audio?.bpm ?? 60 / o.beatLength;
+  const tunedBufs = useRef(new Map<string, AudioBuffer>());
+  const [tuning, setTuning] = useState(false);
+  /** the song's key for autotune: chosen, or found in the beat the first time (and kept) */
+  const foundKey = useRef<MusicKey | null | undefined>(undefined);
+  const songKey = async (): Promise<MusicKey | null> => {
+    const k = tree.project.settings?.songKey;
+    if (k === "chromatic") return null;
+    if (k) return k;
+    if (foundKey.current !== undefined) return foundKey.current;
+    const b = beat.current;
+    if (!b) return null;
+    const mono = new Float32Array(b.length);
+    for (let c = 0; c < b.numberOfChannels; c++) b.getChannelData(c).forEach((v, i) => (mono[i] += v / b.numberOfChannels));
+    const found = detectKey(mono, b.sampleRate);
+    foundKey.current = found;
+    void api(`/api/projects/${pid}`, { action: "setSound", key: found ?? "chromatic" }).catch(() => {});
+    return found;
+  };
+  /** the take as the preset sings it: tuned / shifted once, then kept */
+  const voiced = async (t: Take, p: FxPreset) => {
+    const raw = buffers.current.get(t.id);
+    const e = engine.current;
+    if (!raw || !e || (!p.tune && !p.shift)) return raw;
+    const key = p.tune ? await songKey() : null;
+    const id = `${t.id}|${p.id}|${key ? `${key.root}${key.minor ? "m" : ""}` : "-"}`;
+    const hit = tunedBufs.current.get(id);
+    if (hit) return hit;
+    setTuning(true);
+    // let "Tuning…" show before the work
+    await new Promise((r) => setTimeout(r, 30));
+    try {
+      const y = retune(raw.getChannelData(0), raw.sampleRate, { key, tune: !!p.tune, speed: p.tune?.speed, shift: p.shift });
+      const buf = e.ctx.createBuffer(1, y.length, raw.sampleRate);
+      buf.copyToChannel(y as Float32Array<ArrayBuffer>, 0);
+      tunedBufs.current.set(id, buf);
+      return buf;
+    } finally {
+      setTuning(false);
+    }
+  };
+  /**
+   * The takes used in the song that sound in the window (other layers than the one recorded), each with
+   * its layer's sound — `trying`: a sound being tried on a layer before the song knows it
+   */
+  const layersFor = async (from: number, to: number, skipLane?: string, only?: Take, trying?: { lane: string; preset: string }) => {
     const takes = only
       ? [only, ...tree.takes.filter((t) => t.chosen && lanes.includes(t.lane) && t.lane !== only.lane && t.start_at < to && t.start_at + t.duration > from)]
       : tree.takes.filter((t) => t.chosen && lanes.includes(t.lane) && t.lane !== skipLane && t.start_at < to && t.start_at + t.duration > from);
     await loadTakes(takes);
-    return takes.map((t) => ({ buffer: buffers.current.get(t.id), at: t.start_at })).filter((l): l is PlayLayer => !!l.buffer);
+    const out: PlayLayer[] = [];
+    for (const t of takes) {
+      const p = trying?.lane === t.lane ? presetById(trying.preset) : layerPreset(sounds, t.lane);
+      const buffer = await voiced(t, p);
+      if (buffer) out.push({ buffer, at: t.start_at, fx: p.id === "raw" ? undefined : (ctx) => buildChain(ctx, p, bpm) });
+    }
+    return out;
   };
 
   const arm = async () => {
@@ -377,14 +442,14 @@ export function useLocalRecorder(o: {
     await record(l, true);
   };
 
-  const play = async (take?: Take) => {
+  const play = async (take?: Take, trying?: { lane: string; preset: string }) => {
     const e = engine.current;
     // playing already: starts again (another take)
     if (!e || !beat.current || !range || (busy && status.kind !== "playing")) return;
     await e.ctx.resume();
     const w = takeWindow(range, bar, Math.max(1, countIn));
     try {
-      const layers = await layersFor(w.from, w.to, undefined, take);
+      const layers = await layersFor(w.from, w.to, undefined, take, trying);
       e.play(Math.max(0, w.from), { beat: beat.current, layers });
       stopAt.current = w.to;
       setStatus({ kind: "playing", take: take?.id ?? null });
@@ -441,6 +506,14 @@ export function useLocalRecorder(o: {
   const [clock] = useState(() => clockOf(engine));
   const choose = (id: string) => void api(`/api/takes/${id}`, undefined, "PATCH").catch(failed);
   const remove = (id: string) => void api(`/api/takes/${id}`, undefined, "DELETE").catch(failed);
+  /** a layer's sound: saved for the song, and heard at once on the layer's take in this part */
+  const trySound = (lane: string, preset: string) => {
+    if (busy && status.kind !== "playing") return;
+    void api(`/api/projects/${pid}`, { action: "setSound", lane, preset }).catch(failed);
+    const take = sectionTakes.find((t) => t.lane === lane && t.chosen) ?? sectionTakes.filter((t) => t.lane === lane).pop();
+    if (take) void play(take, { lane, preset });
+  };
+  const setKey = (key: NonNullable<ProjectSettings["songKey"]>) => void api(`/api/projects/${pid}`, { action: "setSound", key }).catch(failed);
   const addLane = (name: string) => {
     const n = name.trim().slice(0, 30);
     if (!n || lanes.includes(n)) return;
@@ -457,7 +530,7 @@ export function useLocalRecorder(o: {
   const run = useRef<(c: RemoteCmd) => Promise<void>>(async () => {});
   useEffect(() => {
     run.current = async (c: RemoteCmd) => {
-      const label: Partial<Record<RemoteCmd["t"], string>> = { select: "Part", record: "Record", retake: "Again", stop: "Stop", play: "Play", playTake: "Play take", choose: "Use take", delete: "Delete take", addLane: "New layer", countIn: "Count-in" };
+      const label: Partial<Record<RemoteCmd["t"], string>> = { select: "Part", record: "Record", retake: "Again", stop: "Stop", play: "Play", playTake: "Play take", choose: "Use take", delete: "Delete take", addLane: "New layer", countIn: "Count-in", sound: "Sound", key: "Key" };
       setNote(`Phone: ${label[c.t] ?? c.t}`);
       setTimeout(() => setNote(null), 2500);
       switch (c.t) {
@@ -495,6 +568,12 @@ export function useLocalRecorder(o: {
           break;
         case "addLane":
           addLane(c.name);
+          break;
+        case "sound":
+          trySound(c.lane, c.preset);
+          break;
+        case "key":
+          setKey(c.key);
           break;
         case "countIn":
           setCountIn(Math.max(0, Math.min(2, Math.round(c.bars))));
@@ -538,6 +617,9 @@ export function useLocalRecorder(o: {
     error,
     playingTake: status.kind === "playing" ? status.take : null,
     beatsLeft,
+    sounds,
+    songKey: tree.project.settings?.songKey ?? null,
+    tuning,
   };
   const stateJson = JSON.stringify(state);
   const lastSent = useRef("");
@@ -594,6 +676,11 @@ export function useLocalRecorder(o: {
     choose,
     remove,
     addLane,
+    sounds,
+    songKey: tree.project.settings?.songKey ?? null,
+    trySound,
+    setKey,
+    tuning,
     arm: () => void arm(),
     settings: {
       inputs,
@@ -705,6 +792,11 @@ export function useRemoteRecorder(o: { tree: ProjectTree; section: [string | nul
       setLane(name.trim());
       send({ t: "addLane", name });
     },
+    sounds: connected ? (state.sounds ?? {}) : (o.tree.project.settings?.fx ?? {}),
+    songKey: connected ? (state.songKey ?? null) : (o.tree.project.settings?.songKey ?? null),
+    trySound: (lane, preset) => send({ t: "sound", lane, preset }),
+    setKey: (key) => send({ t: "key", key }),
+    tuning: connected && !!state.tuning,
     arm: () => {},
     settings: null,
   };

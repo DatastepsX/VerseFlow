@@ -49,6 +49,10 @@ export interface Artist {
 export interface ProjectSettings {
   /** recording layers (Lead, Double, Ad-libs…) */
   lanes?: string[];
+  /** the sound of each layer: an effect preset id (lib/fx/presets; none: raw) */
+  fx?: Record<string, string>;
+  /** the song's key for autotune (found in the beat, or chosen); "chromatic": every semitone is a note */
+  songKey?: { root: number; minor: boolean } | "chromatic";
   /** the performers; sections list the ids of who performs them */
   artists?: Artist[];
   genre?: string;

@@ -2,7 +2,9 @@
 
 import { useEffect, useState, type ReactNode, type RefObject } from "react";
 import { syllableParts } from "@/lib/rhyme/syllabify";
-import { Check, Headphones, Laptop, Mic, Pause, Phone, Play, Plus, Restart, Sliders, Trash } from "@/components/icons";
+import { Check, ChevronRight, Headphones, Laptop, Mic, Pause, Phone, Play, Plus, Restart, Sliders, Trash, Wand } from "@/components/icons";
+import { FX_CATEGORIES, FX_PRESETS, layerPreset } from "@/lib/fx/presets";
+import { keyName, NOTE_NAMES } from "@/lib/fx/tune";
 import { followTo } from "@/components/writer/follow";
 import { fmtTime } from "@/lib/audio/song-map";
 import type { Timeline } from "@/lib/audio/timeline";
@@ -85,6 +87,8 @@ function RemoteRecord(props: Props & { section: [string | null, (id: string) => 
 function RecordScreen({ r, tree, rangeOf, bar, timeline, onBusy, host }: Props & { r: Recorder; host?: boolean }) {
   const [size, setSize] = usePref<keyof typeof SIZES>("vf.rec.size", "M");
   const [sheet, setSheet] = useState(false);
+  /** the sound library, open for this layer */
+  const [soundFor, setSoundFor] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [newLane, setNewLane] = useState("");
   const section = tree.sections.find((s) => s.id === r.sectionId) ?? null;
@@ -125,6 +129,8 @@ function RecordScreen({ r, tree, rangeOf, bar, timeline, onBusy, host }: Props &
 
   const statusText = r.starting
     ? "Switching the microphone on…"
+    : r.tuning
+      ? "Tuning the voice…"
     : r.status === "countin"
       ? `${r.statusLane} · get ready…`
       : r.status === "recording"
@@ -321,6 +327,21 @@ function RecordScreen({ r, tree, rangeOf, bar, timeline, onBusy, host }: Props &
               </div>
             </div>
           )}
+          {/* the layer's sound: from the library */}
+          <button
+            className="flex w-full items-center gap-3 rounded-2xl bg-panel px-3.5 py-2.5 text-left ring-1 ring-line/60 disabled:opacity-60"
+            disabled={!idle && r.status !== "playing"}
+            onClick={() => setSoundFor(r.lane)}
+          >
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent">
+              <Wand className="h-[18px] w-[18px]" />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-xs text-muted">Sound of the {r.lane}</span>
+              <span className="block truncate text-[15px] font-semibold">{layerPreset(r.sounds, r.lane).name}</span>
+            </span>
+            <ChevronRight className="h-4 w-4 text-muted" />
+          </button>
           {takes.length === 0 ? (
             <p className="px-1 text-sm text-muted">No {r.lane} takes yet — tap the red button to record one.</p>
           ) : (
@@ -398,6 +419,7 @@ function RecordScreen({ r, tree, rangeOf, bar, timeline, onBusy, host }: Props &
       {r.note && <div className="fixed left-1/2 top-20 z-30 -translate-x-1/2 rounded-full bg-fg px-3.5 py-1.5 text-xs font-semibold text-bg shadow-lg">{r.note}</div>}
 
       {sheet && <RecordSettings r={r} size={size} setSize={setSize} onClose={() => setSheet(false)} />}
+      {soundFor && <SoundLibrary r={r} lane={soundFor} hasTake={r.takes.some((t) => t.lane === soundFor)} onClose={() => setSoundFor(null)} />}
     </>
   );
 }
@@ -485,6 +507,98 @@ function Peaks({ peaks, className }: { peaks: number[]; className?: string }) {
         <rect key={i} x={i * 3} y={10 - Math.max(0.6, v * 9)} width={1.8} height={Math.max(1.2, v * 18)} rx={0.9} fill="currentColor" />
       ))}
     </svg>
+  );
+}
+
+/**
+ * The sound library: the typical modern vocal chains, by kind. Tapping one gives it to the layer and plays
+ * it on the layer's take in this part, with the beat and the other layers.
+ */
+function SoundLibrary({ r, lane, hasTake, onClose }: { r: Recorder; lane: string; hasTake: boolean; onClose: () => void }) {
+  const current = layerPreset(r.sounds, lane).id;
+  const playing = r.status === "playing";
+  const key = r.songKey;
+  return (
+    <div className="fixed inset-0 z-40 flex items-end justify-center bg-black/40" onClick={onClose}>
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="max-h-[92dvh] w-full max-w-lg space-y-4 overflow-auto rounded-t-3xl bg-panel px-4 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-3"
+      >
+        <div className="mx-auto h-1.5 w-10 rounded-full bg-line" />
+        <div>
+          <h2 className="text-xl font-bold">Sound · {lane}</h2>
+          <p className="text-xs text-muted">
+            {hasTake ? `Tap a sound to hear it on your ${lane} take — your recording stays as it is.` : `Record a ${lane} take in this part to hear the sounds on it.`}
+          </p>
+        </div>
+        {FX_CATEGORIES.map((cat) => (
+          <div key={cat}>
+            <p className="label">{cat === "Tuned" ? "Autotune" : cat === "Layers" ? "For doubles & ad-libs" : cat}</p>
+            <div className="grid grid-cols-2 gap-2">
+              {FX_PRESETS.filter((p) => p.category === cat).map((p) => {
+                const on = p.id === current;
+                return (
+                  <button
+                    key={p.id}
+                    className={`rounded-2xl p-3 text-left ring-1 transition-colors disabled:opacity-50 ${on ? "bg-accent-soft ring-accent" : "bg-panel-2 ring-transparent active:bg-line/60"}`}
+                    disabled={r.tuning || (!r.connected && r.remote)}
+                    onClick={() => r.trySound(lane, p.id)}
+                    aria-pressed={on}
+                  >
+                    <span className="flex items-center gap-1 text-sm font-bold">
+                      {on && <Check className="h-3.5 w-3.5 text-accent" />}
+                      {p.name}
+                    </span>
+                    <span className="mt-0.5 block text-[11px] leading-snug text-muted">{p.about}</span>
+                  </button>
+                );
+              })}
+            </div>
+            {cat === "Tuned" && (
+              <label className="mt-2 flex items-center gap-2 px-1 text-xs text-muted">
+                Key
+                <select
+                  className="rounded-lg bg-panel-2 px-2 py-1 text-xs text-fg"
+                  value={key === "chromatic" ? "chromatic" : key ? `${key.root}${key.minor ? "m" : ""}` : ""}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (v) r.setKey(v === "chromatic" ? "chromatic" : { root: parseInt(v, 10), minor: v.endsWith("m") });
+                  }}
+                >
+                  {!key && <option value="">found in the beat when first tuned</option>}
+                  {NOTE_NAMES.flatMap((n, i) => [
+                    <option key={`${i}`} value={`${i}`}>
+                      {n} major
+                    </option>,
+                    <option key={`${i}m`} value={`${i}m`}>
+                      {n} minor
+                    </option>,
+                  ])}
+                  <option value="chromatic">Chromatic (every semitone)</option>
+                </select>
+                <span className="truncate">{key ? (key === "chromatic" ? "" : `— ${keyName(key)}`) : ""}</span>
+              </label>
+            )}
+          </div>
+        ))}
+        <div className="flex items-center gap-2">
+          {(r.tuning || playing) && (
+            <span className="flex flex-1 items-center gap-2 text-xs font-semibold text-accent">
+              {r.tuning && <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-accent border-r-transparent" />}
+              {r.tuning ? "Tuning the voice…" : "Playing"}
+            </span>
+          )}
+          {playing && (
+            <button className="rounded-full bg-panel-2 px-4 py-2 text-sm font-semibold" onClick={r.stop}>
+              Stop
+            </button>
+          )}
+          <button className="btn-primary ml-auto rounded-2xl px-6 py-3" onClick={onClose}>
+            Done
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 

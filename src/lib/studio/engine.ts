@@ -17,6 +17,8 @@ export interface PlayLayer {
   /** song position where the buffer starts */
   at: number;
   gain?: number;
+  /** its sound: an effect chain built for this playback (see lib/fx) */
+  fx?: (ctx: BaseAudioContext) => { input: AudioNode; output: AudioNode };
 }
 
 export interface Recording {
@@ -33,6 +35,8 @@ export class StudioEngine {
   private recorder: AudioWorkletNode | null = null;
   private analyser: AnalyserNode | null = null;
   private playing: AudioScheduledSourceNode[] = [];
+  /** the effect chains of what plays (cut off on stop) */
+  private chains: AudioNode[] = [];
   private chunks: { frame: number; channels: Float32Array[] }[] = [];
   private onDone: (() => void) | null = null;
   base = 0;
@@ -142,19 +146,25 @@ export class StudioEngine {
     this.stop();
     const start = this.ctx.currentTime + 0.12;
     this.base = start - from;
-    const schedule = (buffer: AudioBuffer, at: number, gainValue: number) => {
+    const schedule = (buffer: AudioBuffer, at: number, gainValue: number, fx?: PlayLayer["fx"]) => {
       const offset = Math.max(0, from - at);
       if (offset >= buffer.duration) return;
       const src = this.ctx.createBufferSource();
       src.buffer = buffer;
       const g = this.ctx.createGain();
       g.gain.value = gainValue;
-      src.connect(g).connect(this.ctx.destination);
+      src.connect(g);
+      if (fx) {
+        const chain = fx(this.ctx);
+        g.connect(chain.input);
+        chain.output.connect(this.ctx.destination);
+        this.chains.push(chain.output);
+      } else g.connect(this.ctx.destination);
       src.start(this.base + Math.max(at, from), offset);
       this.playing.push(src);
     };
     if (opts.beat) schedule(opts.beat, 0, opts.beatGain ?? 1);
-    for (const l of opts.layers ?? []) schedule(l.buffer, l.at, l.gain ?? 1);
+    for (const l of opts.layers ?? []) schedule(l.buffer, l.at, l.gain ?? 1, l.fx);
     for (const c of opts.clicks ?? []) if (c.at >= from) this.click(this.base + c.at, c.accent);
     return this.base;
   }
@@ -166,6 +176,9 @@ export class StudioEngine {
       } catch {}
     }
     this.playing = [];
+    // echo and reverb tails stop too
+    for (const c of this.chains) c.disconnect();
+    this.chains = [];
   }
 
   /** start recording now (call right after play()) */

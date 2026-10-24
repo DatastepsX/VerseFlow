@@ -10,13 +10,15 @@ import {
   updateArtist,
   saveVersion,
   setLanes,
+  setSound,
   setLineTimes,
   undo,
   updateProject,
 } from "@/lib/server/repo";
 import { body, handle, pick, treeResponse } from "@/lib/server/http";
 import { parseText } from "@/lib/text-import";
-import type { Project } from "@/lib/types";
+import type { Project, ProjectSettings } from "@/lib/types";
+import { FX_PRESETS } from "@/lib/fx/presets";
 
 export async function GET(_req: Request, ctx: RouteContext<"/api/projects/[id]">) {
   return handle(async () => treeResponse((await ctx.params).id));
@@ -44,7 +46,7 @@ export const maxDuration = 300;
 export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]">) {
   return handle(async () => {
     const { id } = await ctx.params;
-    const b = await body<{ action: string; name?: string; group_size?: number; label?: string; audio_start?: number | null; times?: { id: string; at: number | null }[]; text?: string; artistId?: string; color?: string; notes?: string; lanes?: string[] }>(req);
+    const b = await body<{ action: string; name?: string; group_size?: number; label?: string; audio_start?: number | null; times?: { id: string; at: number | null }[]; text?: string; artistId?: string; color?: string; notes?: string; lanes?: string[]; lane?: string; preset?: string; key?: unknown }>(req);
     switch (b.action) {
       case "undo":
         await undo(id);
@@ -81,6 +83,19 @@ export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]">
         if (!b.artistId) return Response.json({ error: "artistId required" }, { status: 400 });
         await removeArtist(id, b.artistId);
         break;
+      case "setSound": {
+        // a layer's effect preset and / or the song's key ("chromatic" or {root 0–11, minor})
+        if (b.preset !== undefined && !FX_PRESETS.some((p) => p.id === b.preset)) return Response.json({ error: "Unknown sound" }, { status: 400 });
+        const k = b.key as { root?: unknown; minor?: unknown } | string | undefined;
+        const key: ProjectSettings["songKey"] | undefined =
+          k === "chromatic"
+            ? "chromatic"
+            : k && typeof k === "object" && Number.isInteger(k.root) && (k.root as number) >= 0 && (k.root as number) < 12
+              ? { root: k.root as number, minor: !!k.minor }
+              : undefined;
+        await setSound(id, { lane: typeof b.lane === "string" ? b.lane : undefined, preset: b.preset, key });
+        break;
+      }
       case "setLanes":
         await setLanes(id, Array.isArray(b.lanes) ? b.lanes.filter((x) => typeof x === "string") : []);
         break;
