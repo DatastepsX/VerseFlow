@@ -8,7 +8,7 @@ import { MARK_KINDS, markInfo, wordsOf, type Mark, type MarkKind } from "@/lib/m
  * a wavy underline for double-time, ~ stretched, › accented (bold), ↗ ↘ the
  * voice going up / down, ⟲ an echo. `lit`: words already sung (karaoke).
  */
-export function MarkedText({ text, marks, lit }: { text: string; marks: Mark[]; lit?: (word: number) => boolean }) {
+export function MarkedText({ text, marks, lit, onWord }: { text: string; marks: Mark[]; lit?: (word: number) => boolean; onWord?: (word: number) => void }) {
   const words = wordsOf(text);
   const on = (i: number, k: MarkKind) => marks.some((m) => m.kind === k && m.at === i);
   const inDouble = (i: number) => marks.some((m) => m.kind === "double" && i >= m.at && i <= (m.to ?? m.at));
@@ -24,7 +24,9 @@ export function MarkedText({ text, marks, lit }: { text: string; marks: Mark[]; 
             )}
             {on(i, "accent") && <span className="text-[0.8em] font-bold text-accent">›</span>}
             <span
-              className={`${inDouble(i) ? "underline decoration-accent decoration-wavy decoration-2 underline-offset-4" : ""} ${on(i, "accent") ? "font-extrabold" : ""} ${lit?.(i) ? "text-accent" : ""}`}
+              onClick={onWord && (() => onWord(i))}
+              role={onWord ? "button" : undefined}
+              className={`${onWord ? "cursor-pointer rounded active:bg-accent-soft" : ""} ${inDouble(i) ? "underline decoration-accent decoration-wavy decoration-2 underline-offset-4" : ""} ${on(i, "accent") ? "font-extrabold" : ""} ${lit?.(i) ? "text-accent" : ""}`}
             >
               {w}
             </span>
@@ -82,7 +84,7 @@ export function MarksEditor({ text, marks, onSave, onCancel }: { text: string; m
         ))}
       </div>
       <p className="text-[11px] text-muted">
-        {tool === "double" && from !== null ? `From “${words[from]}” — now tap the last word` : `${info.label}: ${info.about}. Tap a word${info.after ? "" : ""}.`}
+        {tool === "double" && from !== null ? `From “${words[from]}” — now tap the last word` : `${info.label}: ${info.about}. Tap a word — here or in the text below.`}
       </p>
       <div className="flex flex-wrap gap-1.5">
         {words.map((w, i) => {
@@ -99,7 +101,7 @@ export function MarksEditor({ text, marks, onSave, onCancel }: { text: string; m
         })}
       </div>
       <p className="rounded-xl bg-panel px-3 py-2 text-[17px] leading-relaxed">
-        <MarkedText text={text} marks={items} />
+        <MarkedText text={text} marks={items} onWord={tap} />
       </p>
       <div className="flex items-center gap-2">
         <button className="text-xs text-muted underline" onClick={() => setItems([])}>
