@@ -42,6 +42,8 @@ export interface Recorder {
   beatsLeft: number | null;
   /** the line being sung (index in the part's lines) */
   lineIndex: number | null;
+  /** the song position being heard now (on this device; the remote has none) — the lyrics follow it syllable by syllable */
+  clock: (() => number) | null;
   level: number;
   lanes: string[];
   /** takes of the part, of the layers */
@@ -130,6 +132,15 @@ const small = (peaks: number[] | null) => {
   const p = peaks ?? [];
   const step = Math.max(1, Math.floor(p.length / 40));
   return p.filter((_, i) => i % step === 0).slice(0, 40).map((x) => Math.round(x * 100) / 100);
+};
+
+/** how much later the speakers / headphones play what the engine schedules */
+const outDelay = (e: StudioEngine) => (e.ctx as AudioContext & { outputLatency?: number }).outputLatency || e.ctx.baseLatency || 0;
+
+/** the song position being heard on this device */
+const clockOf = (engine: RefObject<StudioEngine | null>) => () => {
+  const e = engine.current;
+  return e ? e.position() - outDelay(e) : 0;
 };
 
 const deviceName = () => {
@@ -409,7 +420,8 @@ export function useLocalRecorder(o: {
       if (!e) return;
       if (status.kind === "playing" || status.kind === "countin" || status.kind === "recording") {
         const p = e.position();
-        const pos = positionIn(o.timeline, p);
+        // the lyrics follow what is heard (the output's delay taken off)
+        const pos = positionIn(o.timeline, p - outDelay(e));
         setLineIndex(pos && pos.sectionId === sectionId ? pos.lineIndex : null);
         if (status.kind === "countin" && range) {
           const left = Math.ceil((range.start - p) / o.beatLength - 0.05);
@@ -425,6 +437,8 @@ export function useLocalRecorder(o: {
     };
   });
 
+  // one function for the page's life: the lyrics' animation keeps running with it
+  const [clock] = useState(() => clockOf(engine));
   const choose = (id: string) => void api(`/api/takes/${id}`, undefined, "PATCH").catch(failed);
   const remove = (id: string) => void api(`/api/takes/${id}`, undefined, "DELETE").catch(failed);
   const addLane = (name: string) => {
@@ -558,6 +572,7 @@ export function useLocalRecorder(o: {
     playingTake: status.kind === "playing" ? status.take : null,
     beatsLeft,
     lineIndex,
+    clock: status.kind === "playing" || status.kind === "recording" || status.kind === "countin" ? clock : null,
     level,
     lanes,
     takes: sectionTakes.map((t) => ({ ...t, peaks: t.peaks ?? [] })),
@@ -665,6 +680,7 @@ export function useRemoteRecorder(o: { tree: ProjectTree; section: [string | nul
     playingTake: connected ? (state.playingTake ?? null) : null,
     beatsLeft: connected ? (state.beatsLeft ?? null) : null,
     lineIndex: here ? state.lineIndex : null,
+    clock: null,
     level: 0,
     lanes,
     takes: here ? state.takes.map((t) => ({ ...t, peaks: t.peaks ?? [] })) : [],

@@ -177,7 +177,8 @@ export function SongApp({
       if (!e) return;
       const p = e.position();
       setNow(p);
-      const pos = positionIn(timeline, p);
+      // the line being heard (the output's delay taken off)
+      const pos = positionIn(timeline, p - ((e.ctx as AudioContext & { outputLatency?: number }).outputLatency || e.ctx.baseLatency || 0));
       const sec = pos ? tree.sections.find((s) => s.id === pos.sectionId) : null;
       const line = sec && pos?.lineIndex !== null && pos?.lineIndex !== undefined ? sec.lines[pos.lineIndex] : null;
       setLive((prev) => {
@@ -664,6 +665,35 @@ export function SongApp({
       if (top && top.score >= RHYMES) await call(`/api/alternatives/${top.x.id}`, { action: "swap" });
       else setNote("No rhyming option yet — try again, or edit the line.");
     });
+  /**
+   * The whole couplet again: 3 new rhyming pairs for both lines (1 call), the best pair in. A kept line is
+   * replaced only when the writer says so (it's un-kept first; the AI never changes a kept line).
+   */
+  const newCouplet = async (a: LyricLine, b: LyricLine) => {
+    const kept = [a, b].filter(isKept);
+    if (kept.length && !window.confirm(`Replace both lines? ${kept.map((l) => `“${l.text}”`).join(" and ")} ${kept.length === 1 ? "is" : "are"} kept.`)) return;
+    await lineAction(a.id, async () => {
+      for (const l of kept) await call(`/api/lines/${l.id}`, { status: "SUGGESTED", action: "unkeep" }, "PATCH");
+      // in song order: the first line of the pair first
+      const ids = [a, b].sort((x, y) => (x.audio_at ?? x.position) - (y.audio_at ?? y.position)).map((l) => l.id);
+      const t = await call(`/api/projects/${pid}/flow`, { action: "suggest", lineIds: ids });
+      // the call failed: the kept lines stay kept
+      if (!t) {
+        for (const l of kept) await call(`/api/lines/${l.id}`, { status: l.status, action: "approve" }, "PATCH");
+        return;
+      }
+      // lines recorded in the song keep their words (the new ones come as options): the best new pair goes in
+      const fresh = (id: string) => t?.sections.flatMap((s) => s.lines).find((x) => x.id === id) as LyricLine | undefined;
+      const [fa, fb] = [fresh(a.id), fresh(b.id)];
+      if (fa && fb && (fa.text === a.text || fb.text === b.text)) {
+        const m = pairMoves(fa, fb, lang)[0];
+        if (m) {
+          await call(`/api/alternatives/${m.partnerAlt.id}`, { action: "swap" });
+          await call(`/api/alternatives/${m.alt.id}`, { action: "swap" });
+        }
+      }
+    });
+  };
   /** a rhyming couplet from the options: this line's option, and the other line's when it changes too (free) */
   const applyMove = (l: LyricLine, m: RhymeMove) =>
     lineAction(l.id, async () => {
@@ -1231,6 +1261,19 @@ export function SongApp({
                               )
                             }
                             rhymingCount={partner?.text.trim() ? moves.length : null}
+                            couplet={
+                              partner
+                                ? {
+                                    pairs: pairMoves(l, partner, lang).length,
+                                    busy: busyLine === partner.id,
+                                    onNext: () => {
+                                      const m = pairMoves(l, partner, lang)[0];
+                                      if (m) void applyMove(l, m);
+                                    },
+                                    onNew: () => void newCouplet(l, partner),
+                                  }
+                                : undefined
+                            }
                             onNext={() => {
                               // no other line to rhyme with: the next option in line
                               if (!partner?.text.trim()) return void lineAction(l.id, () => call(`/api/alternatives/${l.alternatives[0].id}`, { action: "swap" }));
@@ -1447,6 +1490,8 @@ function LineCard(props: {
   onSaveGrid: (f: NonNullable<Line["flow"]>, write: boolean) => void;
   /** options rhyming with the couplet's other line (null: no partner) */
   rhymingCount: number | null;
+  /** the whole couplet (this line and the one it rhymes with): the next rhyming pair of options (free), or a new pair (1 call) */
+  couplet?: { pairs: number; onNext: () => void; onNew: () => void; busy: boolean };
   /** opened: its flow, details and actions show (one line at a time) */
   open: boolean;
   /** a new flow from this line on (for the rest of the part, or of the flow it follows) */
@@ -1644,6 +1689,36 @@ function LineCard(props: {
               <Trash className="h-4 w-4" />
             </button>
           </div>
+          {props.couplet && (
+            <div className="mt-2 flex items-center gap-1.5">
+              <span className="flex-1 whitespace-nowrap pl-1 text-xs font-semibold text-muted">Both lines</span>
+              <button
+                className="flex h-9 items-center gap-1.5 rounded-2xl bg-panel-2 px-3 text-[13px] font-semibold text-fg/80 disabled:opacity-40"
+                disabled={props.busy || props.couplet.busy || !props.couplet.pairs}
+                onClick={props.couplet.onNext}
+                title={props.couplet.pairs ? `The next rhyming pair from the options (${props.couplet.pairs}) — free` : "No other rhyming pair in the options yet"}
+              >
+                <Shuffle className="h-4 w-4" />
+                Next pair
+                {props.couplet.pairs > 0 && <span className="text-[10px] font-medium text-ok">{props.couplet.pairs}</span>}
+              </button>
+              <button
+                className="flex h-9 items-center gap-1.5 rounded-2xl bg-accent-soft px-3 text-[13px] font-semibold text-accent disabled:opacity-40"
+                disabled={props.busy || props.couplet.busy}
+                onClick={props.couplet.onNew}
+                title="Write the couplet again: 3 new rhyming pairs for both lines (1 AI call)"
+                aria-label="New couplet, 1 call"
+              >
+                {props.couplet.busy ? (
+                  <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-accent border-r-transparent" />
+                ) : (
+                  <Sparkles className="h-4 w-4" />
+                )}
+                New couplet
+                <span className="text-[10px] font-medium text-muted">1 call</span>
+              </button>
+            </div>
+          )}
         </>
       )}
     </div>
@@ -1690,6 +1765,14 @@ type RhymeMove = { alt: Option; partnerAlt?: Option };
  * then (the other line not kept) its options paired with the other line's option that rhymes best with them —
  * the options of a couplet were written in rhyming pairs. Swapped-out texts go to the back, so it cycles.
  */
+/** "Next pair": both lines change — each option of this line with the other line's option that rhymes best with it */
+function pairMoves(l: LyricLine, partner: LyricLine, lang: string): Required<RhymeMove>[] {
+  if (isKept(l) || isKept(partner)) return [];
+  return l.alternatives.flatMap((alt) => {
+    const best = partner.alternatives.map((y) => ({ y, score: rhymeScore(y.text, alt.text, lang) })).sort((p, q) => q.score - p.score)[0];
+    return best && best.score >= RHYMES ? [{ alt, partnerAlt: best.y }] : [];
+  });
+}
 function rhymeMoves(l: LyricLine, partner: LyricLine, lang: string): RhymeMove[] {
   const own = l.alternatives.filter((x) => rhymeScore(partner.text, x.text, lang) >= RHYMES).map((alt) => ({ alt }));
   if (isKept(partner)) return own;

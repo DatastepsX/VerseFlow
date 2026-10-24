@@ -1,12 +1,13 @@
 "use client";
 
 import { useEffect, useState, type ReactNode, type RefObject } from "react";
+import { syllableParts } from "@/lib/rhyme/syllabify";
 import { Check, Headphones, Laptop, Mic, Pause, Phone, Play, Plus, Restart, Sliders, Trash } from "@/components/icons";
 import { followTo } from "@/components/writer/follow";
 import { fmtTime } from "@/lib/audio/song-map";
 import type { Timeline } from "@/lib/audio/timeline";
 import type { StudioEngine } from "@/lib/studio/engine";
-import type { ProjectTree } from "@/lib/types";
+import type { Line, ProjectTree } from "@/lib/types";
 import { useIsPhone, useLocalRecorder, usePref, useRemoteRecorder, type Recorder } from "./recorder";
 
 type On = "here" | "mac";
@@ -81,7 +82,7 @@ function RemoteRecord(props: Props & { section: [string | null, (id: string) => 
   return <RecordScreen r={r} {...props} />;
 }
 
-function RecordScreen({ r, tree, rangeOf, bar, onBusy, host }: Props & { r: Recorder; host?: boolean }) {
+function RecordScreen({ r, tree, rangeOf, bar, timeline, onBusy, host }: Props & { r: Recorder; host?: boolean }) {
   const [size, setSize] = usePref<keyof typeof SIZES>("vf.rec.size", "M");
   const [sheet, setSheet] = useState(false);
   const [adding, setAdding] = useState(false);
@@ -220,15 +221,25 @@ function RecordScreen({ r, tree, rangeOf, bar, onBusy, host }: Props & { r: Reco
           </div>
           <div className="mt-2 space-y-1" style={{ fontSize: SIZES[size] ?? SIZES.M, lineHeight: 1.35 }}>
             {lines.length === 0 && <p className="text-sm text-muted">No lyrics in this part yet — record anyway (ad-libs, a hook…), or write them in Lyrics.</p>}
-            {lines.map((l) => {
+            {lines.map((l, k) => {
               const isLive = l.id === live;
+              const liveAt = live ? lines.findIndex((x) => x.id === live) : -1;
+              // when each line starts on the beat, and when the next one does (its syllables share that time)
+              const starts = timeline.get(section.id)?.starts ?? [];
+              const startOf = (x: Line) => starts[section.lines.indexOf(x as (typeof section.lines)[number])];
+              const from = startOf(l);
+              const next = lines[k + 1] ? startOf(lines[k + 1]) : (range?.end ?? from + bar);
               return (
                 <p
                   key={l.id}
                   id={`rec-${l.id}`}
-                  className={`-mx-2 rounded-xl px-2 py-0.5 transition-colors ${isLive ? "bg-accent-soft font-semibold text-fg" : live ? "text-muted" : "text-fg/90"}`}
+                  className={`-mx-2 rounded-xl px-2 py-0.5 transition-colors ${isLive ? "bg-accent-soft font-semibold text-fg" : liveAt >= 0 && k < liveAt ? "text-muted" : "text-fg/90"}`}
                 >
-                  {l.text}
+                  {isLive && r.clock && Number.isFinite(from) ? (
+                    <Karaoke line={l} lang={tree.project.language} from={from} until={Math.min(Number.isFinite(next) ? next : from + bar, from + 2 * bar)} clock={r.clock} />
+                  ) : (
+                    l.text
+                  )}
                 </p>
               );
             })}
@@ -387,6 +398,41 @@ function RecordScreen({ r, tree, rangeOf, bar, onBusy, host }: Props & { r: Reco
       {r.note && <div className="fixed left-1/2 top-20 z-30 -translate-x-1/2 rounded-full bg-fg px-3.5 py-1.5 text-xs font-semibold text-bg shadow-lg">{r.note}</div>}
 
       {sheet && <RecordSettings r={r} size={size} setSize={setSize} onClose={() => setSheet(false)} />}
+    </>
+  );
+}
+
+/**
+ * The line being sung, syllable by syllable on the beat: what is sung lights up as the song plays. Each
+ * syllable at its time in the line's flow; without one, the line's time is shared out evenly.
+ */
+function Karaoke({ line, lang, from, until, clock }: { line: Line; lang: string; from: number; until: number; clock: () => number }) {
+  const [now, setNow] = useState(from);
+  useEffect(() => {
+    let id = requestAnimationFrame(function loop() {
+      setNow(clock());
+      id = requestAnimationFrame(loop);
+    });
+    return () => cancelAnimationFrame(id);
+  }, [clock]);
+  const parts = syllableParts(line.text.trim(), lang);
+  if (!parts) return <>{line.text}</>;
+  const sung = line.flow?.times;
+  // the flow's syllable times; written with a syllable more or less: spread over the same stretch
+  const times =
+    sung && sung.length === parts.length
+      ? sung
+      : sung && sung.length > 1
+        ? parts.map((_, i) => sung[0] + ((sung[sung.length - 1] - sung[0]) * i) / Math.max(1, parts.length - 1))
+        : parts.map((_, i) => from + ((until - from) * i) / parts.length);
+  return (
+    <>
+      {parts.map((p, i) => (
+        <span key={i}>
+          {p.space && " "}
+          <span className={now >= times[i] - 0.03 ? "text-accent" : ""}>{p.text}</span>
+        </span>
+      ))}
     </>
   );
 }
