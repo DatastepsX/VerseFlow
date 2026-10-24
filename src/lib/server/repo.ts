@@ -27,8 +27,8 @@ import { barsPerLine, lineFlowFrom, nextFlowName, ownWords } from "@/lib/flow/pa
 import { isExampleText } from "@/lib/flow/example";
 
 const TAKE_COLS = "id, section_id, lane, take_no, start_at, duration, sample_rate, peaks, chosen, created_at";
-const LINE_COLS = "id, project_id, section_id, position, text, status, kind, note, audio_at, flow, updated_at";
-const SNAPSHOT_FIELDS = ["text", "status", "kind", "note", "deleted", "flow"] as const;
+const LINE_COLS = "id, project_id, section_id, position, text, status, kind, note, audio_at, flow, marks, updated_at";
+const SNAPSHOT_FIELDS = ["text", "status", "kind", "note", "deleted", "flow", "marks"] as const;
 
 export class NotFound extends Error {}
 
@@ -51,6 +51,7 @@ const ACTION_LABELS: Record<string, string> = {
   flow: "New lyrics",
   restore: "Restore",
   move: "Move line",
+  marks: "Marks",
 };
 
 async function currentStep(projectId: string, action: string): Promise<number | null> {
@@ -425,9 +426,14 @@ export async function appendLines(sectionId: string, items: { text: string; stat
   return rows;
 }
 
+/** a line's text (marks are checked against it) */
+export async function lineText(id: string) {
+  return (await getLine(id)).text;
+}
+
 export async function updateLine(
   id: string,
-  patch: Partial<Pick<Line, "text" | "status" | "kind" | "note" | "flow">>,
+  patch: Partial<Pick<Line, "text" | "status" | "kind" | "note" | "flow" | "marks">>,
   action = "edit",
 ) {
   const before = await getLine(id);
@@ -742,6 +748,7 @@ async function insertSnapshot(projectId: string, tree: { sections: (Section & { 
               note: l.note,
               audio_at: l.audio_at ?? null,
               flow: l.flow ?? null,
+              marks: l.marks ?? null,
             })),
           ),
       );

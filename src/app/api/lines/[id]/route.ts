@@ -1,7 +1,8 @@
-import { addAlternatives, clearAlternatives, deleteLine, getTree, moveLine, setBankState, setLineTimes, splitSection, updateLine } from "@/lib/server/repo";
+import { addAlternatives, clearAlternatives, deleteLine, getTree, lineText, moveLine, setBankState, setLineTimes, splitSection, updateLine } from "@/lib/server/repo";
 import { generateOptions } from "@/lib/server/ai";
 import { body, handle, pick, treeResponse } from "@/lib/server/http";
 import type { Line, LineFlow } from "@/lib/types";
+import { cleanMarks } from "@/lib/marks";
 
 export const maxDuration = 120;
 
@@ -10,11 +11,17 @@ export async function PATCH(req: Request, ctx: RouteContext<"/api/lines/[id]">) 
     const b = await body(req);
     const action = typeof b.action === "string" ? b.action : "edit";
     const id = (await ctx.params).id;
-    const patch: Partial<Pick<Line, "text" | "status" | "kind" | "note" | "flow">> = pick<Line>(b, ["text", "status", "kind", "note"]);
+    const patch: Partial<Pick<Line, "text" | "status" | "kind" | "note" | "flow" | "marks">> = pick<Line>(b, ["text", "status", "kind", "note"]);
     // the line's rhythm, edited on the flow grid (undoable like a text edit)
     const flow = b.flow === null ? null : b.flow !== undefined ? cleanFlow(b.flow) : undefined;
     if (b.flow !== undefined && flow === undefined) return Response.json({ error: "Invalid flow" }, { status: 400 });
     if (flow !== undefined) patch.flow = flow;
+    // notes for recording on the words (made on the line's text as it is)
+    if (b.marks !== undefined) {
+      const marks = cleanMarks(b.marks, typeof b.text === "string" ? b.text : await lineText(id));
+      if (marks === undefined) return Response.json({ error: "Invalid marks" }, { status: 400 });
+      patch.marks = marks;
+    }
     const projectId = await updateLine(id, patch, action);
     // the line starts where its first syllable is sung
     if (flow?.times?.length) await setLineTimes(projectId, [{ id, at: flow.times[0] }]);

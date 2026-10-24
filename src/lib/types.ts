@@ -128,6 +128,8 @@ export interface Line {
   audio_at: number | null;
   /** the rhythm the writer sang for this line in a flow take */
   flow: LineFlow | null;
+  /** notes for recording on its words: pause, double-time… (lib/marks) */
+  marks?: import("./marks").LineMarks | null;
   updated_at: string;
 }
 

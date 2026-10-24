@@ -18,6 +18,8 @@ import { download, fullText } from "@/components/writer/util";
 import { VoiceSheet, type VoiceInfo } from "./VoiceSheet";
 import { ThemePicker } from "@/components/ThemePicker";
 import { RecordView } from "./Record";
+import { MarkedText, MarksEditor } from "@/components/Marks";
+import { marksFor, type Mark } from "@/lib/marks";
 import { usePref } from "./recorder";
 import { undoHeaders, undoStep } from "@/lib/undo-group";
 import { TapFlow } from "./TapFlow";
@@ -1522,6 +1524,7 @@ export function SongApp({
                             open={openLine === l.id}
                             onToggle={() => setOpenLine(openLine === l.id ? null : l.id)}
                             onFlowFromHere={beatGrid ? () => openFlowSheet({ sectionId: s.id, fromLineId: l.id, flowId: l.flow?.flowId ?? null }) : undefined}
+                            onSaveMarks={(m) => void lineAction(l.id, () => call(`/api/lines/${l.id}`, { marks: { items: m }, action: "marks" }, "PATCH"), "Marks")}
                             onNewPart={
                               s.lines.findIndex((x) => x.id === l.id) > 0
                                 ? () => {
@@ -1739,17 +1742,26 @@ function LineCard(props: {
   onFlowFromHere?: () => void;
   /** this line starts a new part (e.g. "Rap"); not on a part's first line */
   onNewPart?: () => void;
+  /** notes for recording on the words */
+  onSaveMarks: (marks: Mark[]) => void;
   onToggle: () => void;
 }) {
   const { line: l, lang } = props;
   const kept = l.status === "APPROVED" || l.status === "APPROVED_EDITED";
+  // notes for recording on the words (pause, double-time…)
+  const marks = marksFor(l);
+  const [marking, setMarking] = useState(false);
   const target = l.flow?.syllables ?? null;
   const syl = l.text.trim() ? prosody(l.text, lang).syllables : 0;
   const fits = target !== null && syl > 0 ? Math.abs(syl - target) <= 1 : null;
   const lineText = (
     <span className={`text-[17px] leading-snug ${l.text.trim() ? "" : "italic text-muted"}`}>
       {l.text.trim() ? (
-        <Syllables text={l.text.trim()} lang={lang} rhyme={!!props.pair} />
+        marks.length ? (
+          <MarkedText text={l.text.trim()} marks={marks} />
+        ) : (
+          <Syllables text={l.text.trim()} lang={lang} rhyme={!!props.pair} />
+        )
       ) : props.busy ? (
         "Writing…"
       ) : l.flow?.syllables ? (
@@ -1844,6 +1856,15 @@ function LineCard(props: {
                 <AudioLines className="h-3 w-3" /> Flow from here
               </button>
             )}
+            {l.text.trim() && (
+              <button
+                className={`flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1 font-semibold ${marking || marks.length ? "bg-accent-soft text-accent" : "bg-panel-2 text-fg/80"}`}
+                onClick={() => setMarking((m) => !m)}
+                title="Notes for recording on the words: pause, breath, double-time, stretch…"
+              >
+                <span className="font-bold">‖</span> Marks{marks.length ? ` · ${marks.length}` : ""}
+              </button>
+            )}
             {props.onNewPart && (
               <button
                 className="flex shrink-0 items-center gap-1 rounded-full bg-panel-2 px-2.5 py-1 font-semibold text-fg/80"
@@ -1886,6 +1907,17 @@ function LineCard(props: {
               </button>
             )}
           </div>
+          {marking && (
+            <MarksEditor
+              text={l.text.trim()}
+              marks={marks}
+              onCancel={() => setMarking(false)}
+              onSave={(m) => {
+                setMarking(false);
+                props.onSaveMarks(m);
+              }}
+            />
+          )}
           <div className="mt-3 flex items-center gap-1.5">
             <button
               className={`flex h-10 flex-[1.4] items-center justify-center gap-1.5 rounded-2xl text-sm font-semibold transition-colors ${kept ? "bg-ok text-white" : "bg-ok-soft text-ok"}`}

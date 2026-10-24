@@ -2,6 +2,8 @@
 
 import { useEffect, useState, type ReactNode, type RefObject } from "react";
 import { syllableParts } from "@/lib/rhyme/syllabify";
+import { marksFor } from "@/lib/marks";
+import { MarkedText } from "@/components/Marks";
 import { Check, ChevronRight, Headphones, Laptop, Mic, Pause, Phone, Play, Plus, Restart, Sliders, Trash, Wand } from "@/components/icons";
 import { FX_CATEGORIES, FX_PRESETS, layerPreset } from "@/lib/fx/presets";
 import { keyName, NOTE_NAMES } from "@/lib/fx/tune";
@@ -246,6 +248,8 @@ function RecordScreen({ r, tree, rangeOf, bar, timeline, onBusy, host }: Props &
                 >
                   {isLive && r.clock && Number.isFinite(from) ? (
                     <Karaoke line={l} lang={tree.project.language} from={from} until={Math.min(Number.isFinite(next) ? next : from + bar, from + 2 * bar)} clock={r.clock} />
+                  ) : marksFor(l).length ? (
+                    <MarkedText text={l.text.trim()} marks={marksFor(l)} />
                   ) : (
                     l.text
                   )}
@@ -441,7 +445,8 @@ function Karaoke({ line, lang, from, until, clock }: { line: Line; lang: string;
     return () => cancelAnimationFrame(id);
   }, [clock]);
   const parts = syllableParts(line.text.trim(), lang);
-  if (!parts) return <>{line.text}</>;
+  const marks = marksFor(line);
+  if (!parts) return marks.length ? <MarkedText text={line.text.trim()} marks={marks} /> : <>{line.text}</>;
   const sung = line.flow?.times;
   // the flow's syllable times; written with a syllable more or less: spread over the same stretch
   const times =
@@ -450,6 +455,14 @@ function Karaoke({ line, lang, from, until, clock }: { line: Line; lang: string;
       : sung && sung.length > 1
         ? parts.map((_, i) => sung[0] + ((sung[sung.length - 1] - sung[0]) * i) / Math.max(1, parts.length - 1))
         : parts.map((_, i) => from + ((until - from) * i) / parts.length);
+  // with marks: word by word (a word lights up with its first syllable), the marks stay in place
+  if (marks.length) {
+    const wordStart: number[] = [];
+    parts.forEach((p, i) => {
+      if (i === 0 || p.space) wordStart.push(times[i]);
+    });
+    return <MarkedText text={line.text.trim()} marks={marks} lit={(w) => now >= (wordStart[w] ?? Infinity) - 0.03} />;
+  }
   return (
     <>
       {parts.map((p, i) => (
