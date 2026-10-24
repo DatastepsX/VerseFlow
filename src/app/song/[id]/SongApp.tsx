@@ -135,13 +135,28 @@ export function SongApp({
   const filename = tree.audio?.filename;
   // the song, and the song without its vocals (when removed): what plays is the music alone unless you want the vocals
   const instrumental = tree.audio?.instrumental_path ?? null;
-  const [withVocals, setWithVocals] = usePref(`vf.vocals.${pid}`, false);
+  // where the original vocals are out: the whole song (default), none, or chosen parts — saved with the song
+  const vocalsOff = tree.project.settings?.vocalsOff ?? "all";
+  const offRanges =
+    vocalsOff === "all"
+      ? [{ start: 0, end: Infinity }]
+      : tree.sections
+          .filter((x) => vocalsOff.includes(x.id))
+          .map((x) => {
+            const i = tree.sections.indexOf(x);
+            const start = x.audio_start ?? x.lines.find((l) => l.kind === "lyric")?.audio_at ?? 0;
+            const end = tree.sections.slice(i + 1).find((y) => y.audio_start !== null)?.audio_start ?? Infinity;
+            return { start, end };
+          });
+  const offKey = JSON.stringify(offRanges);
   const songBufs = useRef<{ full: AudioBuffer | null; music: AudioBuffer | null }>({ full: null, music: null });
   const [bufsLoaded, setBufsLoaded] = useState(0);
   useEffect(() => {
     const { full, music } = songBufs.current;
-    beat.current = !withVocals && music ? music : full;
-  }, [withVocals, bufsLoaded]);
+    const e = engine.current;
+    beat.current = full && music && e ? withoutVocals(e.ctx, full, music, JSON.parse(offKey)) : full;
+  }, [offKey, bufsLoaded]);
+  const setVocalsOff = (v: "all" | string[]) => void call(`/api/projects/${pid}`, { settings: { ...(tree.project.settings ?? {}), vocalsOff: v } }, "PATCH");
   useEffect(() => {
     if (!filename) return;
     let cancelled = false;
@@ -155,7 +170,6 @@ export function SongApp({
         ]);
         if (!cancelled) {
           songBufs.current = { full: buf, music };
-          beat.current = music && !withVocals ? music : buf;
           setBufsLoaded((n) => n + 1);
           setBeatReady(true);
         }
@@ -176,7 +190,6 @@ export function SongApp({
     setSeparating(true);
     try {
       await call(`/api/projects/${pid}/audio`, { action: "separate" });
-      setWithVocals(false);
     } finally {
       setSeparating(false);
     }
@@ -335,6 +348,7 @@ export function SongApp({
         e.preventDefault();
         void undoRedo(e.shiftKey ? "redo" : "undo");
       }
+
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -830,6 +844,23 @@ export function SongApp({
     .map((l) => l.id);
   const missingCalls = tree.sections.flatMap((s) => chunkLines(s.lines.filter((l) => l.kind === "lyric" && missing.includes(l.id)))).length;
   const kept = lyricLines.filter((l) => l.status === "APPROVED" || l.status === "APPROVED_EDITED").length;
+
+  // a computer: space plays / stops the song (Record has its own: the part and its takes; not while
+  // recording a flow, typing, or with a sheet open)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement;
+      if (e.code !== "Space" || e.metaKey || e.ctrlKey || el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable) return;
+      if (view === "record" || rec !== null || flowSheet || voiceSheet || !tree.audio) return;
+      e.preventDefault();
+      // a focused button would also take the space as a click
+      (document.activeElement as HTMLElement | null)?.blur?.();
+      if (playing) stopPlay();
+      else if (beatReady) void play(now >= (tree.audio.duration ?? 0) - 1 ? 0 : now);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
 
   // ---------- screens ----------
   const total = tree.audio?.duration ?? 0;
@@ -1471,6 +1502,26 @@ export function SongApp({
                             open={openLine === l.id}
                             onToggle={() => setOpenLine(openLine === l.id ? null : l.id)}
                             onFlowFromHere={beatGrid ? () => openFlowSheet({ sectionId: s.id, fromLineId: l.id, flowId: l.flow?.flowId ?? null }) : undefined}
+                            onNewPart={
+                              s.lines.findIndex((x) => x.id === l.id) > 0
+                                ? () => {
+                                    const name = window.prompt("Name of the new part (it starts with this line):", "Rap");
+                                    if (!name?.trim()) return;
+                                    void lineAction(
+                                      l.id,
+                                      async () => {
+                                        const t = await call(`/api/lines/${l.id}`, { action: "splitSection", name: name.trim(), start: l.audio_at ?? null });
+                                        const created = t?.sections.find((x) => x.lines.some((y) => y.id === l.id));
+                                        if (created) {
+                                          setActivePart(created.id);
+                                          setTimeout(() => document.getElementById(`part-${created.id}`)?.scrollIntoView({ behavior: "smooth", block: "start" }), 100);
+                                        }
+                                      },
+                                      `New part “${name.trim()}”`,
+                                    );
+                                  }
+                                : undefined
+                            }
                             onSaveGrid={(flow, write) =>
                               void lineAction(l.id, async () => {
                                 setGridLine(null);
@@ -1550,7 +1601,7 @@ export function SongApp({
             onVoice={() => setVoiceSheet(true)}
             onRename={(title) => void call(`/api/projects/${pid}`, { title }, "PATCH")}
             onLanguage={(language) => void call(`/api/projects/${pid}`, { language }, "PATCH")}
-            vocals={{ split: !!instrumental, on: withVocals, set: setWithVocals, separate: () => void separate(), busy: separating }}
+            vocals={{ split: !!instrumental, off: vocalsOff, set: setVocalsOff, separate: () => void separate(), busy: separating }}
             onDelete={async () => {
               if (!window.confirm(`Delete “${tree.project.title}” for good?`)) return;
               await fetch(`/api/projects/${pid}`, { method: "DELETE" });
@@ -1666,6 +1717,8 @@ function LineCard(props: {
   open: boolean;
   /** a new flow from this line on (for the rest of the part, or of the flow it follows) */
   onFlowFromHere?: () => void;
+  /** this line starts a new part (e.g. "Rap"); not on a part's first line */
+  onNewPart?: () => void;
   onToggle: () => void;
 }) {
   const { line: l, lang } = props;
@@ -1754,7 +1807,7 @@ function LineCard(props: {
               onCancel={props.onGrid}
             />
           )}
-          <div className="mt-1 flex items-center gap-1.5 text-[11px] text-muted">
+          <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-muted">
             <button
               className="flex shrink-0 items-center gap-1 rounded-full bg-panel-2 px-2.5 py-1 font-semibold text-fg/80"
               onClick={props.onPlay}
@@ -1769,6 +1822,15 @@ function LineCard(props: {
                 title="A new flow from this line on"
               >
                 <AudioLines className="h-3 w-3" /> Flow from here
+              </button>
+            )}
+            {props.onNewPart && (
+              <button
+                className="flex shrink-0 items-center gap-1 rounded-full bg-panel-2 px-2.5 py-1 font-semibold text-fg/80"
+                onClick={props.onNewPart}
+                title="A new part starts with this line (e.g. Rap, Hook, Bridge)"
+              >
+                <Plus className="h-3 w-3" /> New part here
               </button>
             )}
             {target !== null && (
@@ -2125,7 +2187,7 @@ function MoreView({
   onDelete,
   vocals,
 }: {
-  vocals: { split: boolean; on: boolean; set: (on: boolean) => void; separate: () => void; busy: boolean };
+  vocals: { split: boolean; off: "all" | string[]; set: (off: "all" | string[]) => void; separate: () => void; busy: boolean };
   tree: ProjectTree;
   voice: VoiceInfo | null;
   onVoice: () => void;
@@ -2135,6 +2197,8 @@ function MoreView({
 }) {
   const pid = tree.project.id;
   const [copied, setCopied] = useState(false);
+  /** "Choose parts" open (before a part is picked) */
+  const [choosing, setChoosing] = useState(false);
   const text = fullText(tree);
   const slug = tree.project.title.replace(/[^\p{L}\p{N}]+/gu, "-").toLowerCase() || "lyrics";
   const row = "flex w-full items-center gap-3 rounded-2xl bg-panel px-4 py-3 text-left ring-1 ring-line/60";
@@ -2160,24 +2224,61 @@ function MoreView({
         <div className="space-y-2">
           <p className="label">The song&apos;s vocals</p>
           {vocals.split ? (
-            <div className="flex rounded-full bg-panel-2 p-1" role="radiogroup" aria-label="Play the song">
-              {(
-                [
-                  [false, "Music only"],
-                  [true, "With the vocals"],
-                ] as const
-              ).map(([on, label]) => (
-                <button
-                  key={label}
-                  role="radio"
-                  aria-checked={vocals.on === on}
-                  className={`flex-1 rounded-full py-2 text-sm font-semibold transition-colors ${vocals.on === on ? "bg-panel text-fg shadow-sm" : "text-muted"}`}
-                  onClick={() => vocals.set(on)}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
+            <>
+              <div className="flex rounded-full bg-panel-2 p-1" role="radiogroup" aria-label="Play the song">
+                {(
+                  [
+                    ["all", "Music only"],
+                    ["none", "With vocals"],
+                    ["parts", "Choose parts"],
+                  ] as const
+                ).map(([k, label]) => {
+                  const mode = vocals.off === "all" ? "all" : vocals.off.length === 0 ? "none" : "parts";
+                  const on = mode === k || (k === "parts" && choosing && mode !== "all");
+                  return (
+                    <button
+                      key={k}
+                      role="radio"
+                      aria-checked={on}
+                      className={`flex-1 rounded-full py-2 text-[13px] font-semibold transition-colors ${on ? "bg-panel text-fg shadow-sm" : "text-muted"}`}
+                      onClick={() => {
+                        setChoosing(k === "parts");
+                        if (k === "all") vocals.set("all");
+                        else if (k === "none") vocals.set([]);
+                        else if (vocals.off === "all") vocals.set([]);
+                      }}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+              {(choosing || (vocals.off !== "all" && vocals.off.length > 0)) && (
+                <div className="space-y-1.5">
+                  {tree.sections.map((x) => {
+                    const off = vocals.off !== "all" && vocals.off.includes(x.id);
+                    return (
+                      <button
+                        key={x.id}
+                        className="flex w-full items-center gap-3 rounded-2xl bg-panel px-4 py-2.5 text-left ring-1 ring-line/60"
+                        onClick={() => {
+                          const cur = vocals.off === "all" ? [] : vocals.off;
+                          vocals.set(off ? cur.filter((id) => id !== x.id) : [...cur, x.id]);
+                        }}
+                        role="switch"
+                        aria-checked={off}
+                      >
+                        <span className="flex-1 text-sm font-semibold">{x.name}</span>
+                        <span className={`text-xs ${off ? "font-semibold text-accent" : "text-muted"}`}>{off ? "vocals removed" : "original vocals"}</span>
+                        <span className={`relative h-6 w-10 shrink-0 rounded-full transition-colors ${off ? "bg-accent" : "bg-line"}`}>
+                          <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${off ? "left-[18px]" : "left-0.5"}`} />
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </>
           ) : (
             <button className={row} disabled={vocals.busy} onClick={vocals.separate}>
               <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-panel-2 text-accent">
@@ -2189,7 +2290,7 @@ function MoreView({
               </span>
             </button>
           )}
-          {vocals.split && <p className="px-1 text-xs text-muted">Playing, recording and flows use what you choose here. The vocals are still read for lyrics and flow.</p>}
+          {vocals.split && <p className="px-1 text-xs text-muted">Playing, recording and flows use what you choose here, part by part. The vocals are still read for lyrics and flow.</p>}
         </div>
       )}
       <div className="space-y-2">
@@ -2241,4 +2342,29 @@ function MoreView({
       </button>
     </div>
   );
+}
+
+/**
+ * The song with its vocals taken out where asked: the music without vocals in those stretches, the original
+ * elsewhere, with a short crossfade at each edge.
+ */
+function withoutVocals(ctx: BaseAudioContext, full: AudioBuffer, music: AudioBuffer, off: { start: number; end: number | null }[]): AudioBuffer {
+  if (!off.length) return full;
+  const sr = full.sampleRate;
+  const n = full.length;
+  const out = ctx.createBuffer(full.numberOfChannels, n, sr);
+  const fade = Math.round(0.05 * sr);
+  const mix = new Float32Array(n);
+  for (const r of off) {
+    const a = Math.max(0, Math.round(r.start * sr));
+    const b = Math.min(n, r.end === null || !Number.isFinite(r.end) ? n : Math.round(r.end * sr));
+    for (let i = a; i < b; i++) mix[i] = Math.max(mix[i], Math.min(1, (i - a) / fade + (a === 0 ? 1 : 0), (b - i) / fade + (b === n ? 1 : 0)));
+  }
+  for (let c = 0; c < full.numberOfChannels; c++) {
+    const f = full.getChannelData(c);
+    const m = music.getChannelData(Math.min(c, music.numberOfChannels - 1));
+    const o = out.getChannelData(c);
+    for (let i = 0; i < n; i++) o[i] = mix[i] ? f[i] * (1 - mix[i]) + (m[i] ?? 0) * mix[i] : f[i];
+  }
+  return out;
 }
