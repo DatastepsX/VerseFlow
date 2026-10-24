@@ -100,7 +100,18 @@ shows how many do ("2 · 1 rhyme").
 and the AI rewrites it to the new rhythm — meaning and key words kept ("Ti scrivo piano senza chiedere perché" →
 6 tapped syllables: "Ti scrivo dentro me").
 
-The full editor (`/p/[id]`), the Studio and the phone remote are still there under **More → Advanced**.
+**Record** (tab; `Record.tsx`, `recorder.ts`): your voice for each part on layers (Lead, Double, Ad-libs, + your
+own), over the beat with the part's lyrics following. One big button: count-in (the beats left) → recording →
+stop (the take is saved and used) · "Again" throws the take away and starts over. Every layer keeps its takes:
+▶ play (with the other layers), "Use" the one in the song, delete. On a phone you choose **This phone** or
+**My Mac**: with "My Mac" the phone is the remote for the Mac (its microphone or sound card) — same screen, the Mac
+records. Settings: count-in, click, lyrics size, microphone (+ interface input), headphones (off: the beat from the
+speaker is filtered out), timing (estimated, or measured once). The old `/p/[id]/studio` and `/p/[id]/remote` URLs
+redirect there.
+
+**Appearance** (More): Automatic / Light / Dark, saved on the device (`ThemePicker.tsx`, `data-theme` on `<html>`).
+
+The full editor (`/p/[id]`) is still there under **More → Advanced**.
 
 ## What works today (full editor)
 
@@ -125,18 +136,17 @@ The full editor (`/p/[id]`), the Studio and the phone remote are still there und
   (bar-synchronous timbre/harmony self-similarity). Typing the BPM or ÷2/×2 refits the grid; “🧲 Snap sections to
   the beat” also moves every section start onto the nearest beat change (≤ ~1 bar / 2.5 s) or bar line. Sections
   created from the lyrics start on beat changes too.
-- **Studio — record takes** (`/p/[id]/studio`, Mac + audio interface; `src/lib/studio/`): record vocals per section
-  over the beat on layers (Lead, Double, Ad-libs, + your own), any number of takes, ★ the one to use. One audio
+- **Studio — record takes** (the song app's **Record** tab; `src/lib/studio/`): record vocals per section
+  over the beat on layers (Lead, Double, Ad-libs, + your own), any number of takes, "Use" the one in the song. One audio
   clock drives beat, other layers and the recorder (AudioWorklet, raw input: no echo cancellation / noise
   suppression / auto gain), so takes land on the beat to the sample; count-in (0–2 bars, optional click), auto-stop
-  a bar after the section, latency compensation (reported by the hardware or measured with “Calibrate”: clicks
+  a bar after the section, latency compensation (reported by the hardware or measured once: clicks
   played and recorded back). Takes are 24-bit WAVs in storage (`takes` table, `start_at` = where they start on the
-  beat). Lyrics follow the beat while recording. Keys: R = record the first layer, Space = play / stop.
-- **Phone remote** (`/p/[id]/remote`; on phones 🎚 opens it): controls the studio running on the Mac (sound card +
-  mic stay there) — section ◀ ▶, layer (+ new layer for doubles), ● REC, ■ Stop, ▶ play section / a take, ↻ Retake
-  (replaces the last take; while recording: restarts), ✕ Discard last take, ★ Keep, count-in; the lyrics follow the
-  beat. Commands and the studio's state go through the API with long-polling (`/api/projects/[id]/remote`, tables
-  `studio_commands` / `studio_state`), so the phone needs no direct connection; the studio window just stays open.
+  beat). Lyrics follow the beat while recording. Keys on a computer: R = record, Space = play / stop.
+- **Phone as remote** (Record → My Mac): the computer that records publishes its state and runs the phone's
+  commands (part, layer, record, stop, again, play a take, use, delete, new layer, count-in). Both go through the API
+  with long-polling (`/api/projects/[id]/remote`, tables `studio_commands` / `studio_state`), so the phone needs no
+  direct connection; the Mac just keeps the song open on Record.
 - **Performers** (`src/lib/artists.ts`, `Artists.tsx`): a song's singers / rappers (name, colour, voice/style note) in
   `projects.settings.artists`; sections list who performs them (`sections.artists`, several allowed — e.g. a chorus
   sung by two). 🎤 next to a section name assigns them, and they carry on to the following sections until a section gets

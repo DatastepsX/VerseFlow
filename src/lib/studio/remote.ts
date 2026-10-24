@@ -1,6 +1,6 @@
 /**
- * Phone remote ⇄ studio (Mac). The phone sends commands; the studio runs
- * them (it owns the audio interface) and publishes its state. Both go
+ * Record on "My Mac": the phone sends commands; the Mac runs them (it owns
+ * the audio interface and the microphone) and publishes its state. Both go
  * through the app's API (long-polling), no direct connection needed.
  */
 
@@ -10,6 +10,7 @@ export type RemoteCmd =
   | { t: "retake"; lane: string }
   | { t: "discardLast"; lane: string }
   | { t: "choose"; takeId: string }
+  | { t: "delete"; takeId: string }
   | { t: "play" }
   | { t: "playTake"; takeId: string }
   | { t: "stop" }
@@ -22,6 +23,8 @@ export interface RemoteTake {
   take_no: number;
   chosen: boolean;
   duration: number;
+  /** a small waveform (0..1) */
+  peaks?: number[];
 }
 
 export interface RemoteState {
@@ -40,6 +43,14 @@ export interface RemoteState {
   takes: RemoteTake[];
   countIn: number;
   error: string | null;
+  /** which page publishes (a phone ignores a state that isn't from the recording device) */
+  host?: string;
+  /** "Mac", "PC"… — shown on the phone */
+  device?: string;
+  /** the take being played */
+  playingTake?: string | null;
+  /** beats left in the count-in */
+  beatsLeft?: number | null;
 }
 
 /** the last take of a layer (highest number) — what "retake" / "discard" act on */

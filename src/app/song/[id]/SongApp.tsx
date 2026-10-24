@@ -17,6 +17,7 @@ import { followTo } from "@/components/writer/follow";
 import { download, fullText } from "@/components/writer/util";
 import { VoiceSheet, type VoiceInfo } from "./VoiceSheet";
 import { ThemePicker } from "@/components/ThemePicker";
+import { RecordView } from "./Record";
 import { TapFlow } from "./TapFlow";
 import { FlowSheet, type SheetAudio } from "./FlowSheet";
 import { exampleWords } from "@/lib/flow/example";
@@ -40,17 +41,16 @@ import {
   Music,
   Pause,
   Pencil,
-  Phone,
   Play,
   Plus,
   Shuffle,
-  Sliders,
   Sparkles,
   Trash,
   User,
+  Waveform,
 } from "@/components/icons";
 
-type View = "flow" | "lyrics" | "more";
+export type View = "flow" | "lyrics" | "record" | "more";
 type LyricLine = Line & { alternatives: ProjectTree["sections"][number]["lines"][number]["alternatives"] };
 
 const STEPS: { key: FlowStep; label: string }[] = [
@@ -75,7 +75,18 @@ const VOCAL_STEPS: { key: FlowStep; label: string }[] = [
  * → a first version of the lyrics, written to your rhythm and your words →
  * go through it bar by bar: keep, next option, new options, edit, remove.
  */
-export function SongApp({ initialTree, autoDetect = false }: { initialTree: ProjectTree; autoDetect?: boolean }) {
+export function SongApp({
+  initialTree,
+  autoDetect = false,
+  initialView,
+  recordOn,
+}: {
+  initialTree: ProjectTree;
+  autoDetect?: boolean;
+  initialView?: View;
+  /** ?on=mac: Record opens as the remote for the Mac */
+  recordOn?: "here" | "mac";
+}) {
   const router = useRouter();
   const [tree, setTree] = useState(initialTree);
   const pid = tree.project.id;
@@ -86,7 +97,9 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
   const sectionIds = new Set(tree.sections.map((s) => s.id));
   const wholeFlow = [...tree.takes].reverse().find((t) => t.lane === "Flow" && t.chosen && !t.section_id) ?? null;
   const flowTakes = [...(wholeFlow ? [wholeFlow] : []), ...tree.takes.filter((t) => t.lane === "Flow" && t.chosen && t.section_id && sectionIds.has(t.section_id))];
-  const [view, setView] = useState<View>(hasLines ? "lyrics" : "flow");
+  const [view, setView] = useState<View>(initialView ?? (hasLines ? "lyrics" : "flow"));
+  /** a take is being recorded on this device: the tabs wait */
+  const [recBusy, setRecBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const call = async (path: string, body?: unknown, method = "POST") => {
@@ -1278,6 +1291,34 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
           </div>
         )}
 
+        {/* ----- RECORD ----- */}
+        {view === "record" &&
+          (tree.audio ? (
+            <RecordView
+              tree={tree}
+              setTree={setTree}
+              engine={engine}
+              beat={beat}
+              beatReady={beatReady}
+              bar={bar}
+              beatLength={tree.audio.bpm ? 60 / tree.audio.bpm : bar / 4}
+              rangeOf={(id) => {
+                const s = tree.sections.find((x) => x.id === id);
+                return s ? partRange(s) : null;
+              }}
+              timeline={timeline}
+              initialOn={recordOn}
+              onBusy={setRecBusy}
+            />
+          ) : (
+            <div className="mt-16 text-center">
+              <p className="text-muted">Upload your beat first — then record your voice on it, part by part.</p>
+              <button className="btn-primary mt-4 rounded-full px-5 py-2.5" onClick={() => setView("flow")}>
+                Upload a beat
+              </button>
+            </div>
+          ))}
+
         {/* ----- MORE ----- */}
         {view === "more" && (
           <MoreView
@@ -1339,14 +1380,15 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
       <nav className="fixed inset-x-0 bottom-0 z-30 mx-auto flex max-w-lg border-t border-line/70 bg-panel/90 px-2 pb-[env(safe-area-inset-bottom)] backdrop-blur-xl">
         {(
           [
-            ["flow", Mic, "Flow"],
+            ["flow", Waveform, "Flow"],
             ["lyrics", Lyrics, "Lyrics"],
+            ["record", Mic, "Record"],
             ["more", Ellipsis, "More"],
           ] as const
         ).map(([v, Icon, label]) => (
           <button
             key={v}
-            disabled={rec !== null}
+            disabled={rec !== null || recBusy}
             className={`flex flex-1 flex-col items-center gap-1 pb-2 pt-2.5 text-[11px] font-semibold transition-colors ${view === v ? "text-accent" : "text-muted"}`}
             onClick={() => {
               if (playing) stopPlay();
@@ -1863,22 +1905,6 @@ function MoreView({
           <span className="flex-1">
             Full editor
             <span className="block text-xs text-muted">sections, rhymes, patterns, performers, history</span>
-          </span>
-          <ChevronRight className="h-4 w-4 text-muted" />
-        </Link>
-        <Link href={`/p/${pid}/studio`} className={row}>
-          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-panel-2 "><Sliders className="h-[18px] w-[18px]" /></span>
-          <span className="flex-1">
-            Studio
-            <span className="block text-xs text-muted">record vocal takes on a Mac with your sound card</span>
-          </span>
-          <ChevronRight className="h-4 w-4 text-muted" />
-        </Link>
-        <Link href={`/p/${pid}/remote`} className={row}>
-          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-panel-2 "><Phone className="h-[18px] w-[18px]" /></span>
-          <span className="flex-1">
-            Remote
-            <span className="block text-xs text-muted">control the Studio on your Mac from this phone</span>
           </span>
           <ChevronRight className="h-4 w-4 text-muted" />
         </Link>

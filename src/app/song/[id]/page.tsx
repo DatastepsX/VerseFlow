@@ -20,7 +20,11 @@ async function SongView({
 }) {
   const { id } = await params;
   // ?detect=1 (a new song with a track): check whether the track has lyrics; if so, read them and the flow right away
-  const autoDetect = (await searchParams).detect === "1";
+  const q = await searchParams;
+  const autoDetect = q.detect === "1";
+  // ?view=record (&on=mac: this phone is the remote for the Mac)
+  const view = (["flow", "lyrics", "record", "more"] as const).find((v) => v === q.view);
+  const on = q.on === "mac" ? "mac" : undefined;
   let tree;
   try {
     tree = await getTree(id);
@@ -28,5 +32,5 @@ async function SongView({
     if (e instanceof NotFound || (e instanceof Error && /invalid input syntax/.test(e.message))) notFound();
     throw e;
   }
-  return <SongApp initialTree={tree} autoDetect={autoDetect} />;
+  return <SongApp initialTree={tree} autoDetect={autoDetect} initialView={view} recordOn={on} />;
 }
