@@ -17,8 +17,11 @@ import type {
   ProjectType,
   ProjectVersion,
   Section,
+  FlowPattern,
+  SongFlow,
   Take,
 } from "@/lib/types";
+import { barsPerLine, lineFlowFrom, nextFlowName } from "@/lib/flow/pattern";
 
 const TAKE_COLS = "id, section_id, lane, take_no, start_at, duration, sample_rate, peaks, chosen, created_at";
 const LINE_COLS = "id, project_id, section_id, position, text, status, kind, note, audio_at, flow, updated_at";
@@ -85,7 +88,7 @@ export async function createProject(input: {
 }
 
 export async function getTree(projectId: string): Promise<ProjectTree> {
-  const [p, s, l, a, b, u, au, tk] = await Promise.all([
+  const [p, s, l, a, b, u, au, tk, fl] = await Promise.all([
     db().from("projects").select("*").eq("id", projectId).maybeSingle(),
     db().from("sections").select("*").eq("project_id", projectId).order("position"),
     db().from("lines").select(LINE_COLS).eq("project_id", projectId).eq("deleted", false).order("position"),
@@ -109,6 +112,7 @@ export async function getTree(projectId: string): Promise<ProjectTree> {
       .eq("project_id", projectId)
       .maybeSingle(),
     db().from("takes").select(TAKE_COLS).eq("project_id", projectId).order("created_at"),
+    db().from("flows").select("id, name, pattern, created_at").eq("project_id", projectId).order("created_at"),
   ]);
   const project = check(p) as Project | null;
   if (!project) throw new NotFound("Project not found");
@@ -137,6 +141,7 @@ export async function getTree(projectId: string): Promise<ProjectTree> {
     usage,
     audio: check(au) as AudioTrack | null,
     takes: check(tk) as Take[],
+    flows: check(fl) as SongFlow[],
   };
 }
 
@@ -1320,6 +1325,95 @@ export async function buildFlowPart(projectId: string, sectionId: string, lines:
   }[];
   await insertFlowRows(projectId, flowRows(projectId, section.id, sung, "flow", medianStep(sung.map((l) => l.start)), (last[0]?.position ?? 0) + 1));
   await touch(projectId);
+}
+
+// ---------- song flows: patterns of 2 or 4 lines a part follows ----------
+
+export async function createFlow(projectId: string, pattern: FlowPattern) {
+  const taken = (check(await db().from("flows").select("name").eq("project_id", projectId)) as { name: string }[]).map((f) => f.name);
+  const row = check(await db().from("flows").insert({ project_id: projectId, name: nextFlowName(taken), pattern }).select("id, name, pattern, created_at").single()) as SongFlow;
+  await touch(projectId);
+  return row;
+}
+
+export async function updateFlow(projectId: string, flowId: string, pattern: FlowPattern) {
+  check(await db().from("flows").update({ pattern }).eq("id", flowId).eq("project_id", projectId));
+  await touch(projectId);
+}
+
+/**
+ * A part — or, from a line on, the stretch of it that follows one flow —
+ * gets the flow: its lines are laid out again, one per bar (or per pattern
+ * line length), each following its pattern line. The lines' earlier texts
+ * become drafts to rewrite; where the flow is used first and its words were
+ * written, they become the lyrics (kept). A version is saved first.
+ * Returns the ids of the new lines without text (to be written).
+ */
+export async function applyFlow(projectId: string, flowId: string, sectionId: string, fromLineId: string | null, withText: boolean) {
+  const tree = await getTree(projectId);
+  const flow = tree.flows.find((f) => f.id === flowId);
+  const sIdx = tree.sections.findIndex((s) => s.id === sectionId);
+  const section = tree.sections[sIdx];
+  if (!flow || !section) throw new NotFound("Flow or part not found");
+  const audio = tree.audio;
+  if (!audio?.bpm) throw new Error("The beat needs a tempo for flows.");
+  const bar = ((audio.beats_per_bar ?? 4) * 60) / audio.bpm;
+  const origin = audio.beat_offset ?? 0;
+  const barLine = (t: number) => origin + Math.max(0, Math.round((t - origin) / bar)) * bar;
+  const lyric = section.lines.filter((l) => l.kind === "lyric");
+  const nextStart = tree.sections.slice(sIdx + 1).find((x) => x.audio_start !== null)?.audio_start ?? audio.duration ?? null;
+  const partStart = section.audio_start ?? lyric[0]?.audio_at ?? origin;
+  const partEnd = nextStart ?? partStart + 8 * bar;
+  // the stretch: the whole part, or from a line to where the flow it follows changes
+  const from = fromLineId ? lyric.findIndex((l) => l.id === fromLineId) : 0;
+  if (from < 0) throw new NotFound("Line not found");
+  let to = lyric.length;
+  if (fromLineId) {
+    const current = lyric[from].flow?.flowId;
+    const change = lyric.findIndex((l, k) => k > from && l.flow?.flowId !== current);
+    if (current && change > 0) to = change;
+  }
+  const start = barLine(fromLineId ? (lyric[from].audio_at ?? partStart) : partStart);
+  const end = to < lyric.length ? barLine(lyric[to].audio_at ?? partEnd) : partEnd;
+  const old = lyric.slice(from, to);
+  const per = barsPerLine(flow.pattern) * bar;
+  const n = Math.max(1, Math.floor((end - start) / per + 0.3));
+  if (old.some((l) => l.text.trim())) await saveVersion(projectId, `Before ${flow.name} in ${section.name}`);
+  for (const l of old) await deleteLine(l.id);
+  // where the flow is used for the first time, the written words are the lyrics
+  const firstUse = withText && !tree.sections.some((s) => s.lines.some((l) => l.flow?.flowId === flowId && !old.includes(l)));
+  const written = old.filter((l) => l.text.trim());
+  const rows = Array.from({ length: n }, (_, i) => {
+    const pl = flow.pattern.lines[i % flow.pattern.lines.length];
+    const lf = lineFlowFrom(flow.pattern, i, start + i * per, bar, flowId);
+    const own = firstUse && i < flow.pattern.lines.length && pl.written && pl.text.trim();
+    // the earlier lyrics, in order, to rewrite to the new flow
+    const draft = written.length ? written[Math.min(written.length - 1, Math.floor((i * written.length) / n))].text : undefined;
+    return {
+      project_id: projectId,
+      section_id: section.id,
+      position: 0,
+      text: own ? pl.text.trim() : "",
+      status: (own ? "APPROVED" : "OPEN") as LineStatus,
+      kind: "lyric",
+      audio_at: lf.times?.[0] ?? start + i * per,
+      flow: { ...lf, ...(!own && draft ? { draft } : {}) },
+    };
+  });
+  // positions: the stretch's place in the part (the lines after it move down)
+  const before = lyric.slice(0, from);
+  const after = lyric.slice(to);
+  const base = (before[before.length - 1]?.position ?? 0) + 1;
+  rows.forEach((r, i) => (r.position = base + i));
+  for (const [k, l] of after.entries()) check(await db().from("lines").update({ position: base + n + k }).eq("id", l.id));
+  await insertFlowRows(projectId, rows);
+  await touch(projectId);
+  const fresh = check(await db().from("lines").select("id, text, flow").eq("section_id", section.id).eq("deleted", false)) as {
+    id: string;
+    text: string;
+    flow: LineFlow | null;
+  }[];
+  return fresh.filter((l) => l.flow?.flowId === flowId && !l.text.trim()).map((l) => l.id);
 }
 
 /**

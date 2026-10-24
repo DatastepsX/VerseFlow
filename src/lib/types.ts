@@ -159,6 +159,8 @@ export interface ProjectTree {
   audio: AudioTrack | null;
   /** recorded vocal takes */
   takes: Take[];
+  /** the song's flows (patterns parts follow) */
+  flows: SongFlow[];
 }
 
 /** a recorded vocal take of a section on one layer (Lead, Double, Ad-libs…) */
@@ -211,4 +213,43 @@ export interface LineFlow {
   pair?: 0 | 1 | 2;
   /** the line's text before a new flow was set for its part: rewritten to the new rhythm (meaning and key words kept) */
   draft?: string;
+  /** the song flow this line follows (flows table), which of its pattern lines, and its rhyme scheme */
+  flowId?: string;
+  patternLine?: number;
+  scheme?: "AABB" | "ABAB";
+}
+
+/** one line of a flow pattern: its syllables as written, sung or tapped */
+export interface PatternLine {
+  /** the words (written, or example words) */
+  text: string;
+  /** the writer wrote these words: they become the lyrics where the flow is first used */
+  written: boolean;
+  syllables: number;
+  /** stressed syllables, 1-based */
+  stress: number[];
+  /** long (held) syllables, 1-based */
+  long: number[];
+  /** a pause after these syllables, 1-based */
+  pauses: number[];
+  /** where each syllable starts, seconds from the bar line */
+  offsets: number[];
+}
+
+/** a flow: 2 or 4 pattern lines that repeat through a part (or a stretch of it) */
+export interface FlowPattern {
+  lines: PatternLine[];
+  /** 4 lines: two couplets (AABB) or crossed (ABAB) */
+  scheme: "AABB" | "ABAB";
+  /** the bar length (s) the offsets were made for */
+  bar: number;
+  source: "write" | "sing" | "tap" | "both";
+}
+
+export interface SongFlow {
+  id: string;
+  /** "Flow A", "Flow B"… */
+  name: string;
+  pattern: FlowPattern;
+  created_at: string;
 }

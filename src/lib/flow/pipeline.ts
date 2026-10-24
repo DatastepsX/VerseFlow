@@ -21,13 +21,16 @@ async function post<T>(url: string, body: unknown): Promise<T> {
   return data;
 }
 
-/** ~FLOW_CHUNK lines per AI call, never splitting a couplet (both lines are written together, rhyming) */
+/** ~FLOW_CHUNK lines per AI call, never splitting a couplet or an ABAB group (they are written together, rhyming) */
 export function chunkLines(lines: Pick<Line, "id" | "flow">[]): string[][] {
   const chunks: string[][] = [];
   let cur: string[] = [];
   lines.forEach((l, k) => {
     cur.push(l.id);
-    if (cur.length >= FLOW_CHUNK && !(l.flow?.pair === 1 && lines[k + 1]?.flow?.pair === 2)) {
+    const next = lines[k + 1];
+    // never between the two lines of a couplet, nor inside a crossed (ABAB) group of 4
+    const together = (l.flow?.pair === 1 && next?.flow?.pair === 2) || (next?.flow?.scheme === "ABAB" && (next.flow.patternLine ?? 0) > 0);
+    if (cur.length >= FLOW_CHUNK && !together) {
       chunks.push(cur);
       cur = [];
     }

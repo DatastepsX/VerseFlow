@@ -54,6 +54,17 @@ ElevenLabs plan and the key's "Text to Speech" + "Voices" permissions; table `vo
 - **🗣 on** in the player: the whole song in your voice with the beat (asks first when lines still need a call).
 It's a demo-quality guide for hearing whether lyrics fit — rap works best; it doesn't sing melodies.
 
+**Flows** (the **Flow** button on each part, "Flow from here" on an opened line, "Set the flow" on an empty part, and
+"Flow part by part" on the Flow tab): a flow is a pattern of **2 or 4 lines** (4: AABB or ABAB) that the part — or,
+from a line on, the stretch until the next flow change — follows, one line per bar. Made by **Write** (the default:
+type the lines; each syllable is a chip — tap: stressed, hold: long note, “+” between two: a pause), **Sing**, **Tap**
+or **Sing+tap** (the part's first 2 or 4 bars after a count-in bar; example words until you write your own). Always
+shown as text first; **Listen** plays the bars with clicks; **Use** lays the lines out again (`applyFlow`): your
+written lines are the first lines (kept), the rest are written by the AI in the flow, rhyming (1 call per 8 lines);
+earlier lyrics become drafts to rewrite. Every flow gets a name (Flow A, B…) and is in the list at the top of the
+sheet, to reuse in any part (its rhythm). A change within a part shows a "Flow B from here" marker. Data: table
+`flows` (`tree.flows`), `lines.flow.flowId / patternLine / scheme`; logic in `src/lib/flow/pattern.ts`.
+
 **Sing + tap** (Flow tab, third option): you sing or rap while you tap. The taps decide the number of syllables and
 (with "Next line") the lines; the voice moves each tap onto the syllable sung there (±0.12 s), gives its stress, and the
 recognised words go to the AI (`processTaps` with a recording).

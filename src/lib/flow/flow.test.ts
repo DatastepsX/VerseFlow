@@ -6,6 +6,7 @@ import { dropSounds, isSound } from "./fillers";
 import { cycle, flowFromGrid, gridFor, quantizeTaps } from "./grid";
 import { exampleWords } from "./example";
 import { coupletsOf } from "./couplets";
+import { barsPerLine, chipsOf, lineFlowFrom, lineFromText, linesFromOnsets, nextFlowName, relayout } from "./pattern";
 import { prosody } from "@/lib/rhyme/prosody";
 import { emptyParts, vocalLines } from "./vocals";
 
@@ -273,5 +274,44 @@ test("couplets: as sung, and every line left over paired with the next", () => {
       [0, 1],
       [2, 3],
     ],
+  );
+});
+
+test("flow patterns: written lines → chips and timing; sung/tapped bars → lines; repeated over a part", () => {
+  const bar = 2; // 120 bpm
+  // written: "Ti scrivo dentro me" — 6 syllables, natural stresses, the last one long
+  const w = lineFromText("Ti scrivo dentro me", "it", bar);
+  assert.deepEqual(chipsOf("Ti scrivo dentro me", "it"), ["Ti", "scri", "vo", "den", "tro", "me"]);
+  assert.equal(w.syllables, 6);
+  assert.deepEqual(w.stress, [2, 4, 6]);
+  assert.deepEqual(w.offsets, [0, 0.25, 0.5, 0.75, 1, 1.25]); // 8th notes
+  // a long syllable and a pause move what follows
+  const shaped = relayout({ ...w, long: [2, 6], pauses: [3] }, bar);
+  assert.deepEqual(shaped.offsets, [0, 0.25, 0.75, 1.25, 1.5, 1.75]);
+  // editing the words with the same count keeps what was set
+  assert.deepEqual(lineFromText("Ti canto dentro me", "it", bar, shaped).offsets, shaped.offsets);
+  // tapped: 2 bars from 10 s
+  const onsets = [10, 10.5, 10.75, 11, 12, 12.25, 12.5].map((t) => ({ t }));
+  const lines = linesFromOnsets(onsets, 10, bar, 2, "it");
+  assert.deepEqual(
+    lines.map((l) => l.syllables),
+    [4, 3],
+  );
+  assert.deepEqual(lines[0].stress, [1, 2, 4]);
+  assert.equal(prosody(lines[0].text, "it").syllables, 4, "example words of the same length");
+  // applied: line 3 follows pattern line 1, a couplet again
+  const pattern = { lines: [w, shaped], scheme: "AABB" as const, bar, source: "write" as const };
+  const f = lineFlowFrom(pattern, 2, 20, bar, "flow-1");
+  assert.deepEqual([f.patternLine, f.pair, f.syllables, f.times?.[1]], [0, 1, 6, 20.25]);
+  assert.equal(barsPerLine(pattern), 1);
+  assert.equal(nextFlowName(["Flow A", "Flow B"]), "Flow C");
+});
+
+test("ABAB: lines 1+3 and 2+4 rhyme", () => {
+  const L = (k: number) => ({ id: `l${k}`, flow: { syllables: 8, stress: [], held: false, words: "", flowId: "f", patternLine: k % 4, scheme: "ABAB" as const } });
+  const lines = [0, 1, 2, 3, 4, 5, 6, 7].map(L);
+  assert.deepEqual(
+    coupletsOf(lines).map(([a, b]) => `${a.id}+${b.id}`),
+    ["l0+l2", "l1+l3", "l4+l6", "l5+l7"],
   );
 });

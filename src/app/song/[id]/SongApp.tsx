@@ -17,6 +17,7 @@ import { followTo } from "@/components/writer/follow";
 import { download, fullText } from "@/components/writer/util";
 import { VoiceSheet, type VoiceInfo } from "./VoiceSheet";
 import { TapFlow } from "./TapFlow";
+import { FlowSheet, type SheetAudio } from "./FlowSheet";
 import { exampleWords } from "@/lib/flow/example";
 import { coupletsOf } from "@/lib/flow/couplets";
 import { analyzeLine, compareLines } from "@/lib/rhyme/analyze";
@@ -478,13 +479,6 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
     const lyric = s.lines.filter((l) => l.kind === "lyric");
     return lyric.length > 0 && lyric.every((l) => !l.text.trim() && !l.flow);
   };
-  const recordPart = (s: ProjectTree["sections"][number], mode?: "sing" | "tap") => {
-    stopPlay();
-    if (mode) setFlowMode(mode);
-    setPart({ sectionId: s.id, name: s.name, ...partRange(s) });
-    setView("flow");
-    window.scrollTo(0, 0);
-  };
 
   // ---------- the parts bar: where you are, tap to jump ----------
   const [activePart, setActivePart] = useState<string | null>(null);
@@ -573,6 +567,67 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
     const out = (e.ctx as AudioContext & { outputLatency?: number }).outputLatency || e.ctx.baseLatency || 0;
     return e.position() - out;
   }, []);
+
+  // ---------- flows: a part (or a stretch of it) follows a pattern of 2 or 4 lines ----------
+  const [flowSheet, setFlowSheet] = useState<{ sectionId: string; fromLineId: string | null; flowId: string | null } | null>(null);
+  /** where a flow would apply: from the part's (or the line's) bar line to where the part — or the flow it follows — ends */
+  const stretchOf = (s: ProjectTree["sections"][number], fromLineId: string | null) => {
+    const lyric = s.lines.filter((l) => l.kind === "lyric");
+    const r = partRange(s);
+    const origin = tree.audio?.beat_offset ?? 0;
+    const barLine = (t: number) => origin + Math.max(0, Math.round((t - origin) / bar)) * bar;
+    const from = fromLineId ? Math.max(0, lyric.findIndex((l) => l.id === fromLineId)) : 0;
+    const current = fromLineId ? lyric[from]?.flow?.flowId : undefined;
+    const change = current ? lyric.findIndex((l, k) => k > from && l.flow?.flowId !== current) : -1;
+    const start = barLine(fromLineId ? (lyric[from]?.audio_at ?? r.start) : r.start);
+    const end = change > 0 ? barLine(lyric[change].audio_at ?? r.end) : r.end;
+    return { start, end, lines: Math.max(1, Math.floor((end - start) / bar + 0.3)), lineNo: from + 1 };
+  };
+  const flowsUsed = tree.flows.map((f) => ({
+    ...f,
+    usedIn: tree.sections.filter((s) => s.lines.some((l) => l.flow?.flowId === f.id)).map((s) => s.name),
+  }));
+  const sheetAudio: SheetAudio = {
+    play: (from, until, clicks) => void play(from, until, { guide: [], flow: false, clicks }),
+    stop: () => stopPlay(),
+    songTime,
+    armMic: async () => {
+      await engine.current?.arm(undefined, { voiceProcessing: !headphones });
+    },
+    startRec: () => engine.current?.startRecording(),
+    stopRec: async (keepFrom) => {
+      const e = engine.current;
+      if (!e?.armed) return [];
+      const r = await e.stopRecording(e.reportedLatency, 0, keepFrom);
+      e.disarm();
+      if (!r) return [];
+      return detectSyllables(r.samples, r.sampleRate).map((x) => ({ t: x.t + r.startAt, strength: x.strength }));
+    },
+  };
+  const useFlow = async (use: { flowId: string } | { pattern: import("@/lib/types").FlowPattern }) => {
+    if (!flowSheet) return;
+    const post = async <T,>(body: unknown): Promise<T> => {
+      const res = await fetch(`/api/projects/${pid}/flows`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      const data = (await res.json().catch(() => ({}))) as T & { error?: string };
+      if (!res.ok) throw new Error(data.error ?? "Something went wrong");
+      return data;
+    };
+    let flowId = "flowId" in use ? use.flowId : null;
+    if (!flowId) flowId = (await post<{ flow: { id: string } }>({ action: "create", pattern: (use as { pattern: unknown }).pattern })).flow.id;
+    const out = await post<{ tree: ProjectTree; write: string[] }>({ action: "apply", flowId, sectionId: flowSheet.sectionId, fromLineId: flowSheet.fromLineId, withText: true });
+    setTree(out.tree);
+    setFlowSheet(null);
+    // the new lines without words: written in the flow (1 call per ~8 lines)
+    const write = new Set(out.write);
+    const sec = out.tree.sections.find((x) => x.id === flowSheet.sectionId);
+    const todo = sec ? sec.lines.filter((l) => write.has(l.id)) : [];
+    if (todo.length) {
+      await lineAction(flowSheet.sectionId, async () => {
+        for (const ids of chunkLines(todo)) await call(`/api/projects/${pid}/flow`, { action: "suggest", lineIds: ids });
+      });
+    }
+  };
+
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const lineAction = async (id: string, fn: () => Promise<unknown>) => {
@@ -755,6 +810,34 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
           <div className="flex flex-col items-center text-center">
             {rec === null && (
               <>
+                {/* the song's flow, part by part */}
+                {!part && beatGrid && hasLines && (
+                  <div className="mb-6 w-full text-left">
+                    <p className="label">Flow part by part</p>
+                    <div className="space-y-1.5">
+                      {tree.sections
+                        .filter((x) => x.lines.some((l) => l.kind === "lyric"))
+                        .map((x) => {
+                          const names = [...new Set(x.lines.map((l) => tree.flows.find((f) => f.id === l.flow?.flowId)?.name).filter(Boolean))] as string[];
+                          return (
+                            <button
+                              key={x.id}
+                              className="flex w-full items-center gap-3 rounded-2xl bg-panel px-4 py-2.5 text-left ring-1 ring-line/60"
+                              onClick={() => setFlowSheet({ sectionId: x.id, fromLineId: null, flowId: x.lines.find((l) => l.flow?.flowId)?.flow?.flowId ?? null })}
+                            >
+                              <span className="min-w-0 flex-1">
+                                <span className="block text-sm font-semibold">{x.name}</span>
+                                <PartLength range={partRange(x)} bar={bar} />
+                              </span>
+                              <span className={`text-xs font-semibold ${names.length ? "text-accent" : "text-muted"}`}>{names.length ? names.join(" · ") : "no flow yet"}</span>
+                              <ChevronRight className="h-4 w-4 text-muted" />
+                            </button>
+                          );
+                        })}
+                    </div>
+                    <p className="label mt-6">Or record the whole song at once</p>
+                  </div>
+                )}
                 {/* sing it or tap it */}
                 <div className="mb-5 flex w-full rounded-full bg-panel-2 p-1" role="tablist">
                   {(
@@ -1022,14 +1105,14 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
                       <p className="text-sm">
                         <b>{lines.length} lines to write</b>
                       </p>
-                      <div className="grid grid-cols-2 gap-2">
-                        <button className="btn-primary justify-center rounded-2xl py-3 text-[15px]" onClick={() => recordPart(s, "sing")}>
-                          <Mic className="h-[18px] w-[18px]" /> Sing it
-                        </button>
-                        <button className="btn-primary justify-center rounded-2xl py-3 text-[15px]" onClick={() => recordPart(s, "tap")}>
-                          <Hand className="h-[18px] w-[18px]" /> Tap it
-                        </button>
-                      </div>
+                      <button
+                        className="btn-primary w-full justify-center rounded-2xl py-3 text-[15px] disabled:opacity-50"
+                        disabled={!beatGrid}
+                        onClick={() => setFlowSheet({ sectionId: s.id, fromLineId: null, flowId: null })}
+                      >
+                        <AudioLines className="h-[18px] w-[18px]" /> Set the flow
+                        <span className="text-xs font-normal opacity-80">write · sing · tap</span>
+                      </button>
                       <div className="flex gap-2">
                         <button className="btn flex-1 justify-center rounded-2xl border-0 py-2.5 text-sm" disabled={!beatReady} onClick={() => void play(Math.max(0, r.start - bar), r.end)}>
                           <Play className="h-4 w-4" /> Listen
@@ -1057,24 +1140,49 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
                   <h3 className="mb-2 flex items-center gap-2 px-1">
                     <span className="text-lg font-bold tracking-tight">{s.name}</span>
                     <PartLength range={partRange(s)} bar={beatGrid ? bar : null} />
-                    {tree.audio && (
+                    {busyLine === s.id && (
+                      <span className="flex shrink-0 items-center gap-1 text-xs font-semibold text-accent">
+                        <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-accent border-r-transparent" /> Writing lyrics…
+                      </span>
+                    )}
+                    {beatGrid && (
                       <button
-                        className="flex items-center gap-1 rounded-full bg-panel-2 px-2.5 py-1 text-xs font-semibold text-accent"
-                        onClick={() => recordPart(s)}
-                        title="Record a new flow for this part only"
+                        className="flex shrink-0 items-center gap-1 rounded-full bg-panel-2 px-2.5 py-1 text-xs font-semibold text-accent"
+                        onClick={() => setFlowSheet({ sectionId: s.id, fromLineId: null, flowId: lines[0]?.flow?.flowId ?? null })}
+                        title="The flow of this part: write, sing or tap it"
                       >
-                        <Mic className="h-3.5 w-3.5" /> New flow
+                        <AudioLines className="h-3.5 w-3.5" />
+                        {[...new Set(lines.map((l) => tree.flows.find((f) => f.id === l.flow?.flowId)?.name).filter(Boolean))].map((n) => (n as string).replace("Flow ", "")).join(" · ") ? (
+                          <>Flow {[...new Set(lines.map((l) => tree.flows.find((f) => f.id === l.flow?.flowId)?.name).filter(Boolean))].map((n) => (n as string).replace("Flow ", "")).join(" · ")}</>
+                        ) : (
+                          "Flow"
+                        )}
                       </button>
                     )}
                   </h3>
                   <div className="space-y-2.5">
-                    {couplets(lines).map((group) => {
-                      const off = group.length > 1 && !rhymesWell(group[0].text, group[1].text, lang);
+                    {rhymeGroups(lines).map(({ lines: group, pairs }) => {
+                      const bad = pairs.find(([a, b]) => !rhymesWell(a.text, b.text, lang));
+                      const off = !!bad;
+                      const idx = lines.indexOf(group[0]);
+                      // a new flow starts here (within the part)
+                      const flowStart = idx > 0 && group[0].flow?.flowId && group[0].flow.flowId !== lines[idx - 1].flow?.flowId ? tree.flows.find((f) => f.id === group[0].flow?.flowId) : null;
                       return (
-                      <div key={group[0].id} className={group.length > 1 ? `border-l-2 pl-1 ${off ? "border-warn/60" : "border-accent/30"}` : "pl-[6px]"} title={group.length > 1 ? "A couplet: these two lines rhyme" : undefined}>
+                      <div key={group[0].id}>
+                      {flowStart && (
+                        <button
+                          className="mb-1.5 ml-1 flex items-center gap-1.5 rounded-full bg-accent-soft px-2.5 py-0.5 text-[11px] font-semibold text-accent"
+                          onClick={() => setFlowSheet({ sectionId: s.id, fromLineId: group[0].id, flowId: flowStart.id })}
+                          title="The flow changes here — tap to change it"
+                        >
+                          <AudioLines className="h-3 w-3" /> {flowStart.name} from here
+                        </button>
+                      )}
+                      <div className={group.length > 1 ? `border-l-2 pl-1 ${off ? "border-warn/60" : "border-accent/30"}` : "pl-[6px]"} title={group.length > 1 ? (group.length === 4 ? "Lines 1+3 and 2+4 rhyme" : "A couplet: these two lines rhyme") : undefined}>
                         {group.map((l) => {
-                          // the couplet's other line, as it is now: options are picked to rhyme with it
-                          const partner = group.length > 1 ? (group.find((x) => x.id !== l.id) as LyricLine) : null;
+                          // the line it rhymes with, as it is now: options are picked to rhyme with it
+                          const pr = pairs.find(([a, b]) => a.id === l.id || b.id === l.id);
+                          const partner = pr ? ((pr[0].id === l.id ? pr[1] : pr[0]) as LyricLine) : null;
                           const rhyming = partner?.text.trim() ? l.alternatives.filter((x) => rhymeScore(partner.text, x.text, lang) >= RHYMES) : [];
                           return (
                           <LineCard
@@ -1127,6 +1235,7 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
                             songTime={songTime}
                             open={openLine === l.id}
                             onToggle={() => setOpenLine(openLine === l.id ? null : l.id)}
+                            onFlowFromHere={beatGrid ? () => setFlowSheet({ sectionId: s.id, fromLineId: l.id, flowId: l.flow?.flowId ?? null }) : undefined}
                             onSaveGrid={(flow, write) =>
                               void lineAction(l.id, async () => {
                                 setGridLine(null);
@@ -1143,20 +1252,21 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
                           />
                           );
                         })}
-                        {off && (
+                        {bad && (
                           <div className="ml-2 mt-0.5 flex items-center gap-2 rounded-xl bg-warn-soft px-2.5 py-1 text-[11px] text-warn">
                             <span className="flex-1">
-                              “{lastWordOf(group[0].text)}” and “{lastWordOf(group[1].text)}” don&apos;t rhyme
+                              “{lastWordOf(bad[0].text)}” and “{lastWordOf(bad[1].text)}” don&apos;t rhyme
                             </span>
                             <button
                               className="flex shrink-0 items-center gap-1 rounded-full bg-panel px-2.5 py-1 font-semibold text-accent disabled:opacity-50"
-                              disabled={busyLine === group[1].id}
-                              onClick={() => void makeItRhyme(group[0] as LyricLine, group[1] as LyricLine)}
+                              disabled={busyLine === bad[1].id}
+                              onClick={() => void makeItRhyme(bad[0] as LyricLine, bad[1] as LyricLine)}
                             >
                               <Sparkles className="h-3.5 w-3.5" /> Make it rhyme
                             </button>
                           </div>
                         )}
+                      </div>
                       </div>
                       );
                     })}
@@ -1184,6 +1294,31 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
         )}
       </main>
 
+      {flowSheet &&
+        beatGrid &&
+        (() => {
+          const sec = tree.sections.find((x) => x.id === flowSheet.sectionId);
+          if (!sec) return null;
+          const st = stretchOf(sec, flowSheet.fromLineId);
+          return (
+            <FlowSheet
+              title={sec.name}
+              scope={flowSheet.fromLineId ? `line ${st.lineNo} on` : "the whole part"}
+              flows={flowsUsed}
+              initialFlowId={flowSheet.flowId}
+              lang={lang}
+              bar={bar}
+              barStart={st.start}
+              linesInStretch={st.lines}
+              audio={sheetAudio}
+              onUse={useFlow}
+              onClose={() => {
+                stopPlay();
+                setFlowSheet(null);
+              }}
+            />
+          );
+        })()}
       {voiceSheet && (
         <VoiceSheet
           engine={engine}
@@ -1260,6 +1395,8 @@ function LineCard(props: {
   rhymingCount: number | null;
   /** opened: its flow, details and actions show (one line at a time) */
   open: boolean;
+  /** a new flow from this line on (for the rest of the part, or of the flow it follows) */
+  onFlowFromHere?: () => void;
   onToggle: () => void;
 }) {
   const { line: l, lang } = props;
@@ -1356,6 +1493,15 @@ function LineCard(props: {
             >
               <Play className="h-3 w-3" /> Play
             </button>
+            {props.onFlowFromHere && (
+              <button
+                className="flex shrink-0 items-center gap-1 rounded-full bg-panel-2 px-2.5 py-1 font-semibold text-accent"
+                onClick={props.onFlowFromHere}
+                title="A new flow from this line on"
+              >
+                <AudioLines className="h-3 w-3" /> Flow from here
+              </button>
+            )}
             {target !== null && (
               <span className={fits === false ? "text-warn" : fits ? "text-ok" : ""} title={`You sang ${target} syllables here`}>
                 {syl || "–"}/{target} syl
@@ -1445,12 +1591,32 @@ function LineCard(props: {
 }
 
 /** lines in their couplets (as sung: flow.pair) — the two lines of a couplet are shown together */
-/** lines in their couplets (as sung, the rest in order — every line has a rhyme partner), shown together */
-function couplets<T extends Line>(lines: T[]): T[][] {
+/**
+ * Lines grouped as they rhyme, in their order: a couplet (2 lines), a crossed ABAB stanza (4 lines),
+ * or a line on its own — with the rhyme pairs inside each group (every line has a partner when it can).
+ */
+function rhymeGroups<T extends Line>(lines: T[]): { lines: T[]; pairs: [T, T][] }[] {
   const pairs = coupletsOf(lines);
-  const partner = new Map(pairs.map(([x, y]) => [x.id, y]));
-  const second = new Set(pairs.map(([, y]) => y.id));
-  return lines.filter((l) => !second.has(l.id)).map((l) => (partner.has(l.id) ? [l, partner.get(l.id)!] : [l]));
+  const at = new Map(lines.map((l, i) => [l.id, i]));
+  const groups: { from: number; to: number; pairs: [T, T][] }[] = [];
+  for (const pr of pairs) {
+    const [x, y] = [at.get(pr[0].id)!, at.get(pr[1].id)!].sort((a, b) => a - b);
+    const g = groups.find((g) => x <= g.to && y >= g.from);
+    if (g) {
+      g.from = Math.min(g.from, x);
+      g.to = Math.max(g.to, y);
+      g.pairs.push(pr);
+    } else groups.push({ from: x, to: y, pairs: [pr] });
+  }
+  const out: { lines: T[]; pairs: [T, T][] }[] = [];
+  for (let i = 0; i < lines.length; ) {
+    const g = groups.find((g) => g.from === i);
+    if (g) {
+      out.push({ lines: lines.slice(g.from, g.to + 1), pairs: g.pairs });
+      i = g.to + 1;
+    } else out.push({ lines: [lines[i++]], pairs: [] });
+  }
+  return out;
 }
 
 /** from this score on two line endings count as a rhyme (assonance or better) */
@@ -1479,7 +1645,7 @@ function Syllables({ text, lang, rhyme }: { text: string; lang: string; rhyme: b
         <span key={i}>
           {p.space && " "}
           <span
-            className={rhyme && i >= rhymeFrom ? "text-accent" : undefined}
+            className={rhyme && (i > rhymeFrom || (i === rhymeFrom && !p.text.includes(" "))) ? "text-accent" : undefined}
             style={{
               backgroundImage: `linear-gradient(${stressed.has(i) ? "var(--accent)" : "color-mix(in srgb, var(--muted) 35%, transparent)"}, ${stressed.has(i) ? "var(--accent)" : "color-mix(in srgb, var(--muted) 35%, transparent)"})`,
               backgroundRepeat: "no-repeat",
@@ -1490,7 +1656,15 @@ function Syllables({ text, lang, rhyme }: { text: string; lang: string; rhyme: b
               WebkitBoxDecorationBreak: "clone",
             }}
           >
-            {p.text}
+            {rhyme && i === rhymeFrom && p.text.includes(" ") ? (
+              // a syllable merged across words ("mio amore"): the rhyme word is the part after the space
+              <>
+                {p.text.slice(0, p.text.lastIndexOf(" ") + 1)}
+                <span className="text-accent">{p.text.slice(p.text.lastIndexOf(" ") + 1)}</span>
+              </>
+            ) : (
+              p.text
+            )}
           </span>
         </span>
       ))}
