@@ -170,28 +170,53 @@ export async function speakLines(tree: ProjectTree, lineIds: string[]): Promise<
 }
 
 /**
- * Which ElevenLabs account the app's key belongs to, and its credits — only
- * these fields; the key itself never leaves the server.
+ * Which ElevenLabs account the app's key belongs to: plan, credits, what the
+ * plan allows, the next invoice — and what VerseFlow itself used since the
+ * credits last reset. Only these fields; the key never leaves the server.
  */
 export async function elevenAccount() {
   const key = process.env.ELEVENLABS_API_KEY;
   if (!key) return { connected: false as const };
-  const res = await fetch(`${API}/user`, { headers: { "xi-api-key": key } });
-  if (!res.ok) return { connected: true as const, error: `ElevenLabs answered ${res.status} (the key may not be allowed to read the account)` };
-  const u = (await res.json()) as {
-    user_id?: string;
-    first_name?: string | null;
-    email?: string | null;
-    subscription?: { tier?: string; character_count?: number; character_limit?: number; next_character_count_reset_unix?: number };
+  const get = async (path: string) => {
+    const res = await fetch(`${API}${path}`, { headers: { "xi-api-key": key } });
+    return res.ok ? ((await res.json()) as Record<string, unknown>) : null;
   };
+  const [u, sub] = await Promise.all([get("/user"), get("/user/subscription")]);
+  if (!u && !sub) return { connected: true as const, error: "ElevenLabs didn't answer (the key may not be allowed to read the account)" };
+  const s = (sub ?? (u?.subscription as Record<string, unknown> | undefined) ?? {}) as Record<string, unknown>;
+  const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+  const str = (v: unknown) => (typeof v === "string" && v ? v : null);
+  const bool = (v: unknown) => (typeof v === "boolean" ? v : null);
+  const invoice = (s.next_invoice ?? null) as Record<string, unknown> | null;
+  const resets = num(s.next_character_count_reset_unix);
+  // VerseFlow's own use since the credits last reset (about a month before the next reset)
+  const since = new Date(resets ? (resets - 30 * 24 * 3600) * 1000 : Date.now() - 30 * 24 * 3600 * 1000).toISOString();
+  const calls = check(
+    await db().from("ai_calls").select("kind, audio_seconds, characters").in("kind", ["transcribe", "transcribe_flow", "tts", "stems", "voice_clone"]).gte("created_at", since),
+  ) as { kind: string; audio_seconds: number | null; characters: number | null }[];
+  const sum = (kinds: string[], f: (c: (typeof calls)[number]) => number) => calls.filter((c) => kinds.includes(c.kind)).reduce((n, c) => n + f(c), 0);
   return {
     connected: true as const,
-    name: u.first_name ?? null,
-    email: u.email ?? null,
-    userId: u.user_id ? `…${u.user_id.slice(-6)}` : null,
-    plan: u.subscription?.tier ?? null,
-    used: u.subscription?.character_count ?? null,
-    limit: u.subscription?.character_limit ?? null,
-    resets: u.subscription?.next_character_count_reset_unix ?? null,
+    name: str(u?.first_name),
+    email: str(u?.email),
+    userId: str(u?.user_id) ? `…${(u!.user_id as string).slice(-6)}` : null,
+    plan: str(s.tier),
+    status: str(s.status),
+    billing: str(s.billing_period),
+    used: num(s.character_count),
+    limit: num(s.character_limit),
+    resets,
+    voiceCloning: bool(s.can_use_instant_voice_cloning),
+    voices: { used: num(s.voice_slots_used), limit: num(s.voice_limit) },
+    nextInvoice: invoice ? { cents: num(invoice.amount_due_cents), at: num(invoice.next_payment_attempt_unix), currency: str(s.currency) } : null,
+    app: {
+      since,
+      songsRead: calls.filter((c) => c.kind === "transcribe").length,
+      minutesHeard: Math.round(sum(["transcribe", "transcribe_flow"], (c) => c.audio_seconds ?? 0) / 60),
+      linesSpoken: calls.filter((c) => c.kind === "tts").length,
+      charactersSpoken: sum(["tts"], (c) => c.characters ?? 0),
+      vocalsRemoved: calls.filter((c) => c.kind === "stems").length,
+      voicesMade: calls.filter((c) => c.kind === "voice_clone").length,
+    },
   };
 }
