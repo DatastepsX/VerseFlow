@@ -637,9 +637,10 @@ export function SongApp({
   const goPart = (s: ProjectTree["sections"][number]) => {
     document.getElementById(`part-${s.id}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
     setActivePart(s.id);
-    const start = partRange(s).start;
+    // a bar before the part (at most 3 s): you hear it coming
+    const start = Math.max(0, partRange(s).start - Math.min(bar, 3));
     setNow(start);
-    if (playing) void play(Math.max(0, start - 0.3));
+    if (playing) void play(start);
   };
 
   // ---------- line actions ----------
