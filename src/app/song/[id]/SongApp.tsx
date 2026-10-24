@@ -653,29 +653,35 @@ export function SongApp({
     }
   };
   // empty lines outside the empty parts (those have their own buttons)
+  /** 3 new options for a line, rhyming with the other line as it is (1 call) — the best rhyming one goes in */
+  const newRhyming = (l: LyricLine, partner: LyricLine) =>
+    lineAction(l.id, async () => {
+      const t = await call(`/api/projects/${pid}/flow`, { action: "suggest", lineIds: [l.id] });
+      const fresh = t?.sections.flatMap((s) => s.lines).find((x) => x.id === l.id) as LyricLine | undefined;
+      if (!fresh || rhymeScore(partner.text, fresh.text, lang) >= RHYMES) return;
+      const top = fresh.alternatives.map((x) => ({ x, score: rhymeScore(partner.text, x.text, lang) })).sort((p, q) => q.score - p.score)[0];
+      if (top && top.score >= RHYMES) await call(`/api/alternatives/${top.x.id}`, { action: "swap" });
+      else setNote("No rhyming option yet — try again, or edit the line.");
+    });
+  /** a rhyming couplet from the options: this line's option, and the other line's when it changes too (free) */
+  const applyMove = (l: LyricLine, m: RhymeMove) =>
+    lineAction(l.id, async () => {
+      if (m.partnerAlt) await call(`/api/alternatives/${m.partnerAlt.id}`, { action: "swap" });
+      await call(`/api/alternatives/${m.alt.id}`, { action: "swap" });
+    });
   /**
-   * A couplet that doesn't rhyme: switch to the option that rhymes best with the partner (free), from
-   * either line's options; none rhymes → 3 new options for the 2nd line, rhyming with the 1st (1 call)
+   * A couplet that doesn't rhyme: the 2nd line's next rhyming option (or a rhyming pair of options for both
+   * lines), else the 1st line's option rhyming with the 2nd — free; none → 3 new options rhyming with the
+   * other line (1 call). A kept line stays as it is.
    */
   const makeItRhyme = async (a: LyricLine, b: LyricLine) => {
-    const best = [
-      ...b.alternatives.map((x) => ({ alt: x, line: b, score: rhymeScore(a.text, x.text, lang) })),
-      ...a.alternatives.map((x) => ({ alt: x, line: a, score: rhymeScore(x.text, b.text, lang) })),
-    ].sort((x, y) => y.score - x.score)[0];
-    if (best && best.score >= RHYMES) {
-      await lineAction(best.line.id, () => call(`/api/alternatives/${best.alt.id}`, { action: "swap" }));
-      return;
-    }
-    // no option rhymes yet: 3 new ones for the 2nd line, rhyming with the 1st — then the best one goes in
-    await lineAction(b.id, async () => {
-      const t = await call(`/api/projects/${pid}/flow`, { action: "suggest", lineIds: [b.id] });
-      const fresh = t?.sections.flatMap((s) => s.lines).find((l) => l.id === b.id) as LyricLine | undefined;
-      if (!fresh) return;
-      if (rhymeScore(a.text, fresh.text, lang) >= RHYMES) return;
-      const top = fresh.alternatives.map((x) => ({ x, score: rhymeScore(a.text, x.text, lang) })).sort((p, q) => q.score - p.score)[0];
-      if (top && top.score >= RHYMES) await call(`/api/alternatives/${top.x.id}`, { action: "swap" });
-      else setNote("No rhyming option yet — try “Make it rhyme” again, or edit the line.");
-    });
+    const [line, other] = isKept(b) && !isKept(a) ? [a, b] : [b, a];
+    const mine = rhymeMoves(line, other, lang)[0];
+    if (mine) return applyMove(line, mine);
+    // the other line's option that rhymes with this one as it is
+    const theirs = isKept(other) ? undefined : rhymeMoves(other, line, lang).find((m) => !m.partnerAlt);
+    if (theirs) return applyMove(other, theirs);
+    await newRhyming(line, other);
   };
   const missing = tree.sections
     .filter((s) => !isEmptyPart(s))
@@ -1197,7 +1203,8 @@ export function SongApp({
                           // the line it rhymes with, as it is now: options are picked to rhyme with it
                           const pr = pairs.find(([a, b]) => a.id === l.id || b.id === l.id);
                           const partner = pr ? ((pr[0].id === l.id ? pr[1] : pr[0]) as LyricLine) : null;
-                          const rhyming = partner?.text.trim() ? l.alternatives.filter((x) => rhymeScore(partner.text, x.text, lang) >= RHYMES) : [];
+                          // ↻ gives the next couplet that rhymes (this line's option, or a pair of options for both lines)
+                          const moves = partner?.text.trim() ? rhymeMoves(l, partner, lang) : [];
                           return (
                           <LineCard
                             key={l.id}
@@ -1222,11 +1229,14 @@ export function SongApp({
                                 ),
                               )
                             }
-                            rhymingCount={partner?.text.trim() ? rhyming.length : null}
-                            onNext={() =>
-                              // next option: first the ones rhyming with the partner line (in turn), else the next in line
-                              void lineAction(l.id, () => call(`/api/alternatives/${(rhyming[0] ?? l.alternatives[0]).id}`, { action: "swap" }))
-                            }
+                            rhymingCount={partner?.text.trim() ? moves.length : null}
+                            onNext={() => {
+                              // no other line to rhyme with: the next option in line
+                              if (!partner?.text.trim()) return void lineAction(l.id, () => call(`/api/alternatives/${l.alternatives[0].id}`, { action: "swap" }));
+                              // never a couplet that doesn't rhyme: none of the options does → 3 new ones that do (1 call)
+                              if (moves.length) void applyMove(l, moves[0]);
+                              else void newRhyming(l, partner);
+                            }}
                             onNew={() => void lineAction(l.id, () => call(`/api/projects/${pid}/flow`, { action: "suggest", lineIds: [l.id] }))}
                             onEdit={() => {
                               setEditing(l.id);
@@ -1589,16 +1599,22 @@ function LineCard(props: {
             </button>
             <button
               className="flex h-10 flex-1 items-center justify-center gap-1.5 rounded-2xl bg-panel-2 text-sm font-semibold text-fg/80 disabled:opacity-40"
-              disabled={props.busy || l.alternatives.length === 0}
+              disabled={props.busy || (l.alternatives.length === 0 && props.rhymingCount === null)}
               onClick={props.onNext}
-              title={props.rhymingCount !== null ? `Next option rhyming with the other line (${props.rhymingCount} of ${l.alternatives.length} rhyme) — free` : "Next option (free)"}
-              aria-label="Next option"
+              title={
+                props.rhymingCount === null
+                  ? "Next option (free)"
+                  : props.rhymingCount
+                    ? `Next couplet that rhymes (${props.rhymingCount}) — free`
+                    : "None of the options rhymes with the other line — 3 new ones that do (1 AI call)"
+              }
+              aria-label={props.rhymingCount === 0 ? "New rhyming options, 1 call" : "Next option"}
             >
               <Shuffle className="h-4 w-4" />
-              {props.rhymingCount !== null && l.alternatives.length > 0 ? (
+              {props.rhymingCount !== null ? (
                 <span className="flex flex-col items-start leading-none">
-                  <span>{l.alternatives.length}</span>
-                  <span className={`text-[9px] font-medium ${props.rhymingCount ? "text-ok" : "text-warn"}`}>{props.rhymingCount} rhyme</span>
+                  <span>{props.rhymingCount || "New"}</span>
+                  <span className={`text-[9px] font-medium ${props.rhymingCount ? "text-ok" : "text-warn"}`}>{props.rhymingCount ? "rhyme" : "1 call"}</span>
                 </span>
               ) : (
                 l.alternatives.length || ""
@@ -1665,6 +1681,24 @@ function rhymeGroups<T extends Line>(lines: T[]): { lines: T[]; pairs: [T, T][] 
 /** from this score on two line endings count as a rhyme (assonance or better) */
 const RHYMES = 0.55;
 const rhymeScore = (x: string, y: string, lang: string) => (x.trim() && y.trim() ? compareLines(analyzeLine(x, lang), analyzeLine(y, lang)).score : 0);
+const isKept = (l: Line) => l.status === "APPROVED" || l.status === "APPROVED_EDITED";
+type Option = LyricLine["alternatives"][number];
+type RhymeMove = { alt: Option; partnerAlt?: Option };
+/**
+ * The rhyming couplets ↻ on a line goes through, in turn: its options that rhyme with the other line as it is;
+ * then (the other line not kept) its options paired with the other line's option that rhymes best with them —
+ * the options of a couplet were written in rhyming pairs. Swapped-out texts go to the back, so it cycles.
+ */
+function rhymeMoves(l: LyricLine, partner: LyricLine, lang: string): RhymeMove[] {
+  const own = l.alternatives.filter((x) => rhymeScore(partner.text, x.text, lang) >= RHYMES).map((alt) => ({ alt }));
+  if (isKept(partner)) return own;
+  const pairs = l.alternatives.flatMap((alt) => {
+    if (own.some((m) => m.alt.id === alt.id)) return [];
+    const best = partner.alternatives.map((y) => ({ y, score: rhymeScore(y.text, alt.text, lang) })).sort((p, q) => q.score - p.score)[0];
+    return best && best.score >= RHYMES ? [{ alt, partnerAlt: best.y }] : [];
+  });
+  return [...own, ...pairs];
+}
 /** both lines written and their endings don't rhyme */
 const rhymesWell = (x: string, y: string, lang: string) => !x.trim() || !y.trim() || rhymeScore(x, y, lang) >= RHYMES;
 const lastWordOf = (t: string) => t.trim().split(/\s+/).pop()?.replace(/[^\p{L}\p{N}']+/gu, "") ?? "";
