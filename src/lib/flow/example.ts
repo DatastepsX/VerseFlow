@@ -83,3 +83,23 @@ export function exampleWords(n: number, stress: number[], lang: string, seed = 0
   const line = varied.join(" ");
   return key === "de" ? line : line.charAt(0).toUpperCase() + line.slice(1);
 }
+
+const fold = (w: string) =>
+  w
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "")
+    .replace(/[^\p{L}]/gu, "");
+const folded = new Map<string, Set<string>>();
+
+/**
+ * Example words, not lyrics: every word is from the example bank (accents and
+ * punctuation aside — "gia" is "già"). A line typed over the examples to fix
+ * the count still only shows a rhythm.
+ */
+export function isExampleText(text: string, lang: string): boolean {
+  const key = BANK[lang] ? lang : "it";
+  if (!folded.has(key)) folded.set(key, new Set(BANK[key].split(" ").map(fold)));
+  const ws = text.split(/\s+/).map(fold).filter(Boolean);
+  return ws.length > 0 && ws.every((w) => folded.get(key)!.has(w));
+}

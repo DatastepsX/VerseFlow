@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { chipsOf, lineFromText, linesFromOnsets, relayout } from "@/lib/flow/pattern";
+import { chipsOf, lineFromText, linesFromOnsets, ownWords, relayout } from "@/lib/flow/pattern";
 import { quantizeTaps } from "@/lib/flow/grid";
 import type { FlowPattern, PatternLine, SongFlow } from "@/lib/types";
 import { Check, Hand, Mic, Pencil, Play, Sparkles } from "@/components/icons";
@@ -181,7 +181,9 @@ export function FlowSheet({
   };
 
   const ready = lines.every((l) => l.syllables > 0);
-  const toWrite = Math.max(0, linesInStretch - lines.filter((l) => l.written && l.text.trim()).length);
+  // lines in your own words are kept; the rest (example words, "pa pam") only set the rhythm and get written
+  const own = lines.map((l) => ownWords(l, lang, mode));
+  const toWrite = Math.max(0, linesInStretch - own.filter(Boolean).length);
   const calls = Math.ceil(toWrite / 8);
   const use = async () => {
     setBusy(true);
@@ -341,7 +343,11 @@ export function FlowSheet({
                 }}
               />
               {l.syllables > 0 && <Chips line={l} lang={lang} onChange={(next) => edit(lines.map((x, k) => (k === i ? next : x)))} bar={bar} />}
-              {!l.written && l.syllables > 0 && <p className="mt-1 text-[11px] text-muted">Example words in your rhythm — write your own over them, or leave them.</p>}
+              {l.syllables > 0 && l.text.trim() && (
+                <p className={`mt-1 text-[11px] ${own[i] ? "text-ok" : "text-muted"}`}>
+                  {own[i] ? "Your words — kept as the lyrics." : "Only the rhythm — the lyrics are written for you. Type your own words to keep them."}
+                </p>
+              )}
             </div>
           ))}
           <p className="text-[11px] text-muted">

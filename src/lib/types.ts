@@ -223,8 +223,10 @@ export interface LineFlow {
 export interface PatternLine {
   /** the words (written, or example words) */
   text: string;
-  /** the writer wrote these words: they become the lyrics where the flow is first used */
+  /** the writer wrote these words: they become the lyrics where the flow is first used (see ownWords) */
   written: boolean;
+  /** sung or tapped: its timing is the recording's (example words until the writer types their own) */
+  sung?: boolean;
   syllables: number;
   /** stressed syllables, 1-based */
   stress: number[];

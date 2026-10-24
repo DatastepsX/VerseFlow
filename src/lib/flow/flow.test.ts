@@ -4,9 +4,9 @@ import { flowLines, stressPattern } from "./lines";
 import { detectSyllables } from "./syllables";
 import { dropSounds, isSound } from "./fillers";
 import { cycle, flowFromGrid, gridFor, quantizeTaps } from "./grid";
-import { exampleWords } from "./example";
+import { exampleWords, isExampleText } from "./example";
 import { coupletsOf } from "./couplets";
-import { barsPerLine, chipsOf, lineFlowFrom, lineFromText, linesFromOnsets, nextFlowName, relayout } from "./pattern";
+import { barsPerLine, chipsOf, lineFlowFrom, lineFromText, linesFromOnsets, nextFlowName, ownWords, relayout } from "./pattern";
 import { prosody } from "@/lib/rhyme/prosody";
 import { emptyParts, vocalLines } from "./vocals";
 
@@ -314,4 +314,34 @@ test("ABAB: lines 1+3 and 2+4 rhyme", () => {
     coupletsOf(lines).map(([a, b]) => `${a.id}+${b.id}`),
     ["l0+l2", "l1+l3", "l4+l6", "l5+l7"],
   );
+});
+
+test("flow patterns: example words (even typed over) only set the rhythm; your own words are the lyrics", () => {
+  const bar = 2;
+  const sung = linesFromOnsets([10, 10.25, 10.5, 10.75, 11, 11.5].map((t) => ({ t })), 10, bar, 1, "it")[0];
+  assert.equal(sung.sung, true);
+  assert.equal(ownWords(sung, "it", "sing"), false, "the example words");
+  // typed over the examples to fix the count ("gia" for "già", a trailing space): still only a rhythm
+  for (const t of ["Tre tu re più sì già mai", "Più tre tu re sì blu ", "Tu più tre sì re mai gia"])
+    assert.equal(ownWords(lineFromText(t, "it", bar, sung), "it", "both"), false, t);
+  // a flow saved before lines knew they were sung: its source tells
+  assert.equal(ownWords({ ...lineFromText("Tre tu re più sì già mai", "it", bar), sung: undefined }, "it", "both"), false);
+  assert.equal(isExampleText("Libertà sì re tre già più", "it"), true);
+  // real words over a sung line, or written ones (even common words): the lyrics
+  assert.equal(ownWords(lineFromText("Ti scrivo dentro me", "it", bar, sung), "it", "sing"), true);
+  assert.equal(ownWords(lineFromText("la notte di te", "it", bar), "it", "write"), true);
+  // pa-pam sounds never
+  assert.equal(ownWords(lineFromText("pam pam para papapam", "it", bar), "it", "write"), false);
+  // a sung line typed with another count keeps the time it was sung in
+  const typed = lineFromText("Ti scrivo dentro me", "it", bar, sung);
+  assert.deepEqual([typed.offsets[0], typed.offsets[typed.offsets.length - 1]], [sung.offsets[0], sung.offsets[sung.offsets.length - 1]]);
+});
+
+test("sung bars: a few stresses — on the beats and clear peaks, no run of stressed syllables", () => {
+  const bar = 2; // beat 0.5
+  // 8 syllables on 8ths, all fairly loud: the beats (1, 3, 5, 7); the loudest one (6) comes right after a beat — no clash
+  const strengths = [0.9, 0.85, 0.9, 0.88, 0.8, 1, 0.82, 0.9];
+  const onsets = strengths.map((strength, i) => ({ t: 10 + i * 0.25, strength }));
+  const [l] = linesFromOnsets(onsets, 10, bar, 1, "it");
+  assert.deepEqual(l.stress, [1, 3, 5, 7]);
 });

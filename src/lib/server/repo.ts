@@ -21,7 +21,8 @@ import type {
   SongFlow,
   Take,
 } from "@/lib/types";
-import { barsPerLine, lineFlowFrom, nextFlowName } from "@/lib/flow/pattern";
+import { barsPerLine, lineFlowFrom, nextFlowName, ownWords } from "@/lib/flow/pattern";
+import { isExampleText } from "@/lib/flow/example";
 
 const TAKE_COLS = "id, section_id, lane, take_no, start_at, duration, sample_rate, peaks, chosen, created_at";
 const LINE_COLS = "id, project_id, section_id, position, text, status, kind, note, audio_at, flow, updated_at";
@@ -1382,11 +1383,14 @@ export async function applyFlow(projectId: string, flowId: string, sectionId: st
   for (const l of old) await deleteLine(l.id);
   // where the flow is used for the first time, the written words are the lyrics
   const firstUse = withText && !tree.sections.some((s) => s.lines.some((l) => l.flow?.flowId === flowId && !old.includes(l)));
-  const written = old.filter((l) => l.text.trim());
+  // (example words that only showed a rhythm are no lyrics to rewrite)
+  const lang = tree.project.language;
+  const written = old.filter((l) => l.text.trim() && !isExampleText(l.text, lang));
   const rows = Array.from({ length: n }, (_, i) => {
     const pl = flow.pattern.lines[i % flow.pattern.lines.length];
     const lf = lineFlowFrom(flow.pattern, i, start + i * per, bar, flowId);
-    const own = firstUse && i < flow.pattern.lines.length && pl.written && pl.text.trim();
+    // the writer's own words only — example words (or "pa pam") just set the rhythm: those lines get written
+    const own = firstUse && i < flow.pattern.lines.length && ownWords(pl, lang, flow.pattern.source);
     // the earlier lyrics, in order, to rewrite to the new flow
     const draft = written.length ? written[Math.min(written.length - 1, Math.floor((i * written.length) / n))].text : undefined;
     return {
