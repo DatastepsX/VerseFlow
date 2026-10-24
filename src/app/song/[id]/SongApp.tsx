@@ -1015,15 +1015,12 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
                   <section key={s.id} id={`part-${s.id}`} data-part-section={s.id} className="scroll-mt-44">
                     <h3 className="mb-2 flex items-baseline gap-2 px-1">
                       <span className="text-lg font-bold tracking-tight">{s.name}</span>
+                      <PartLength range={r} bar={beatGrid ? bar : null} />
                       <span className="text-xs text-muted">no vocals yet</span>
                     </h3>
                     <div className="space-y-2.5 rounded-3xl border border-dashed border-accent/40 bg-accent-soft/30 p-4">
                       <p className="text-sm">
                         <b>{lines.length} lines to write</b>
-                        <span className="font-mono text-xs text-muted">
-                          {" "}
-                          · {fmtTime(r.start)} – {fmtTime(r.end)}
-                        </span>
                       </p>
                       <div className="grid grid-cols-2 gap-2">
                         <button className="btn-primary justify-center rounded-2xl py-3 text-[15px]" onClick={() => recordPart(s, "sing")}>
@@ -1059,7 +1056,7 @@ export function SongApp({ initialTree, autoDetect = false }: { initialTree: Proj
                 <section key={s.id} id={`part-${s.id}`} data-part-section={s.id} className="scroll-mt-44">
                   <h3 className="mb-2 flex items-center gap-2 px-1">
                     <span className="text-lg font-bold tracking-tight">{s.name}</span>
-                    <span className="flex-1 font-mono text-xs text-muted">{fmtTime(partRange(s).start)}</span>
+                    <PartLength range={partRange(s)} bar={beatGrid ? bar : null} />
                     {tree.audio && (
                       <button
                         className="flex items-center gap-1 rounded-full bg-panel-2 px-2.5 py-1 text-xs font-semibold text-accent"
@@ -1497,6 +1494,18 @@ function Syllables({ text, lang, rhyme }: { text: string; lang: string; rhyme: b
           </span>
         </span>
       ))}
+    </span>
+  );
+}
+
+/** where a part starts and how long it is: "1:14 · 27 s · 10 bars" */
+function PartLength({ range, bar }: { range: { start: number; end: number }; bar: number | null }) {
+  const len = Math.max(0, range.end - range.start);
+  const bars = bar ? Math.round(len / bar) : null;
+  return (
+    <span className="flex-1 truncate font-mono text-xs text-muted">
+      {fmtTime(range.start)} · {len < 60 ? `${Math.round(len)} s` : fmtTime(len)}
+      {bars ? ` · ${bars} bar${bars === 1 ? "" : "s"}` : ""}
     </span>
   );
 }
