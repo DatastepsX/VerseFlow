@@ -590,6 +590,11 @@ export function SongApp({
   };
 
   // ---------- the parts bar: where you are, tap to jump ----------
+  /** a part's name (Verse 1, Hook, Rap…) */
+  const renamePart = (s: ProjectTree["sections"][number]) => {
+    const name = window.prompt("Name of this part:", s.name)?.trim();
+    if (name && name !== s.name) void call(`/api/sections/${s.id}`, { name: name.slice(0, 60) }, "PATCH");
+  };
   /** the part being worked on — the same in Flow, Lyrics and Record */
   const [activePart, setActivePart] = useState<string | null>(null);
   const activePartRef = useRef(activePart);
@@ -1345,7 +1350,14 @@ export function SongApp({
                 return (
                   <section key={s.id} id={`part-${s.id}`} data-part-section={s.id} className="scroll-mt-44">
                     <h3 className="mb-2 flex items-baseline gap-2 px-1">
-                      <span className="text-lg font-bold tracking-tight">{s.name}</span>
+                      <button
+                      className="flex items-center gap-1 rounded-lg text-lg font-bold tracking-tight active:bg-panel-2"
+                      onClick={() => renamePart(s)}
+                      title="Rename this part"
+                    >
+                      {s.name}
+                      <Pencil className="h-3.5 w-3.5 text-muted" />
+                    </button>
                       <PartLength range={r} bar={beatGrid ? bar : null} />
                       <span className="text-xs text-muted">no vocals yet</span>
                     </h3>
@@ -1386,7 +1398,14 @@ export function SongApp({
               return (
                 <section key={s.id} id={`part-${s.id}`} data-part-section={s.id} className="scroll-mt-44">
                   <h3 className="mb-2 flex items-center gap-2 px-1">
-                    <span className="text-lg font-bold tracking-tight">{s.name}</span>
+                    <button
+                      className="flex items-center gap-1 rounded-lg text-lg font-bold tracking-tight active:bg-panel-2"
+                      onClick={() => renamePart(s)}
+                      title="Rename this part"
+                    >
+                      {s.name}
+                      <Pencil className="h-3.5 w-3.5 text-muted" />
+                    </button>
                     <PartLength range={partRange(s)} bar={beatGrid ? bar : null} />
                     {busyLine === s.id && (
                       <span className="flex shrink-0 items-center gap-1 text-xs font-semibold text-accent">
