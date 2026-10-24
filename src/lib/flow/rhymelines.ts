@@ -99,6 +99,12 @@ export function rhymeSegments(words: TimedWord[], lang: string, unit: number): S
         }
       }
     }
+    // no line fits the rules here (a few syllables, then the singing runs on too long): a line of this
+    // one word, rather than no lines at all for the whole song
+    if (best[i][0] === -Infinity) {
+      best[i][0] = -10 + end(i) + best[i + 1][0];
+      next[i][0] = { j: i, p: 0 };
+    }
   }
   const out: Segment[] = [];
   for (let i = 0, p = 0; i < n; ) {
