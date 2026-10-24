@@ -11,6 +11,7 @@ export type RemoteCmd =
   | { t: "discardLast"; lane: string }
   | { t: "choose"; takeId: string }
   | { t: "delete"; takeId: string }
+  | { t: "shift"; takeId: string; by: number }
   | { t: "play" }
   | { t: "playTake"; takeId: string }
   | { t: "stop" }

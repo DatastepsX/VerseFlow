@@ -69,6 +69,8 @@ export interface Recorder {
   playTake: (id: string) => void;
   choose: (id: string) => void;
   remove: (id: string) => void;
+  /** a take earlier (−) / later (+) on the beat, in seconds; on this device later takes follow (the delay setting) */
+  shift: (id: string, by: number) => void;
   addLane: (name: string) => void;
   /** each layer's sound (effect preset id; none: raw) */
   sounds: Record<string, string>;
@@ -196,8 +198,12 @@ export function useLocalRecorder(o: {
   const [channel, setChannel] = usePref("vf.studio.channel", 0);
   const [countIn, setCountIn] = usePref("vf.studio.countin", 1);
   const [metronome, setMetronome] = usePref("vf.studio.metronome", true);
-  const [latencyMs, setLatencyMs] = usePref<number | null>("vf.studio.latency", null);
   const [headphones, setHeadphones] = usePref("vf.studio.headphones", true);
+  // the delay differs with echo cancellation (no headphones): one setting each
+  const [latencyRaw, setLatencyRaw] = usePref<number | null>("vf.studio.latency", null);
+  const [latencyVp, setLatencyVp] = usePref<number | null>("vf.studio.latency.vp", null);
+  const latencyMs = headphones ? latencyRaw : latencyVp;
+  const setLatencyMs = headphones ? setLatencyRaw : setLatencyVp;
   const [reported, setReported] = useState(0);
   const latency = (latencyMs ?? reported * 1000) / 1000;
 
@@ -506,6 +512,11 @@ export function useLocalRecorder(o: {
   const [clock] = useState(() => clockOf(engine));
   const choose = (id: string) => void api(`/api/takes/${id}`, undefined, "PATCH").catch(failed);
   const remove = (id: string) => void api(`/api/takes/${id}`, undefined, "DELETE").catch(failed);
+  const shift = (id: string, by: number) => {
+    void api(`/api/takes/${id}`, { shift: by }, "PATCH").catch(failed);
+    // a take that sat late was recorded with too little delay compensation: the next ones get more
+    setLatencyMs(Math.max(0, Math.round((latency * 1000 - by * 1000) * 10) / 10));
+  };
   /** a layer's sound: saved for the song, and heard at once on the layer's take in this part */
   const trySound = (lane: string, preset: string) => {
     if (busy && status.kind !== "playing") return;
@@ -551,6 +562,9 @@ export function useLocalRecorder(o: {
         }
         case "choose":
           choose(c.takeId);
+          break;
+        case "shift":
+          shift(c.takeId, c.by);
           break;
         case "delete":
           if (!busy) remove(c.takeId);
@@ -675,6 +689,7 @@ export function useLocalRecorder(o: {
     },
     choose,
     remove,
+    shift,
     addLane,
     sounds,
     songKey: tree.project.settings?.songKey ?? null,
@@ -788,6 +803,7 @@ export function useRemoteRecorder(o: { tree: ProjectTree; section: [string | nul
     playTake: (takeId) => send({ t: "playTake", takeId }),
     choose: (takeId) => send({ t: "choose", takeId }),
     remove: (takeId) => send({ t: "delete", takeId }),
+    shift: (takeId, by) => send({ t: "shift", takeId, by }),
     addLane: (name) => {
       setLane(name.trim());
       send({ t: "addLane", name });

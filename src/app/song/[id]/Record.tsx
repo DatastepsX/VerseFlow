@@ -95,6 +95,12 @@ function RecordScreen({ r, tree, rangeOf, bar, timeline, onBusy, host }: Props &
   /** the sound library, open for this layer */
   const [soundFor, setSoundFor] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  /** how far each take was moved here (shown next to its timing buttons) */
+  const [moved, setMoved] = useState<Record<string, number>>({});
+  const nudge = (id: string, by: number) => {
+    setMoved((m) => ({ ...m, [id]: Math.round(((m[id] ?? 0) + by) * 1000) / 1000 }));
+    r.shift(id, by);
+  };
   const [newLane, setNewLane] = useState("");
   const section = tree.sections.find((s) => s.id === r.sectionId) ?? null;
   const range = section ? rangeOf(section.id) : null;
@@ -372,6 +378,26 @@ function RecordScreen({ r, tree, rangeOf, bar, timeline, onBusy, host }: Props &
                         {t.chosen && <span className="text-[11px] font-semibold text-accent">in the song</span>}
                       </div>
                       <Peaks peaks={t.peaks} className={`mt-1 h-5 w-full ${t.chosen ? "text-accent" : "text-muted/70"}`} />
+                      {/* off the beat? move it by ear: 20 ms a tap (later takes on this device follow) */}
+                      <div className="mt-1 flex items-center gap-1 text-[11px] text-muted">
+                        <button
+                          className="rounded-full bg-panel-2 px-2 py-0.5 font-semibold text-fg/80 disabled:opacity-40"
+                          disabled={!(idle || r.status === "playing")}
+                          onClick={() => nudge(t.id, -0.02)}
+                          aria-label={`Take ${t.take_no} earlier`}
+                        >
+                          ‹ earlier
+                        </button>
+                        <span className="min-w-14 text-center tabular-nums">{moved[t.id] ? `${moved[t.id] > 0 ? "+" : ""}${Math.round(moved[t.id] * 1000)} ms` : "timing"}</span>
+                        <button
+                          className="rounded-full bg-panel-2 px-2 py-0.5 font-semibold text-fg/80 disabled:opacity-40"
+                          disabled={!(idle || r.status === "playing")}
+                          onClick={() => nudge(t.id, 0.02)}
+                          aria-label={`Take ${t.take_no} later`}
+                        >
+                          later ›
+                        </button>
+                      </div>
                     </div>
                     {!t.chosen && (
                       <button className="flex h-8 shrink-0 items-center gap-1 rounded-full bg-panel-2 px-3 text-xs font-semibold disabled:opacity-40" disabled={!idle} onClick={() => r.choose(t.id)}>

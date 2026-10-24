@@ -1255,6 +1255,15 @@ export async function chooseTake(id: string) {
   return t.project_id;
 }
 
+/** a take moved on the beat (seconds, + later / − earlier): to fix its timing by ear */
+export async function shiftTake(id: string, by: number) {
+  const t = await getTake(id);
+  const row = check(await db().from("takes").select("start_at").eq("id", id).single()) as { start_at: number };
+  check(await db().from("takes").update({ start_at: Math.max(0, Math.round((row.start_at + by) * 100000) / 100000) }).eq("id", id));
+  await touch(t.project_id);
+  return t.project_id;
+}
+
 /** deletes the take and its file; when it was the chosen one, the latest remaining take is chosen */
 export async function deleteTake(id: string) {
   const t = await getTake(id);
