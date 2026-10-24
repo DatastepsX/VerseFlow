@@ -20,7 +20,9 @@ import { ThemePicker } from "@/components/ThemePicker";
 import { RecordView } from "./Record";
 import { MarkedText, MarksEditor } from "@/components/Marks";
 import { marksFor, type Mark } from "@/lib/marks";
-import { usePref } from "./recorder";
+import { lanesOf, usePref } from "./recorder";
+import { buildChain } from "@/lib/fx/chain";
+import { layerPreset } from "@/lib/fx/presets";
 import { undoHeaders, undoStep } from "@/lib/undo-group";
 import { TapFlow } from "./TapFlow";
 import { FlowSheet, type SheetAudio } from "./FlowSheet";
@@ -48,6 +50,7 @@ import {
   Play,
   Plus,
   Shuffle,
+  Sliders,
   Sparkles,
   Trash,
   Redo,
@@ -182,7 +185,6 @@ export function SongApp({
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- the vocals choice switches buffers above, no reload
   }, [filename, pid, instrumental]);
   /** the song without its vocals: 1 ElevenLabs call */
   const [separating, setSeparating] = useState(false);
@@ -213,6 +215,25 @@ export function SongApp({
   const timeline = useMemo(() => buildTimeline(tree.sections, tree.audio, lang), [tree.sections, tree.audio, lang]);
   const [playing, setPlaying] = useState(false);
   const [withFlow, setWithFlow] = useState(true);
+  /** recording layers you don't want to hear (this device) — in Lyrics and in Record */
+  const [muted, setMuted] = usePref<string[]>(`vf.muted.${pid}`, []);
+  const [mixOpen, setMixOpen] = useState(false);
+  /** the takes used in the song, of the layers you hear, with their sound (as in Record; autotune only there) */
+  const takeLayers = async (): Promise<PlayLayer[]> => {
+    const lanes = lanesOf(tree).filter((l) => !muted.includes(l));
+    const takes = tree.takes.filter((t) => t.chosen && lanes.includes(t.lane));
+    const todo = takes.filter((t) => !flowBufs.current.has(t.id));
+    if (todo.length) {
+      const r = (await fetch(`/api/projects/${pid}/takes?ids=${todo.map((t) => t.id).join(",")}`).then((x) => x.json())) as { urls: Record<string, string> };
+      await Promise.all(todo.map(async (t) => r.urls?.[t.id] && flowBufs.current.set(t.id, await engine.current!.decode(await fetch(r.urls[t.id]).then((x) => x.arrayBuffer())))));
+    }
+    const bpm = tree.audio?.bpm ?? 90;
+    return takes.flatMap((t) => {
+      const buffer = flowBufs.current.get(t.id);
+      const p = layerPreset(tree.project.settings?.fx, t.lane);
+      return buffer ? [{ buffer, at: t.start_at, fx: p.id === "raw" ? undefined : (ctx: BaseAudioContext) => buildChain(ctx, p, bpm) }] : [];
+    });
+  };
   const [now, setNow] = useState(0);
   const [live, setLive] = useState<string | null>(null);
   const stopAt = useRef<number | null>(null);
@@ -303,7 +324,9 @@ export function SongApp({
     const flowOn = (opts.flow ?? withFlow) && !guideL.length;
     if (flowOn) await loadFlow().catch(() => {});
     const flows = flowOn ? flowTakes.flatMap((t) => (flowBufs.current.has(t.id) ? [{ buffer: flowBufs.current.get(t.id)!, at: t.start_at, gain: 0.9 }] : [])) : [];
-    const layers = [...flows, ...guideL];
+    // your recorded takes (Record), unless muted; not with clicks (tapping / singing a flow)
+    const takes = opts.clicks || opts.guide ? [] : await takeLayers().catch(() => []);
+    const layers = [...flows, ...guideL, ...takes];
     e.play(Math.max(0, from), { beat: beat.current, layers, beatGain: guideL.length ? 0.6 : 0.8, clicks: opts.clicks });
     stopAt.current = until;
     setPlaying(true);
@@ -947,16 +970,14 @@ export function SongApp({
                 <span>{fmtTime(total)}</span>
               </div>
             </div>
-            {flowTakes.length > 0 && !withGuide && (
-              <button
-                className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${withFlow ? "bg-accent-soft text-accent" : "bg-panel-2 text-muted"}`}
-                onClick={() => setWithFlow((v) => !v)}
-                aria-pressed={withFlow}
-                title={withFlow ? "Your recorded flow plays with the beat (tap to mute)" : "Your recorded flow is muted (tap to hear it)"}
-              >
-                <Mic className="h-[18px] w-[18px]" />
-              </button>
-            )}
+            <button
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-panel-2 text-fg/80"
+              onClick={() => setMixOpen(true)}
+              title="What you hear: the original vocals, your flow, your recordings"
+              aria-label="Mix"
+            >
+              <Sliders className="h-[18px] w-[18px]" />
+            </button>
             {hasLines && (
               <button
                 className={`relative flex h-9 shrink-0 items-center justify-center gap-1 rounded-full px-2.5 text-xs font-semibold ${withGuide ? "bg-accent text-white" : "bg-panel-2 text-muted"}`}
@@ -1590,6 +1611,8 @@ export function SongApp({
         {view === "record" &&
           (tree.audio ? (
             <RecordView
+              muted={muted}
+              onMix={() => setMixOpen(true)}
               part={activePart}
               onPart={setActivePart}
               tree={tree}
@@ -1659,6 +1682,23 @@ export function SongApp({
             />
           );
         })()}
+      {mixOpen && (
+        <MixSheet
+          split={!!instrumental}
+          vocalsOff={vocalsOff}
+          setVocalsOff={setVocalsOff}
+          onSeparate={() => void separate()}
+          separating={separating}
+          flow={flowTakes.length ? { on: withFlow, set: setWithFlow } : null}
+          lanes={lanesOf(tree).filter((l) => tree.takes.some((t) => t.chosen && t.lane === l))}
+          muted={muted}
+          setMuted={(m) => {
+            setMuted(m);
+            if (playing) stopPlay();
+          }}
+          onClose={() => setMixOpen(false)}
+        />
+      )}
       {voiceSheet && (
         <VoiceSheet
           engine={engine}
@@ -2531,5 +2571,78 @@ function Item({ label, value }: { label: string; value: React.ReactNode }) {
       <span className="text-muted">{label}</span>
       <span className="text-right font-medium">{value}</span>
     </div>
+  );
+}
+
+/**
+ * What you hear: the song's original vocals (once removed: on / off), your recorded flow, and each recording
+ * layer (Lead, Double, Ad-libs…). Saved on this device; the vocals choice with the song.
+ */
+function MixSheet(props: {
+  split: boolean;
+  vocalsOff: "all" | string[];
+  setVocalsOff: (v: "all" | string[]) => void;
+  onSeparate: () => void;
+  separating: boolean;
+  flow: { on: boolean; set: (on: boolean) => void } | null;
+  lanes: string[];
+  muted: string[];
+  setMuted: (m: string[]) => void;
+  onClose: () => void;
+}) {
+  const vocalsOn = props.vocalsOff !== "all" && props.vocalsOff.length === 0;
+  const someParts = props.vocalsOff !== "all" && props.vocalsOff.length > 0;
+  return (
+    <div className="fixed inset-0 z-40 flex items-end justify-center bg-black/40" onClick={props.onClose}>
+      <div onClick={(e) => e.stopPropagation()} className="max-h-[92dvh] w-full max-w-lg space-y-3 overflow-auto rounded-t-3xl bg-panel px-4 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-3">
+        <div className="mx-auto h-1.5 w-10 rounded-full bg-line" />
+        <h2 className="text-xl font-bold">What you hear</h2>
+        {props.split ? (
+          <MixRow
+            label="Original vocals"
+            sub={someParts ? "removed in some parts (More → The song's vocals)" : vocalsOn ? "the singer of the song" : "removed — the music alone"}
+            on={vocalsOn}
+            onToggle={() => props.setVocalsOff(vocalsOn ? "all" : [])}
+          />
+        ) : (
+          <div className="flex items-center gap-3 rounded-2xl bg-panel-2/70 px-4 py-3">
+            <span className="flex-1">
+              <span className="block text-[15px] font-semibold">Original vocals</span>
+              <span className="block text-xs text-muted">To mute them, the song is split once into vocals and music · 1 call</span>
+            </span>
+            <button className="shrink-0 rounded-full bg-accent px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50" disabled={props.separating} onClick={props.onSeparate}>
+              {props.separating ? "Removing…" : "Remove"}
+            </button>
+          </div>
+        )}
+        {props.flow && <MixRow label="Your recorded flow" on={props.flow.on} onToggle={() => props.flow!.set(!props.flow!.on)} />}
+        {props.lanes.map((l) => (
+          <MixRow
+            key={l}
+            label={`Your recording · ${l}`}
+            on={!props.muted.includes(l)}
+            onToggle={() => props.setMuted(props.muted.includes(l) ? props.muted.filter((x) => x !== l) : [...props.muted, l])}
+          />
+        ))}
+        {!props.lanes.length && <p className="px-1 text-xs text-muted">Your recordings from the Record tab show up here once you have takes.</p>}
+        <button className="btn-primary w-full rounded-2xl py-3" onClick={props.onClose}>
+          Done
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function MixRow({ label, sub, on, onToggle }: { label: string; sub?: string; on: boolean; onToggle: () => void }) {
+  return (
+    <button className="flex w-full items-center gap-3 rounded-2xl bg-panel-2/70 px-4 py-3 text-left" onClick={onToggle} role="switch" aria-checked={on}>
+      <span className="flex-1">
+        <span className="block text-[15px] font-semibold">{label}</span>
+        {sub && <span className="block text-xs text-muted">{sub}</span>}
+      </span>
+      <span className={`relative h-7 w-12 shrink-0 rounded-full transition-colors ${on ? "bg-accent" : "bg-line"}`}>
+        <span className={`absolute top-0.5 h-6 w-6 rounded-full bg-white shadow transition-all ${on ? "left-[22px]" : "left-0.5"}`} />
+      </span>
+    </button>
   );
 }

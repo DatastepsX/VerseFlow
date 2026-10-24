@@ -30,6 +30,9 @@ interface Props {
   initialOn?: On;
   /** recording: the tabs wait */
   onBusy: (busy: boolean) => void;
+  /** recording layers you don't hear (the Mix) */
+  muted: string[];
+  onMix: () => void;
   /** the part being worked on (shared with Flow and Lyrics) */
   part: string | null;
   onPart: (id: string) => void;
@@ -89,7 +92,7 @@ function RemoteRecord(props: Props & { section: [string | null, (id: string) => 
   return <RecordScreen r={r} {...props} />;
 }
 
-function RecordScreen({ r, tree, rangeOf, bar, timeline, onBusy, host }: Props & { r: Recorder; host?: boolean }) {
+function RecordScreen({ r, tree, rangeOf, bar, timeline, onBusy, host, muted, onMix }: Props & { r: Recorder; host?: boolean }) {
   const [size, setSize] = usePref<keyof typeof SIZES>("vf.rec.size", "M");
   const [sheet, setSheet] = useState(false);
   /** the sound library, open for this layer */
@@ -280,7 +283,7 @@ function RecordScreen({ r, tree, rangeOf, bar, timeline, onBusy, host }: Props &
                   onClick={() => r.setLane(l)}
                   className={`flex shrink-0 items-center gap-1.5 rounded-full px-3.5 py-2 text-sm font-semibold transition-colors ${active ? "bg-accent text-white" : "bg-panel-2 text-fg/80"}`}
                 >
-                  {l}
+                  <span className={muted.includes(l) ? "line-through opacity-60" : ""}>{l}</span>
                   {n > 0 && <span className={`text-xs font-normal ${active ? "opacity-80" : "text-muted"}`}>{n}</span>}
                 </button>
               );
@@ -293,6 +296,14 @@ function RecordScreen({ r, tree, rangeOf, bar, timeline, onBusy, host }: Props &
             >
               <Plus className="h-4 w-4" />
               Layer
+            </button>
+            <button
+              className="flex shrink-0 items-center gap-1 rounded-full bg-panel-2 px-3 py-2 text-sm font-semibold text-fg/80"
+              onClick={onMix}
+              aria-label="What you hear"
+            >
+              <Sliders className="h-4 w-4" />
+              Mix
             </button>
           </div>
           {adding && (

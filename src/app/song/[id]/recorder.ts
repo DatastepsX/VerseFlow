@@ -184,6 +184,8 @@ export function useLocalRecorder(o: {
   timeline: Timeline;
   section: [string | null, (id: string) => void];
   host: boolean;
+  /** layers not heard (a take played on its own still plays) */
+  muted?: string[];
 }): Recorder {
   const { tree, setTree, engine, beat, bar } = o;
   const pid = tree.project.id;
@@ -315,8 +317,8 @@ export function useLocalRecorder(o: {
    */
   const layersFor = async (from: number, to: number, skipLane?: string, only?: Take, trying?: { lane: string; preset: string }) => {
     const takes = only
-      ? [only, ...tree.takes.filter((t) => t.chosen && lanes.includes(t.lane) && t.lane !== only.lane && t.start_at < to && t.start_at + t.duration > from)]
-      : tree.takes.filter((t) => t.chosen && lanes.includes(t.lane) && t.lane !== skipLane && t.start_at < to && t.start_at + t.duration > from);
+      ? [only, ...tree.takes.filter((t) => t.chosen && lanes.includes(t.lane) && !o.muted?.includes(t.lane) && t.lane !== only.lane && t.start_at < to && t.start_at + t.duration > from)]
+      : tree.takes.filter((t) => t.chosen && lanes.includes(t.lane) && !o.muted?.includes(t.lane) && t.lane !== skipLane && t.start_at < to && t.start_at + t.duration > from);
     await loadTakes(takes);
     const out: PlayLayer[] = [];
     for (const t of takes) {
