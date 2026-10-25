@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { barsPerLine, chipsOf, dropStrays, lineCuts, lineFromText, linesFromBreaks, linesFromOnsets, ownWords, relayout, type Onset } from "@/lib/flow/pattern";
 import { quantizeTaps } from "@/lib/flow/grid";
 import type { FlowPattern, PatternLine, SongFlow } from "@/lib/types";
-import { Check, Hand, LineBreak, Mic, Pencil, Play, Restart, Sparkles } from "@/components/icons";
+import { Check, Hand, Headphones, LineBreak, Mic, Pencil, Play, Restart, Sparkles } from "@/components/icons";
 
 type Mode = "write" | "sing" | "tap" | "both";
 
@@ -19,6 +19,9 @@ export interface SheetAudio {
   armMic: () => Promise<void>;
   /** the microphone's level now, 0..1 (singing: it stops when you do) */
   level?: () => number;
+  /** headphones on (no echo cancellation; the delay set for them) — the same setting as in Record */
+  headphones?: boolean;
+  setHeadphones?: (on: boolean) => void;
   startRec: () => void;
   /** stops recording → where the sung syllables start (song time), how loud they were and how long held */
   stopRec: (keepFrom: number) => Promise<{ t: number; strength: number; dur?: number }[]>;
@@ -366,6 +369,14 @@ export function FlowSheet({
             ))}
         </div>
 
+        {/* singing: headphones or not (the same setting as Record: echo cancellation and its own delay) */}
+        {mode !== "write" && mode !== "tap" && audio.setHeadphones && phase === "idle" && (
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={!!audio.headphones} onChange={(e) => audio.setHeadphones!(e.target.checked)} />
+            <Headphones className="h-4 w-4 text-muted" /> I&apos;m wearing headphones
+            {!audio.headphones && <span className="text-xs text-muted">· the beat is filtered out of the mic</span>}
+          </label>
+        )}
         {/* sing / tap: the first bars of the part */}
         {mode !== "write" && phase === "idle" && (
           <button

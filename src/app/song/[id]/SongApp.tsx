@@ -412,7 +412,15 @@ export function SongApp({
   });
 
   // ---------- recording the flow ----------
-  const [headphones, setHeadphones] = useState(true);
+  // the same on this device as in Record: headphones or not, and the delay found by ear for each
+  const [headphones, setHeadphones] = usePref("vf.studio.headphones", true);
+  const [latencyRaw] = usePref<number | null>("vf.studio.latency", null);
+  const [latencyVp] = usePref<number | null>("vf.studio.latency.vp", null);
+  /** how late the microphone hears you (s): the delay set in Record, else what the browser reports */
+  const recLatency = (e: StudioEngine) => {
+    const ms = headphones ? latencyRaw : latencyVp;
+    return ms !== null ? ms / 1000 : e.reportedLatency;
+  };
   const [rec, setRec] = useState<null | "recording" | "tapping" | "processing">(null);
   const [source, setSource] = useState<"flow" | "tap" | "vocals">("flow");
   /** how the flow is set: sung into the mic, or tapped on the screen */
@@ -468,7 +476,7 @@ export function SongApp({
     if (!e || rec !== "recording") return;
     setSource("flow");
     setRec("processing");
-    const r = await e.stopRecording(e.reportedLatency, 0, 0);
+    const r = await e.stopRecording(recLatency(e), 0, 0);
     e.disarm();
     if (!r) {
       setError("Nothing was recorded.");
@@ -549,7 +557,7 @@ export function SongApp({
   const finishTapping = async () => {
     const e = engine.current;
     if (!e || rec !== "tapping") return;
-    const voice = e.armed ? await e.stopRecording(e.reportedLatency, 0, part ? Math.max(0, part.start - 0.3) : 0) : null;
+    const voice = e.armed ? await e.stopRecording(recLatency(e), 0, part ? Math.max(0, part.start - 0.3) : 0) : null;
     if (e.armed) e.disarm();
     e.stop();
     const taps = tapsRef.current;
@@ -752,7 +760,7 @@ export function SongApp({
         }
       }, 50);
     });
-    const r = await e.stopRecording(e.reportedLatency, 0, Math.max(0, g.start - 0.4));
+    const r = await e.stopRecording(recLatency(e), 0, Math.max(0, g.start - 0.4));
     e.disarm();
     if (!r) return [];
     return detectSyllables(r.samples, r.sampleRate)
@@ -801,11 +809,13 @@ export function SongApp({
       await engine.current?.arm(undefined, { voiceProcessing: !headphones });
     },
     level: () => engine.current?.level() ?? 0,
+    headphones,
+    setHeadphones,
     startRec: () => engine.current?.startRecording(),
     stopRec: async (keepFrom) => {
       const e = engine.current;
       if (!e?.armed) return [];
-      const r = await e.stopRecording(e.reportedLatency, 0, keepFrom);
+      const r = await e.stopRecording(recLatency(e), 0, keepFrom);
       e.disarm();
       if (!r) return [];
       // to hear it back right away (Listen), with a click on every syllable found
