@@ -333,6 +333,28 @@ export function useLocalRecorder(o: {
       return false;
     }
   };
+  // a computer (the studio): the microphone comes back on by itself — when the browser already allows it (it was
+  // allowed before), or at the first click anywhere on the page; no "Allow microphone" each time you come back
+  const autoArming = useRef(false);
+  useEffect(() => {
+    if (!o.host || armed) return;
+    let gone = false;
+    const tryArm = () => {
+      if (gone || autoArming.current || engine.current?.armed) return;
+      autoArming.current = true;
+      void arm().finally(() => (autoArming.current = false));
+    };
+    navigator.permissions
+      ?.query({ name: "microphone" as PermissionName })
+      .then((p) => p.state === "granted" && tryArm())
+      .catch(() => {});
+    window.addEventListener("pointerdown", tryArm, { capture: true, once: true });
+    return () => {
+      gone = true;
+      window.removeEventListener("pointerdown", tryArm, { capture: true });
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- arm reads the current settings
+  }, [o.host, armed]);
   // another microphone, or headphones on / off: the microphone is set up again
   const armedWith = useRef("");
   useEffect(() => {

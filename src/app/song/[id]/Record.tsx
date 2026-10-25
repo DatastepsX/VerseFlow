@@ -218,7 +218,7 @@ function RecordScreen({ r, tree, setTree, rangeOf, bar, timeline, onBusy, host, 
             {r.connected && r.armed ? (
               <>Connected · your {r.device} records, this phone is the remote</>
             ) : r.connected ? (
-              <>Your {r.device} is there — click “Allow microphone” on it once.</>
+              <>Your {r.device} is there, its microphone still off — click anywhere on the VerseFlow page on it once (and let the browser always allow the microphone for this site: then it comes on by itself).</>
             ) : (
               <>
                 On your Mac, open this song and click <b>Record</b>. They connect by themselves.

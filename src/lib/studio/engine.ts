@@ -88,7 +88,8 @@ export class StudioEngine {
    * recorded without headphones (the beat from the speaker is mostly removed); studio takes stay raw
    */
   async arm(deviceId?: string, opts: { voiceProcessing?: boolean } = {}) {
-    await this.ctx.resume();
+    // without a click the sound can't start yet (it waits for one): the microphone goes on all the same
+    await Promise.race([this.ctx.resume(), new Promise((r) => setTimeout(r, 300))]);
     this.disarm();
     const vp = !!opts.voiceProcessing;
     this.stream = await navigator.mediaDevices.getUserMedia({
