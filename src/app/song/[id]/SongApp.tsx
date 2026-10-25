@@ -103,6 +103,35 @@ export function SongApp({
   const router = useRouter();
   const [tree, setTree] = useState(initialTree);
   const pid = tree.project.id;
+  // the song open on another device (the Mac, the phone) changed: this one follows within a few seconds
+  const seenVersion = useRef<string | null>(null);
+  useEffect(() => {
+    let stop = false;
+    const tick = async () => {
+      if (document.hidden) return;
+      const r = (await fetch(`/api/projects/${pid}/version`, { cache: "no-store" })
+        .then((x) => (x.ok ? x.json() : null))
+        .catch(() => null)) as { v: string } | null;
+      if (!r || stop) return;
+      if (seenVersion.current !== null && r.v !== seenVersion.current) {
+        const t = (await fetch(`/api/projects/${pid}`, { cache: "no-store" })
+          .then((x) => (x.ok ? x.json() : null))
+          .catch(() => null)) as ProjectTree | null;
+        if (!t?.project || stop) return;
+        setTree(t);
+      }
+      seenVersion.current = r.v;
+    };
+    void tick();
+    const id = setInterval(() => void tick(), 3000);
+    const onShow = () => void tick();
+    document.addEventListener("visibilitychange", onShow);
+    return () => {
+      stop = true;
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", onShow);
+    };
+  }, [pid]);
   const lang = tree.project.language;
   const lyricLines = tree.sections.flatMap((s) => s.lines.filter((l) => l.kind === "lyric"));
   const hasLines = lyricLines.length > 0;

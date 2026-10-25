@@ -1903,3 +1903,10 @@ export async function updateProfile(patch: Record<string, unknown>) {
   check(await db().from("user_settings").upsert({ id: "me", prefs, updated_at: new Date().toISOString() }));
   return prefs;
 }
+
+/** a stamp of the song's content (project_version in the database): it changes with any change to it */
+export async function projectVersion(projectId: string): Promise<string> {
+  const { data, error } = await db().rpc("project_version", { pid: projectId });
+  if (error) throw new Error(error.message);
+  return String(data ?? "");
+}
