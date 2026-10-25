@@ -83,18 +83,8 @@ export async function processFlow(
   return { tree: await suggestAll(pid, t, onStep, onTree), takeId, wordsFailed };
 }
 
-/**
- * A flow recording: saved as a take (16 kHz, small — lane "Flow"), then the
- * words sung in it recognised (1 call). Sounds ("pom pom para") only count
- * syllables; a failed recognition leaves the rhythm alone.
- */
-async function saveAndHear(
-  pid: string,
-  rec: Recording,
-  onStep: (step: FlowStep, progress?: { done: number; total: number }) => void,
-  part?: { sectionId: string },
-): Promise<{ takeId: string; words: TimedWord[]; sounds: TimedWord[]; wordsFailed: string | null }> {
-  onStep("upload");
+/** a flow recording kept as a take (16 kHz, small — lane "Flow"): it can be heard with the song, and checked later */
+export async function saveFlowTake(pid: string, rec: Recording, sectionId: string | null): Promise<string> {
   const small = resample(rec.samples, rec.sampleRate, 16000);
   const wav = encodeWav([small], 16000, 16);
   const up = await post<{ path: string; signedUrl: string }>(`/api/projects/${pid}/takes`, { action: "uploadUrl" });
@@ -109,7 +99,7 @@ async function saveAndHear(
     body: JSON.stringify({
       action: "save",
       path: up.path,
-      section_id: part?.sectionId ?? null,
+      section_id: sectionId,
       lane: "Flow",
       start_at: Math.round(rec.startAt * 100000) / 100000,
       duration: small.length / 16000,
@@ -118,7 +108,23 @@ async function saveAndHear(
     }),
   });
   if (!saved.ok) throw new Error("Saving the recording failed");
-  const takeId = saved.headers.get("x-take-id") ?? "";
+  return saved.headers.get("x-take-id") ?? "";
+}
+
+/**
+ * A flow recording: saved as a take (16 kHz, small — lane "Flow"), then the
+ * words sung in it recognised (1 call). Sounds ("pom pom para") only count
+ * syllables; a failed recognition leaves the rhythm alone.
+ */
+async function saveAndHear(
+  pid: string,
+  rec: Recording,
+  onStep: (step: FlowStep, progress?: { done: number; total: number }) => void,
+  part?: { sectionId: string },
+): Promise<{ takeId: string; words: TimedWord[]; sounds: TimedWord[]; wordsFailed: string | null }> {
+  onStep("upload");
+  const takeId = await saveFlowTake(pid, rec, part?.sectionId ?? null);
+
 
   onStep("words");
   let words: TimedWord[] = [];

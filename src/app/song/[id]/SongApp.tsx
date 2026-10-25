@@ -7,7 +7,7 @@ import { fmtTime } from "@/lib/audio/song-map";
 import { buildTimeline, positionIn } from "@/lib/audio/timeline";
 import { extendBuffers } from "@/lib/audio/arrange";
 import { BEAT_ACCEPT, MAX_BEAT_BYTES, uploadBeat } from "@/lib/client/beat";
-import { chunkLines, processFlow, processTaps, processVocals, type FlowStep } from "@/lib/flow/pipeline";
+import { chunkLines, processFlow, processTaps, processVocals, saveFlowTake, type FlowStep } from "@/lib/flow/pipeline";
 import { stressPattern } from "@/lib/flow/lines";
 import { prosody } from "@/lib/rhyme/prosody";
 import { StudioEngine, type PlayLayer } from "@/lib/studio/engine";
@@ -798,6 +798,9 @@ export function SongApp({
       const r = await e.stopRecording(e.reportedLatency, 0, keepFrom);
       e.disarm();
       if (!r) return [];
+      // kept as a take of the part (lane "Flow"): heard with the song, and there to check the recognition (free)
+      const sectionId = flowSheet?.sectionId ?? null;
+      void saveFlowTake(pid, r, sectionId).catch(() => {});
       return detectSyllables(r.samples, r.sampleRate).map((x) => ({ t: x.t + r.startAt, strength: x.strength, dur: x.dur }));
     },
   };

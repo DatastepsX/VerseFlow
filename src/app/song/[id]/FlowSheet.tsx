@@ -90,8 +90,8 @@ export function FlowSheet({
   const seed = useRef(0);
   const p = lines.length;
   const end = barStart + p * bar;
-  /** with "Next line" a line can be longer than a bar: it may take up to two each */
-  const limit = barStart + 2 * p * bar;
+  /** with "Next line" a line can be longer than a bar: it may take up to two each (sung: three — it stops when you do) */
+  const limit = barStart + (mode === "tap" ? 2 : 3) * p * bar;
 
   const pickMode = (m: Mode) => {
     setMode(m);
@@ -129,8 +129,9 @@ export function FlowSheet({
       if (mode !== "tap" && !br.length) {
         const lvl = audioRef.current.level?.() ?? 0;
         peak.current = Math.max(peak.current * 0.999, lvl);
-        if (lvl > Math.max(0.02, 0.2 * peak.current)) lastVoice.current = t;
-        if (t > limit || (t > end && t - Math.max(lastVoice.current, end - bar) > bar)) void finish.current?.();
+        if (lvl > Math.max(0.01, 0.12 * peak.current)) lastVoice.current = t;
+        // two bars of quiet after the last sound: the take is over (a breath or a rest between lines is shorter)
+        if (t > limit || (t > end && t - Math.max(lastVoice.current, end - bar) > 2 * bar)) void finish.current?.();
         return;
       }
       // no "Next line": a line per bar, over after the last bar
@@ -375,6 +376,8 @@ export function FlowSheet({
             onPointerDown={(e) => {
               e.preventDefault();
               if (mode !== "sing") tap();
+              // singing: a tap on it ends the take (after the count-in)
+              else if (!counting) void finish.current?.();
             }}
             aria-label={mode === "sing" ? "Singing" : "Syllable"}
           >
@@ -389,7 +392,7 @@ export function FlowSheet({
                 <span className="text-lg font-bold">
                   {mode === "sing" ? "Sing!" : "Tap!"} · {breaks ? `line ${Math.min(p, breaks + 1)} of ${p}` : `bar ${mode === "tap" ? Math.min(p, Math.floor((now - barStart) / bar) + 1) : Math.floor((now - barStart) / bar) + 1}`}
                 </span>
-                {mode !== "sing" && <span className="text-sm tabular-nums opacity-90">{taps} syllables</span>}
+                {mode !== "sing" ? <span className="text-sm tabular-nums opacity-90">{taps} syllables</span> : <span className="text-sm opacity-90">tap here when you&apos;re done</span>}
               </>
             )}
             <span className="mt-1 h-1.5 w-3/4 overflow-hidden rounded-full bg-white/25">
