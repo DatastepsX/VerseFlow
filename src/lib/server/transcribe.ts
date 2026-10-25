@@ -6,6 +6,7 @@ import type { ProjectTree } from "@/lib/types";
 import { check, db } from "./db";
 import { AiUnavailable } from "./ai";
 import { unzip } from "./unzip";
+import type { Alignment } from "@/lib/flow/align";
 
 const MODEL = "scribe_v2";
 
@@ -136,6 +137,39 @@ export async function transcribeTake(projectId: string, takeId: string, language
     .from("ai_calls")
     .insert({ project_id: projectId, kind: "transcribe_flow", model: MODEL, audio_seconds: body.audio_duration_secs ?? 0 });
   return cleanWords(body.words ?? []);
+}
+
+/**
+ * A take of written lyrics, aligned (1 ElevenLabs forced-alignment call): the
+ * recording + the text → when each character and word is sung, relative to
+ * the take's start.
+ */
+export async function alignTake(projectId: string, takeId: string, text: string): Promise<{ alignment: Alignment; startAt: number }> {
+  const key = process.env.ELEVENLABS_API_KEY;
+  if (!key) throw new AiUnavailable("Word alignment is not configured yet (ELEVENLABS_API_KEY missing).");
+  const take = check(await db().from("takes").select("path, start_at, duration").eq("id", takeId).eq("project_id", projectId).maybeSingle()) as {
+    path: string;
+    start_at: number;
+    duration: number;
+  } | null;
+  if (!take) throw new Error("Take not found");
+  const { data: audio, error } = await db().storage.from("beats").download(take.path);
+  if (error || !audio) throw new Error(error?.message ?? "Could not read the recording");
+  const form = new FormData();
+  form.append("file", audio, take.path.split("/").pop() || "take.wav");
+  form.append("text", text);
+  const res = await fetch(`${process.env.ELEVENLABS_BASE_URL || "https://api.elevenlabs.io/v1"}/forced-alignment`, {
+    method: "POST",
+    headers: { "xi-api-key": key },
+    body: form,
+  });
+  const body = (await res.json().catch(() => ({}))) as Alignment & { detail?: unknown };
+  if (!res.ok) {
+    const detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail ?? res.statusText);
+    throw new Error(`Word alignment failed (${res.status}): ${detail.slice(0, 300)}`);
+  }
+  await db().from("ai_calls").insert({ project_id: projectId, kind: "align", model: "forced_alignment", audio_seconds: take.duration });
+  return { alignment: body, startAt: take.start_at };
 }
 
 /**

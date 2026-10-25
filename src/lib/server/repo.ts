@@ -1253,6 +1253,12 @@ async function getTake(id: string) {
   return t;
 }
 
+export async function takeProject(id: string) {
+  const t = check(await db().from("takes").select("project_id").eq("id", id).maybeSingle()) as { project_id: string } | null;
+  if (!t) throw new NotFound("Take not found");
+  return t.project_id;
+}
+
 export async function chooseTake(id: string) {
   const t = await getTake(id);
   let q = db().from("takes").update({ chosen: false }).eq("project_id", t.project_id).eq("lane", t.lane);

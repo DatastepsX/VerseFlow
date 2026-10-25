@@ -9,6 +9,7 @@ import { FX_CATEGORIES, FX_PRESETS, layerPreset } from "@/lib/fx/presets";
 import { keyName, NOTE_NAMES } from "@/lib/fx/tune";
 import { followTo } from "@/components/writer/follow";
 import { fmtTime } from "@/lib/audio/song-map";
+import { undoHeaders, undoStep } from "@/lib/undo-group";
 import type { Timeline } from "@/lib/audio/timeline";
 import type { StudioEngine } from "@/lib/studio/engine";
 import type { Line, ProjectTree } from "@/lib/types";
@@ -92,7 +93,7 @@ function RemoteRecord(props: Props & { section: [string | null, (id: string) => 
   return <RecordScreen r={r} {...props} />;
 }
 
-function RecordScreen({ r, tree, rangeOf, bar, timeline, onBusy, host, muted, onMix }: Props & { r: Recorder; host?: boolean }) {
+function RecordScreen({ r, tree, setTree, rangeOf, bar, timeline, onBusy, host, muted, onMix }: Props & { r: Recorder; host?: boolean }) {
   const [size, setSize] = usePref<keyof typeof SIZES>("vf.rec.size", "M");
   const [sheet, setSheet] = useState(false);
   /** the sound library, open for this layer */
@@ -105,6 +106,35 @@ function RecordScreen({ r, tree, rangeOf, bar, timeline, onBusy, host, muted, on
     r.shift(id, by);
   };
   const [newLane, setNewLane] = useState("");
+  /** the written lines a take sings: those starting inside it, else its part's */
+  const takeLines = (rt: Recorder["takes"][number]) => {
+    const t = tree.takes.find((x) => x.id === rt.id);
+    if (!t) return [];
+    const all = tree.sections.flatMap((s) => s.lines).filter((l) => l.kind === "lyric" && l.text.trim() && l.status !== "DECLINED");
+    const inside = all.filter((l) => l.audio_at !== null && l.audio_at >= t.start_at - 0.3 && l.audio_at < t.start_at + t.duration - 0.3);
+    return inside.length ? inside : all.filter((l) => l.section_id === t.section_id);
+  };
+  /** forced alignment: the take + its lines' text → every syllable's time (1 call); the lines' flow follows the take */
+  const [syncing, setSyncing] = useState<string | null>(null);
+  const [synced, setSynced] = useState<Record<string, string>>({});
+  const sync = async (t: Recorder["takes"][number]) => {
+    const ids = takeLines(t).map((l) => l.id);
+    setSyncing(t.id);
+    try {
+      const res = await undoStep(`Words synced to ${t.lane} take ${t.take_no}`, () =>
+        fetch(`/api/takes/${t.id}`, { method: "POST", headers: { "content-type": "application/json", ...undoHeaders() }, body: JSON.stringify({ action: "align", lineIds: ids }) }),
+      );
+      const data = (await res.json().catch(() => ({}))) as ProjectTree & { error?: string };
+      if (!res.ok) throw new Error(data.error ?? "Could not sync the words");
+      setTree(data);
+      const [n, of] = (res.headers.get("x-aligned") ?? "0/0").split("/");
+      setSynced((m) => ({ ...m, [t.id]: n === "0" ? "The words didn't match the take" : `${n} of ${of} lines synced — karaoke and flow follow this take` }));
+    } catch (e) {
+      setSynced((m) => ({ ...m, [t.id]: e instanceof Error ? e.message : "Could not sync the words" }));
+    } finally {
+      setSyncing(null);
+    }
+  };
   const section = tree.sections.find((s) => s.id === r.sectionId) ?? null;
   const range = section ? rangeOf(section.id) : null;
   const lines = section?.lines.filter((l) => l.kind === "lyric" && l.text.trim() && l.status !== "DECLINED") ?? [];
@@ -409,6 +439,17 @@ function RecordScreen({ r, tree, rangeOf, bar, timeline, onBusy, host, muted, on
                           later ›
                         </button>
                       </div>
+                      {takeLines(t).length > 0 && (
+                        <button
+                          className="mt-1.5 flex items-center gap-1 rounded-full bg-accent-soft px-2.5 py-1 text-[11px] font-semibold text-accent disabled:opacity-40"
+                          disabled={!idle || syncing !== null}
+                          onClick={() => void sync(t)}
+                          title="Match the written lines to this take: every syllable gets the time you rapped it (karaoke + flow)"
+                        >
+                          {syncing === t.id ? "Syncing…" : `Sync words · ${takeLines(t).length} line${takeLines(t).length === 1 ? "" : "s"} · 1 call`}
+                        </button>
+                      )}
+                      {synced[t.id] && <p className="mt-1 text-[11px] text-accent">{synced[t.id]}</p>}
                     </div>
                     {!t.chosen && (
                       <button className="flex h-8 shrink-0 items-center gap-1 rounded-full bg-panel-2 px-3 text-xs font-semibold disabled:opacity-40" disabled={!idle} onClick={() => r.choose(t.id)}>

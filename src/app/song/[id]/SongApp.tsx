@@ -2514,7 +2514,7 @@ function ElevenAccount() {
     voiceCloning?: boolean | null;
     voices?: { used: number | null; limit: number | null };
     nextInvoice?: { cents: number | null; at: number | null; currency: string | null } | null;
-    app?: { songsRead: number; minutesHeard: number; linesSpoken: number; charactersSpoken: number; vocalsRemoved: number; voicesMade: number };
+    app?: { songsRead: number; minutesHeard: number; linesSpoken: number; charactersSpoken: number; vocalsRemoved: number; takesSynced?: number; voicesMade: number };
   };
   const [info, setInfo] = useState<Info | null>(null);
   const [loading, setLoading] = useState(false);
@@ -2587,6 +2587,7 @@ function ElevenAccount() {
                 <Item label="Songs read for lyrics" value={`${info.app.songsRead} · ${info.app.minutesHeard} min heard`} />
                 <Item label="Lines in your voice" value={`${info.app.linesSpoken} · ${n(info.app.charactersSpoken)} characters`} />
                 <Item label="Vocals removed" value={info.app.vocalsRemoved} />
+                <Item label="Takes synced to the lyrics" value={info.app.takesSynced ?? 0} />
                 <Item label="Voices created" value={info.app.voicesMade} />
               </div>
             </div>

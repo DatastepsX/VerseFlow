@@ -123,6 +123,11 @@ ElevenLabs stem-separation call (`two_stems_v1`) splits the uploaded song into i
 both are stored next to the song (`audio_tracks.instrumental_path` / `vocals_path`), which stays as uploaded. Then
 "Music only" / "With the vocals" chooses what plays, records and flows use (saved per song on the device).
 
+**Sync words to a take** (Record → a take → "Sync words · 1 call"; `alignTake` in `src/lib/server/transcribe.ts`,
+`src/lib/flow/align.ts`): one ElevenLabs forced-alignment call with the take and the written lines it sings (those
+starting inside it, else its part's). Every sung syllable gets the time it was rapped: the lines' `flow.times` (karaoke,
+guide voice, flow grid) and `audio_at` follow the take. One undo step; logged as `ai_calls.kind = "align"`.
+
 **Undo / redo** (top bar, ⌘Z): one step per action (`undo_steps`; a multi-request action sends one `x-undo-step`).
 A rebuilt song is undone by restoring the version saved before it.
 

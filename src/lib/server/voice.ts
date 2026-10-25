@@ -192,7 +192,7 @@ export async function elevenAccount() {
   // VerseFlow's own use since the credits last reset (about a month before the next reset)
   const since = new Date(resets ? (resets - 30 * 24 * 3600) * 1000 : Date.now() - 30 * 24 * 3600 * 1000).toISOString();
   const calls = check(
-    await db().from("ai_calls").select("kind, audio_seconds, characters").in("kind", ["transcribe", "transcribe_flow", "tts", "stems", "voice_clone"]).gte("created_at", since),
+    await db().from("ai_calls").select("kind, audio_seconds, characters").in("kind", ["transcribe", "transcribe_flow", "align", "tts", "stems", "voice_clone"]).gte("created_at", since),
   ) as { kind: string; audio_seconds: number | null; characters: number | null }[];
   const sum = (kinds: string[], f: (c: (typeof calls)[number]) => number) => calls.filter((c) => kinds.includes(c.kind)).reduce((n, c) => n + f(c), 0);
   return {
@@ -212,10 +212,11 @@ export async function elevenAccount() {
     app: {
       since,
       songsRead: calls.filter((c) => c.kind === "transcribe").length,
-      minutesHeard: Math.round(sum(["transcribe", "transcribe_flow"], (c) => c.audio_seconds ?? 0) / 60),
+      minutesHeard: Math.round(sum(["transcribe", "transcribe_flow", "align"], (c) => c.audio_seconds ?? 0) / 60),
       linesSpoken: calls.filter((c) => c.kind === "tts").length,
       charactersSpoken: sum(["tts"], (c) => c.characters ?? 0),
       vocalsRemoved: calls.filter((c) => c.kind === "stems").length,
+      takesSynced: calls.filter((c) => c.kind === "align").length,
       voicesMade: calls.filter((c) => c.kind === "voice_clone").length,
     },
   };
