@@ -87,7 +87,20 @@ export class StudioEngine {
    * voiceProcessing: the browser's echo cancellation / noise suppression / auto gain — for a flow
    * recorded without headphones (the beat from the speaker is mostly removed); studio takes stay raw
    */
-  async arm(deviceId?: string, opts: { voiceProcessing?: boolean } = {}) {
+  private arming: Promise<string> | null = null;
+  /** one microphone request at a time: asked twice at once, a browser (Safari) can hand back a silent stream */
+  arm(deviceId?: string, opts: { voiceProcessing?: boolean } = {}) {
+    if (!this.arming) this.arming = this.armNow(deviceId, opts).finally(() => (this.arming = null));
+    return this.arming;
+  }
+
+  /** the microphone is on and really sending (not ended or muted by the browser) */
+  get inputAlive() {
+    const t = this.stream?.getAudioTracks()[0];
+    return !!this.recorder && !!t && t.readyState === "live" && t.enabled && !t.muted;
+  }
+
+  private async armNow(deviceId?: string, opts: { voiceProcessing?: boolean } = {}) {
     // without a click the sound can't start yet (it waits for one): the microphone goes on all the same
     await Promise.race([this.ctx.resume(), new Promise((r) => setTimeout(r, 300))]);
     this.disarm();
@@ -279,6 +292,12 @@ export class StudioEngine {
     if (!chunks.length) return null;
     const sr = this.ctx.sampleRate;
     const total = chunks.reduce((n, c) => n + c.channels[0].length, 0);
+    // the input chosen is silent but the other one isn't (a microphone on input 1 with input 2 chosen): the other
+    const silentIn = (k: number) => chunks.every((c) => !c.channels[k] || c.channels[k].every((v) => v === 0));
+    if (channel >= 0 && chunks[0].channels.length > 1 && silentIn(Math.min(channel, chunks[0].channels.length - 1))) {
+      const other = channel === 0 ? 1 : 0;
+      if (!silentIn(other)) channel = other;
+    }
     const mono = new Float32Array(total);
     let o = 0;
     for (const c of chunks) {

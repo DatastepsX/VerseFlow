@@ -318,10 +318,11 @@ export function useLocalRecorder(o: {
     return out;
   };
 
-  const arm = async () => {
+  /** quiet: switched on by itself — a message showing stays */
+  const arm = async (quiet = false) => {
     const e = engine.current;
     if (!e) return false;
-    setError(null);
+    if (!quiet) setError(null);
     try {
       await e.arm(deviceId || undefined, { voiceProcessing: !headphones });
       setArmed(true);
@@ -342,7 +343,7 @@ export function useLocalRecorder(o: {
     const tryArm = () => {
       if (gone || autoArming.current || engine.current?.armed) return;
       autoArming.current = true;
-      void arm().finally(() => (autoArming.current = false));
+      void arm(true).finally(() => (autoArming.current = false));
     };
     navigator.permissions
       ?.query({ name: "microphone" as PermissionName })
@@ -378,7 +379,8 @@ export function useLocalRecorder(o: {
     if (!e || !beat.current || !range || !sectionId || (busy && !again) || starting) return;
     setStarting(true);
     try {
-      if (!e.armed && !(await arm())) return;
+      // a microphone the browser ended or muted meanwhile: switched on again first
+      if (!e.inputAlive && !(await arm())) return;
       await start(e, l);
     } finally {
       setStarting(false);
@@ -423,6 +425,14 @@ export function useLocalRecorder(o: {
       const w = takeWindow(range, bar, countIn);
       const rec = await e.stopRecording(latency, channel, w.from);
       if (!rec || rec.samples.length < rec.sampleRate * 0.3) throw new Error("Nothing was recorded.");
+      // pure silence (every sample 0): the browser gave a dead microphone — not saved; the microphone goes on again
+      if (rec.samples.every((v) => v === 0)) {
+        e.disarm();
+        setArmed(false);
+        throw new Error(
+          `The ${deviceName()}'s microphone sent no sound, so the take wasn't kept. It is being switched on again — record once more.${o.host ? " Keep the VerseFlow tab open (not in the background) on it." : ""}`,
+        );
+      }
       const wav = encodeWav([rec.samples], rec.sampleRate, 24);
       const { data: up } = await api(`/api/projects/${pid}/takes`, { action: "uploadUrl" });
       const { path, signedUrl } = up as unknown as { path: string; signedUrl: string };
