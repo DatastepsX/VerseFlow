@@ -4,6 +4,7 @@ import { FlowText } from "@/components/FlowText";
 import type { LyricsBrief } from "@/lib/brief";
 import { deviceKind, isHandheld } from "@/lib/client/profile";
 import type { RemoteCmd } from "@/lib/studio/remote";
+import { NAV_EVENT, postNav, type NavDetail } from "@/components/RemoteFollow";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -733,14 +734,9 @@ export function SongApp({
   };
   /** the part being worked on — the same in Flow, Lyrics and Record */
   const [activePart, setActivePart] = useState<string | null>(null);
-  // the phone drives the Mac: where it is (tab, part) goes there
+  // the phone drives the Mac: this song, its tab and part go there (the app-wide link: components/RemoteFollow)
   useEffect(() => {
-    if (!controller) return;
-    void fetch(`/api/projects/${pid}/remote`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ cmd: { t: "nav", view, part: activePart } }),
-    }).catch(() => {});
+    if (controller) postNav(`/song/${pid}`, view, activePart);
   }, [controller, view, activePart, pid]);
   // this Mac follows the phone: its tab and part, and it plays what the phone plays
   const hostRun = useRef<(c: RemoteCmd) => void>(() => {});
@@ -762,6 +758,17 @@ export function SongApp({
         })();
     };
   });
+  // the Mac: the phone's tab and part in this song
+  useEffect(() => {
+    if (!remoteHost) return;
+    const on = (e: Event) => {
+      const d = (e as CustomEvent<NavDetail>).detail;
+      if (d.path === `/song/${pid}`) hostRun.current({ t: "nav", view: d.view ?? view, part: d.part });
+    };
+    window.addEventListener(NAV_EVENT, on);
+    return () => window.removeEventListener(NAV_EVENT, on);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the listener reads the tab it is in
+  }, [remoteHost, pid]);
   // a browser plays sound only after a click on the page: until then the Mac asks for one
   const [soundLocked, setSoundLocked] = useState(false);
   useEffect(() => {

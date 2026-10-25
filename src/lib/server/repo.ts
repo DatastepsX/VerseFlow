@@ -1921,3 +1921,26 @@ export async function projectVersion(projectId: string): Promise<string> {
   if (error) throw new Error(error.message);
   return String(data ?? "");
 }
+
+// ---------- where the phone is (the Mac as main device follows it, anywhere in the app) ----------
+
+export interface RemoteNav {
+  /** the page: "/", "/song/…", "/settings" */
+  path: string;
+  /** in a song: its tab and part */
+  view?: string | null;
+  part?: string | null;
+  /** when (ms) */
+  at: number;
+}
+
+export async function getRemoteNav(): Promise<RemoteNav | null> {
+  const row = check(await db().from("user_settings").select("prefs").eq("id", "nav").maybeSingle()) as { prefs: RemoteNav } | null;
+  return row?.prefs?.path ? row.prefs : null;
+}
+
+export async function putRemoteNav(nav: Omit<RemoteNav, "at">) {
+  const value: RemoteNav = { ...nav, at: Date.now() };
+  check(await db().from("user_settings").upsert({ id: "nav", prefs: value, updated_at: new Date().toISOString() }));
+  return value;
+}

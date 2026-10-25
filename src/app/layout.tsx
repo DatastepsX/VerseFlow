@@ -1,5 +1,7 @@
 import type { Metadata, Viewport } from "next";
+import { Suspense } from "react";
 import { ProfileTheme } from "@/components/ThemePicker";
+import { RemoteFollow } from "@/components/RemoteFollow";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
@@ -40,6 +42,9 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       </head>
       <body className="min-h-full flex flex-col">
         <ProfileTheme />
+        <Suspense fallback={null}>
+          <RemoteFollow />
+        </Suspense>
         {children}
       </body>
     </html>
