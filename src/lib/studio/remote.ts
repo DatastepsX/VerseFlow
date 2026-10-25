@@ -37,6 +37,8 @@ export interface RemoteTake {
 
 export interface RemoteState {
   armed: boolean;
+  /** the microphone it records with (its name) */
+  mic?: string | null;
   beatReady: boolean;
   sectionId: string | null;
   /** idle | playing | countin | recording | saving | calibrating */

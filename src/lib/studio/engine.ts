@@ -34,24 +34,29 @@ export interface Recording {
   startAt: number;
 }
 
-let shared: AudioContext | null = null;
 const workletReady = new WeakSet<BaseAudioContext>();
+/** the AudioContexts open in this tab */
+const open = new Set<AudioContext>();
+let unlockInstalled = false;
 
 /**
- * One AudioContext for the whole tab: a browser plays sound only after a click on the page, so once a click
- * has unlocked it, it stays unlocked on every page (the Mac following the phone moves between pages by itself).
+ * A browser plays sound only after a click on the page: any click or key anywhere resumes every AudioContext
+ * open in the tab. (Each song page has its own context, made fresh — a long-lived one can stay on an old
+ * audio route in Safari, and record next to nothing.)
  */
-export function audioContext() {
-  if (!shared) {
-    const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-    shared = new Ctx({ latencyHint: "interactive" });
-    // any click or key anywhere unlocks it
-    const unlock = () => {
-      if (shared && shared.state !== "running") void shared.resume().catch(() => {});
-    };
-    for (const ev of ["pointerdown", "keydown", "touchend"]) window.addEventListener(ev, unlock, { capture: true });
-  }
-  return shared;
+function installUnlock() {
+  if (unlockInstalled) return;
+  unlockInstalled = true;
+  const unlock = () => {
+    for (const c of open) if (c.state !== "running") void c.resume().catch(() => {});
+  };
+  for (const ev of ["pointerdown", "keydown", "touchend"]) window.addEventListener(ev, unlock, { capture: true });
+}
+
+/** sound can play in this tab: it was clicked once, or a context runs */
+export function soundAllowed() {
+  const ua = (navigator as Navigator & { userActivation?: { hasBeenActive: boolean } }).userActivation;
+  return !!ua?.hasBeenActive || [...open].some((c) => c.state === "running");
 }
 
 export class StudioEngine {
@@ -75,7 +80,10 @@ export class StudioEngine {
   reportedLatency = 0;
 
   constructor() {
-    this.ctx = audioContext();
+    const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    this.ctx = new Ctx({ latencyHint: "interactive" });
+    open.add(this.ctx);
+    installUnlock();
   }
 
   get armed() {
@@ -350,11 +358,10 @@ export class StudioEngine {
     return measureClaps(rec.samples, rec.sampleRate, rec.startAt + base, clicks.slice(4).map((c) => base + c.at));
   }
 
-  /** this engine's sound stops; the tab's AudioContext stays (unlocked) for the next page */
   close() {
     this.stop();
     this.disarm();
-    for (const b of this.buses.values()) b.disconnect();
-    this.buses.clear();
+    open.delete(this.ctx);
+    void this.ctx.close();
   }
 }

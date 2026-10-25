@@ -64,6 +64,8 @@ export interface Recorder {
   note: string | null;
   /** remote: the device that records ("Mac") */
   device: string | null;
+  /** the microphone recording (its name), once on */
+  mic: string | null;
   record: (lane: string) => void;
   stop: () => void;
   /** throw the take being recorded away and start it again */
@@ -196,6 +198,7 @@ export function useLocalRecorder(o: {
 
   const buffers = useRef(new Map<string, AudioBuffer>());
   const [armed, setArmed] = useState(false);
+  const [mic, setMic] = useState<string | null>(null);
   const [inputs, setInputs] = useState<{ id: string; label: string }[]>([]);
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const [error, setError] = useState<string | null>(null);
@@ -324,7 +327,7 @@ export function useLocalRecorder(o: {
     if (!e) return false;
     if (!quiet) setError(null);
     try {
-      await e.arm(deviceId || undefined, { voiceProcessing: !headphones });
+      setMic(await e.arm(deviceId || undefined, { voiceProcessing: !headphones }));
       setArmed(true);
       setReported(e.reportedLatency);
       setInputs(await e.inputs());
@@ -451,6 +454,11 @@ export function useLocalRecorder(o: {
         sample_rate: rec.sampleRate,
         peaks: peaksOf(rec.samples, 160),
       });
+      // kept, but hardly a voice in it: most likely another microphone than the one sung into
+      let peak = 0;
+      for (const v of rec.samples) peak = Math.max(peak, Math.abs(v));
+      if (peak < 0.05)
+        setError(`Take kept, but it is very quiet — almost nothing reached “${mic ?? "the microphone"}”. Is it the one you sing into? Choose it in Record → Settings, or check the input in your computer's sound settings.`);
       // kept for playing it back at once
       const id = res.headers.get("x-take-id");
       if (id) {
@@ -661,6 +669,7 @@ export function useLocalRecorder(o: {
     takes: sectionTakes.map((t) => ({ id: t.id, lane: t.lane, take_no: t.take_no, chosen: t.chosen, duration: t.duration, peaks: small(t.peaks) })),
     countIn,
     error,
+    mic,
     playingTake: status.kind === "playing" ? status.take : null,
     beatsLeft,
     sounds,
@@ -711,6 +720,7 @@ export function useLocalRecorder(o: {
     clearError: () => setError(null),
     note,
     device: null,
+    mic,
     record: (l) => void record(l),
     stop: () => void stop(),
     restart: () => void restart(),
@@ -831,6 +841,7 @@ export function useRemoteRecorder(o: { tree: ProjectTree; section: [string | nul
     clearError: () => {},
     note: null,
     device: connected ? (state.device ?? "Mac") : null,
+    mic: connected ? (state.mic ?? null) : null,
     record: (l) => {
       setLane(l);
       send({ t: "record", lane: l });

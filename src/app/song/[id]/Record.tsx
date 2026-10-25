@@ -216,7 +216,10 @@ function RecordScreen({ r, tree, setTree, rangeOf, bar, timeline, onBusy, host, 
           <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${r.connected && r.armed ? "bg-ok" : r.connected ? "bg-warn" : "animate-pulse bg-muted"}`} />
           <span className="flex-1">
             {r.connected && r.armed ? (
-              <>Connected · your {r.device} records, this phone is the remote</>
+              <>
+                Connected · your {r.device} records, this phone is the remote
+                {r.mic && <span className="block text-xs opacity-80">🎙 {r.mic}</span>}
+              </>
             ) : r.connected ? (
               <>Your {r.device} is there, its microphone still off — click anywhere on the VerseFlow page on it once (and let the browser always allow the microphone for this site: then it comes on by itself).</>
             ) : (
@@ -233,6 +236,7 @@ function RecordScreen({ r, tree, setTree, rangeOf, bar, timeline, onBusy, host, 
           <Phone className="h-5 w-5 shrink-0 text-accent" />
           <span className="flex-1 text-muted">
             Your phone can be the remote: open this song on it → <b className="text-fg">Record</b> → <b className="text-fg">My Mac</b>.
+            {r.mic && <span className="mt-0.5 block text-xs">🎙 Recording with: <b className="text-fg">{r.mic}</b></span>}
           </span>
           {!r.armed && (
             <button className="shrink-0 rounded-full bg-accent px-3 py-1.5 text-xs font-semibold text-white" onClick={r.arm}>
