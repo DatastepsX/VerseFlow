@@ -54,7 +54,7 @@ export interface ProjectSettings {
   /** where the song's original vocals are out (once removed): everywhere ("all", the default) or these parts */
   vocalsOff?: "all" | string[];
   /** bars added to parts (a part made longer): applied in order to the uploaded song when it loads (lib/audio/arrange) */
-  extensions?: { at: number; from: number; len: number }[];
+  extensions?: { at: number; from: number; to?: number; len: number; vocals?: boolean }[];
   /** the song's key for autotune (found in the beat, or chosen); "chromatic": every semitone is a note */
   songKey?: { root: number; minor: boolean } | "chromatic";
   /** the performers; sections list the ids of who performs them */

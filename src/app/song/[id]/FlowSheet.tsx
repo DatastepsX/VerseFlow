@@ -11,8 +11,8 @@ type Mode = "write" | "sing" | "tap" | "both";
 export interface SheetAudio {
   /** the beat is loaded (until then nothing can be sung or tapped over it) */
   ready: boolean;
-  /** plays the beat from `from` to `until` with clicks (no recorded voices) */
-  play: (from: number, until: number, clicks: { at: number; accent: boolean }[]) => void;
+  /** plays the beat from `from` to `until` with clicks (no recorded voices) — with `voice`: and what was just sung */
+  play: (from: number, until: number, clicks: { at: number; accent: boolean }[], voice?: boolean) => void;
   stop: () => void;
   /** the song time being heard now */
   songTime: () => number;
@@ -111,6 +111,10 @@ export function FlowSheet({
 
   // recording / tapping: count-in bar, then the pattern's bars; over → the lines
   const finish = useRef<(() => Promise<void>) | null>(null);
+  /** where the syllables of the last take were found (song time) */
+  const sungAt = useRef<number[]>([]);
+  /** the lines as the last take made them (an edit makes new ones) */
+  const fromTake = useRef<PatternLine[] | null>(null);
   /** singing: the loudest level so far and when the voice was last heard */
   const peak = useRef(0);
   const lastVoice = useRef(0);
@@ -202,6 +206,7 @@ export function FlowSheet({
       const br = breaksRef.current;
       // without it, sung: the lines break where the singing rests longest (not at the bar lines)
       const sorted = [...onsets].sort((x, y) => x.t - y.t);
+      sungAt.current = sorted.map((o) => o.t);
       const firsts = br.length ? br.map((b) => (mode === "sing" ? onsets.filter((o) => o.t < b.t).length : b.taps)) : mode !== "tap" ? lineCuts(sorted, p) : [];
       const got = firsts.length ? linesFromBreaks(sorted, firsts, barStart, bar, p, lang, seed.current++) : linesFromOnsets(onsets, barStart, bar, p, lang, seed.current++);
       if (got.every((l) => !l.syllables)) {
@@ -211,6 +216,7 @@ export function FlowSheet({
       setRecorded(true);
       const missing = got.filter((l) => !l.syllables).length;
       if (br.length && missing) setHint(`${p - missing} of ${p} lines — tap “Next line” after each line (or type the missing one).`);
+      fromTake.current = got;
       edit(got);
     };
   });
@@ -238,6 +244,13 @@ export function FlowSheet({
 
   const listen = () => {
     const from = barStart - bar;
+    // just sung, nothing changed since: your voice, a click on every syllable found in it
+    const sung = sungAt.current;
+    if (lines === fromTake.current && mode !== "tap" && sung.length) {
+      const clicks = sung.map((t) => ({ at: t, accent: false }));
+      audio.play(Math.max(0, from), sung[sung.length - 1] + bar / 2, clicks, true);
+      return;
+    }
     // a line per bar — or per two, when a line is longer than a bar
     const per = barsPerLine({ lines, scheme, bar, source: mode }) * bar;
     const clicks = [

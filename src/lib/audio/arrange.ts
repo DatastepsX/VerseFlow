@@ -12,6 +12,10 @@ export interface Extension {
   at: number;
   /** where the repeated bars start (the part's last bars; repeated if the part is shorter) */
   from: number;
+  /** where they end (a part pasted elsewhere); none: at `at` (a part made longer) */
+  to?: number;
+  /** the bars with the original vocals (a part pasted with its vocals on); else the music alone, when there is one */
+  vocals?: boolean;
   /** how long (whole bars, in seconds) */
   len: number;
 }
@@ -27,13 +31,14 @@ export function extendSamples(data: Float32Array, sr: number, extensions: Extens
   let from = src;
   for (const e of extensions) {
     const at = Math.max(0, Math.min(out.length, Math.round(e.at * sr)));
-    const a = Math.max(0, Math.min(at, Math.round(e.from * sr)));
+    const a = Math.max(0, Math.min(out.length, Math.round(e.from * sr)));
+    const b = Math.max(a, Math.min(out.length, Math.round((e.to ?? e.at) * sr)));
     const n = Math.max(0, Math.round(e.len * sr));
-    if (!n || at <= a) continue;
+    if (!n || b <= a) continue;
     const piece = (base: Float32Array) => {
       const p = new Float32Array(n);
-      // the part's last bars, again and again if the part is shorter than what is added
-      for (let i = 0; i < n; i++) p[i] = base[a + (i % (at - a))] ?? 0;
+      // the bars copied, again and again if they are shorter than what is added
+      for (let i = 0; i < n; i++) p[i] = base[a + (i % (b - a))] ?? 0;
       return p;
     };
     const splice = (x: Float32Array, add: Float32Array) => {
@@ -50,9 +55,10 @@ export function extendSamples(data: Float32Array, sr: number, extensions: Extens
       }
       return y;
     };
-    const add = piece(from ?? out);
-    out = splice(out, add);
-    if (from) from = splice(from, add);
+    // the music alone gets the music; the song gets the music too, unless the bars keep their vocals
+    const music = from ? piece(from) : undefined;
+    out = splice(out, e.vocals || !music ? piece(out) : music);
+    if (from) from = splice(from, music!);
   }
   return { data: out, src: from };
 }

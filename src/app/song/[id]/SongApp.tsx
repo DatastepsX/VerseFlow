@@ -653,6 +653,14 @@ export function SongApp({
   const mergePart = (id: string) => void call(`/api/sections/${id}`, { action: "mergePrevious" });
   /** the part made longer by some bars of its beat: empty lines to write (one undo step) */
   const extendPart = (id: string, bars: number) => void call(`/api/sections/${id}`, { action: "extend", bars });
+  /** a part copied, to paste after another one */
+  const [copied, setCopied] = useState<string | null>(null);
+  const pastePart = (after: string) => {
+    if (!copied) return;
+    const id = copied;
+    setCopied(null);
+    void call(`/api/sections/${id}`, { action: "paste", after });
+  };
   const renamePart = (s: ProjectTree["sections"][number]) => {
     const name = window.prompt("Name of this part:", s.name)?.trim();
     if (name && name !== s.name) void call(`/api/sections/${s.id}`, { name: name.slice(0, 60) }, "PATCH");
@@ -782,9 +790,11 @@ export function SongApp({
     ...f,
     usedIn: tree.sections.filter((s) => s.lines.some((l) => l.flow?.flowId === f.id)).map((s) => s.name),
   }));
+  /** the flow just sung in the flow sheet (to hear it back) */
+  const sungTake = useRef<PlayLayer | null>(null);
   const sheetAudio: SheetAudio = {
     ready: beatReady,
-    play: (from, until, clicks) => void play(from, until, { guide: [], flow: false, clicks }),
+    play: (from, until, clicks, voice) => void play(from, until, { guide: voice && sungTake.current ? [sungTake.current] : [], flow: false, clicks }),
     stop: () => stopPlay(),
     songTime,
     armMic: async () => {
@@ -798,6 +808,10 @@ export function SongApp({
       const r = await e.stopRecording(e.reportedLatency, 0, keepFrom);
       e.disarm();
       if (!r) return [];
+      // to hear it back right away (Listen), with a click on every syllable found
+      const vb = e.ctx.createBuffer(1, r.samples.length, r.sampleRate);
+      vb.copyToChannel(r.samples as Float32Array<ArrayBuffer>, 0);
+      sungTake.current = { buffer: vb, at: r.startAt, gain: 1 };
       // kept as a take of the part (lane "Flow"): heard with the song, and there to check the recognition (free)
       const sectionId = flowSheet?.sectionId ?? null;
       void saveFlowTake(pid, r, sectionId).catch(() => {});
@@ -1086,6 +1100,15 @@ export function SongApp({
           <span className="truncate">{toast.text}</span>
           <button className="shrink-0 rounded-full bg-bg/15 px-3 py-1 text-xs font-semibold" onClick={() => void undoRedo(toast.then)}>
             {toast.then === "redo" ? "Redo" : "Undo"}
+          </button>
+        </div>
+      )}
+      {/* a part copied: where to paste it */}
+      {copied && !toast && (
+        <div className="fixed left-1/2 top-[calc(env(safe-area-inset-top)+4.25rem)] z-40 flex max-w-[92%] -translate-x-1/2 items-center gap-3 rounded-full bg-accent py-1.5 pl-4 pr-1.5 text-sm text-white shadow-lg">
+          <span className="truncate">“{tree.sections.find((x) => x.id === copied)?.name}” copied — tap a part&apos;s name to paste after it</span>
+          <button className="shrink-0 rounded-full bg-white/20 px-3 py-1 text-xs font-semibold" onClick={() => setCopied(null)}>
+            Cancel
           </button>
         </div>
       )}
@@ -1750,6 +1773,9 @@ export function SongApp({
               onMergePrev={() => mergePart(sec.id)}
               onMergeNext={() => mergePart(tree.sections[i + 1].id)}
               onExtend={tree.audio?.bpm && partRange(sec).end > partRange(sec).start ? (bars) => extendPart(sec.id, bars) : null}
+              onCopy={tree.audio?.bpm && sec.audio_start !== null ? () => setCopied(sec.id) : null}
+              pasting={copied ? (tree.sections.find((x) => x.id === copied)?.name ?? null) : null}
+              onPaste={() => pastePart(sec.id)}
               onClose={() => setPartMenu(null)}
             />
           );
@@ -2748,6 +2774,10 @@ function PartMenu(props: {
   onMergeNext: () => void;
   /** null: the part has no place on the beat */
   onExtend: ((bars: number) => void) | null;
+  onCopy: (() => void) | null;
+  /** the name of the part copied (to paste after this one) */
+  pasting: string | null;
+  onPaste: () => void;
   onClose: () => void;
 }) {
   const act = (f: () => void) => () => {
@@ -2760,9 +2790,27 @@ function PartMenu(props: {
       <div onClick={(e) => e.stopPropagation()} className="w-full max-w-lg space-y-2.5 rounded-t-3xl bg-panel px-4 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-3">
         <div className="mx-auto h-1.5 w-10 rounded-full bg-line" />
         <h2 className="text-xl font-bold">{props.name}</h2>
+        {props.pasting && (
+          <button className={`${item} bg-accent-soft text-accent`} onClick={act(props.onPaste)}>
+            <Copy className="h-4 w-4" />
+            <span className="flex-1">
+              Paste “{props.pasting}” after this part
+              <span className="block text-xs font-normal text-muted">its bars of the beat, lines and flow — the rest of the song moves later</span>
+            </span>
+          </button>
+        )}
         <button className={item} onClick={act(props.onRename)}>
           <Pencil className="h-4 w-4 text-muted" /> Rename
         </button>
+        {props.onCopy && (
+          <button className={item} onClick={act(props.onCopy)}>
+            <Copy className="h-4 w-4 text-muted" />
+            <span className="flex-1">
+              Copy
+              <span className="block text-xs font-normal text-muted">then open another part and paste it after that one</span>
+            </span>
+          </button>
+        )}
         {props.prev && (
           <button className={item} onClick={act(props.onMergePrev)}>
             <span className="w-4 text-center text-muted">↑</span>

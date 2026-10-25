@@ -23,3 +23,16 @@ test("the added bars come from the music without vocals, both stay in step", () 
   assert.deepEqual([...r.data], [0, 1, 2, 3, 102, 103, 4, 5, 104, 105, 6, 7]);
   assert.deepEqual([...r.src!], [100, 101, 102, 103, 102, 103, 104, 105, 104, 105, 106, 107]);
 });
+
+test("a part pasted elsewhere: its bars go in at that point — the music alone, or with its vocals", () => {
+  const full = ramp(10);
+  const music = Float32Array.from({ length: 10 }, (_, i) => 100 + i);
+  // the part 2..4 pasted at 8
+  const plain = extendSamples(full, 1, [{ at: 8, from: 2, to: 4, len: 2 }], music);
+  assert.deepEqual([...plain.data], [0, 1, 2, 3, 4, 5, 6, 7, 102, 103, 8, 9]);
+  assert.deepEqual([...plain.src!], [100, 101, 102, 103, 104, 105, 106, 107, 102, 103, 108, 109]);
+  const sung = extendSamples(full, 1, [{ at: 8, from: 2, to: 4, len: 2, vocals: true }], music);
+  assert.deepEqual([...sung.data], [0, 1, 2, 3, 4, 5, 6, 7, 2, 3, 8, 9]);
+  // pasted before where it comes from
+  assert.deepEqual([...extendSamples(full, 1, [{ at: 2, from: 6, to: 8, len: 2 }]).data], [0, 1, 6, 7, 2, 3, 4, 5, 6, 7, 8, 9]);
+});

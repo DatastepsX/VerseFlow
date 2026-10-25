@@ -1109,6 +1109,130 @@ export async function splitSection(lineId: string, name: string, start: number |
 }
 
 /**
+ * Bars added to the song at `e.at` (a part made longer, a part pasted): everything from there on moves later —
+ * parts, lines and their flows, takes, beat changes, the length — and the extension is kept in the settings, to
+ * be applied to the uploaded song when it loads. Rebuild-style: its undo is the version saved (with timing) before.
+ * `keep`: a part that stays where it is (the one made longer).
+ */
+async function insertBars(tree: ProjectTree, e: Extension, keep?: string) {
+  const { at, len } = e;
+  const a = tree.audio!;
+  const projectId = tree.project.id;
+  const later = (t: number | null | undefined) => t !== null && t !== undefined && t >= at - 0.01;
+  await Promise.all([
+    ...tree.sections
+      .filter((x) => x.id !== keep && later(x.audio_start))
+      .map(async (x) => check(await db().from("sections").update({ audio_start: r3(x.audio_start! + len) }).eq("id", x.id))),
+    ...tree.sections
+      .flatMap((x) => x.lines)
+      .filter((l) => later(l.audio_at) || (l.flow?.times ?? []).some(later))
+      .map(async (l) =>
+        check(
+          await db()
+            .from("lines")
+            .update({
+              audio_at: later(l.audio_at) ? r3(l.audio_at! + len) : l.audio_at,
+              flow: l.flow ? { ...l.flow, times: l.flow.times?.map((t) => (later(t) ? r3(t + len) : t)), end: later(l.flow.end) ? r3(l.flow.end! + len) : l.flow.end } : l.flow,
+            })
+            .eq("id", l.id),
+        ),
+      ),
+    // takes after that point, and takes of a later part that start in its count-in
+    ...tree.takes
+      .filter((t) => t.start_at >= at - 0.05 || tree.sections.some((x) => x.id === t.section_id && x.id !== keep && later(x.audio_start)))
+      .map(async (t) => check(await db().from("takes").update({ start_at: r3(t.start_at + len) }).eq("id", t.id))),
+  ]);
+  check(
+    await db()
+      .from("audio_tracks")
+      .update({ duration: r3((a.duration ?? 0) + len), changes: (a.changes ?? []).map((c) => (c.t >= at - 0.01 ? { ...c, t: r3(c.t + len) } : c)) })
+      .eq("project_id", projectId),
+  );
+  const settings = tree.project.settings ?? {};
+  check(await db().from("projects").update({ settings: { ...settings, extensions: [...(settings.extensions ?? []), e] } }).eq("id", projectId));
+}
+
+/**
+ * A part copied in after another one (`afterId`): its bars of the beat go in where that part ends (with the
+ * original vocals when they are on in the copied part, else the music alone), a new part with its name and copies
+ * of its lines — text, flow, marks — sits there, and everything after moves later. One undo step.
+ */
+export async function pasteSection(sourceId: string, afterId: string) {
+  const s = check(await db().from("sections").select("project_id").eq("id", sourceId).single()) as { project_id: string };
+  const projectId = s.project_id;
+  const tree = await getTree(projectId);
+  const a = tree.audio;
+  if (!a?.bpm || !a.duration) throw new Error("The beat needs its tempo to paste a part.");
+  const bar = (a.beats_per_bar * 60) / a.bpm;
+  const onGrid = (t: number) => r3(Math.max(0, Math.min(a.duration!, a.beat_offset + Math.round((t - a.beat_offset) / bar) * bar)));
+  const ranges = sectionRanges(tree.sections, a);
+  const src = tree.sections.find((x) => x.id === sourceId)!;
+  const target = tree.sections.find((x) => x.id === afterId);
+  const sr = ranges.get(sourceId);
+  const tr = ranges.get(afterId);
+  if (!target || !sr || !tr) throw new Error("Both parts need their place on the beat.");
+  const from = onGrid(sr.start);
+  const to = onGrid(sr.end);
+  const at = onGrid(tr.end);
+  const len = r3(to - from);
+  if (len < bar / 2) throw new Error("This part is too short to copy.");
+  const off = tree.project.settings?.vocalsOff ?? "all";
+  const vocals = !!a.instrumental_path && off !== "all" && !off.includes(sourceId);
+  await markRebuild(projectId, await saveVersion(projectId, `Before pasting ${src.name}`, { timing: true }), `${src.name} pasted after ${target.name}`);
+  await insertBars(tree, { at, from, to, len, ...(vocals ? { vocals: true } : {}) });
+  // the new part right after the target (in order and on the beat)
+  const after = tree.sections.filter((x) => x.position > target.position);
+  await Promise.all(after.map(async (x) => check(await db().from("sections").update({ position: x.position + 1 }).eq("id", x.id))));
+  const row = check(
+    await db()
+      .from("sections")
+      .insert({
+        project_id: projectId,
+        name: src.name,
+        position: target.position + 1,
+        group_size: src.group_size,
+        story_beat: src.story_beat,
+        intensity: src.intensity,
+        rhyme_scheme: src.rhyme_scheme,
+        notes: src.notes,
+        audio_start: at,
+        bars_per_line: src.bars_per_line ?? 1,
+        pattern: src.pattern ?? null,
+        artists: src.artists ?? [],
+      })
+      .select("id")
+      .single(),
+  ) as { id: string };
+  // its lines: copies, their times moved from the copied part to here (the copied part's times before anything moved)
+  const move = (t: number) => r3(t - from + at);
+  const lines = src.lines;
+  if (lines.length)
+    check(
+      await db()
+        .from("lines")
+        .insert(
+          lines.map((l) => ({
+            project_id: projectId,
+            section_id: row.id,
+            position: l.position,
+            text: l.text,
+            status: l.status,
+            kind: l.kind,
+            note: l.note,
+            audio_at: l.audio_at === null ? null : move(l.audio_at),
+            flow: l.flow ? { ...l.flow, times: l.flow.times?.map(move), end: l.flow.end !== undefined ? move(l.flow.end) : undefined } : null,
+            marks: l.marks ?? null,
+          })),
+        ),
+    );
+  // the original vocals: as in the copied part
+  if (Array.isArray(off) && off.includes(sourceId))
+    check(await db().from("projects").update({ settings: { ...(await getTree(projectId)).project.settings, vocalsOff: [...off, row.id] } }).eq("id", projectId));
+  await touch(projectId);
+  return projectId;
+}
+
+/**
  * A part made longer by `bars` bars: its last bars of the beat come again where it ends (the uploaded file stays
  * as it is — `settings.extensions` says where bars were added), everything after it moves later, and the new bars
  * get empty lines at the part's own line spacing, to write. One undo step (the version saved before, with timing).
@@ -1129,39 +1253,7 @@ export async function extendSection(sectionId: string, bars: number) {
   const from = r3(Math.max(range.start, at - len));
   if (at - from < bar / 2) throw new Error("This part is too short to repeat.");
   await markRebuild(projectId, await saveVersion(projectId, `Before making ${section.name} longer`, { timing: true }), `${section.name} · ${bars} bars longer`);
-  const later = (t: number | null | undefined) => t !== null && t !== undefined && t >= at - 0.01;
-  // everything after the part: later by the bars added (a rebuild-style change: its undo is the version saved above)
-  await Promise.all([
-    ...tree.sections
-      .filter((x) => x.id !== sectionId && later(x.audio_start))
-      .map(async (x) => check(await db().from("sections").update({ audio_start: r3(x.audio_start! + len) }).eq("id", x.id))),
-    ...tree.sections
-      .flatMap((x) => x.lines)
-      .filter((l) => later(l.audio_at) || (l.flow?.times ?? []).some(later))
-      .map(async (l) =>
-        check(
-          await db()
-            .from("lines")
-            .update({
-              audio_at: later(l.audio_at) ? r3(l.audio_at! + len) : l.audio_at,
-              flow: l.flow ? { ...l.flow, times: l.flow.times?.map((t) => (later(t) ? r3(t + len) : t)), end: later(l.flow.end) ? r3(l.flow.end! + len) : l.flow.end } : l.flow,
-            })
-            .eq("id", l.id),
-        ),
-      ),
-    // takes after the part, and takes of a later part that start in its count-in
-    ...tree.takes
-      .filter((t) => t.start_at >= at - 0.05 || tree.sections.some((x) => x.id === t.section_id && x.id !== sectionId && later(x.audio_start)))
-      .map(async (t) => check(await db().from("takes").update({ start_at: r3(t.start_at + len) }).eq("id", t.id))),
-  ]);
-  check(
-    await db()
-      .from("audio_tracks")
-      .update({ duration: r3(a.duration + len), changes: (a.changes ?? []).map((c) => (c.t >= at - 0.01 ? { ...c, t: r3(c.t + len) } : c)) })
-      .eq("project_id", projectId),
-  );
-  const settings = tree.project.settings ?? {};
-  check(await db().from("projects").update({ settings: { ...settings, extensions: [...(settings.extensions ?? []), { at, from, len }] } }).eq("id", projectId));
+  await insertBars(tree, { at, from, len }, sectionId);
   // empty lines for the new bars, at the part's own line spacing (a line per bar when it has no timing)
   const starts = section.lines.filter((l) => l.kind === "lyric" && l.audio_at !== null).map((l) => l.audio_at!).sort((x, y) => x - y);
   const gaps = starts.slice(1).map((t, i) => t - starts[i]).filter((g) => g > 0.3 * bar && g < 4.5 * bar).sort((x, y) => x - y);
