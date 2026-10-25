@@ -128,6 +128,13 @@ both are stored next to the song (`audio_tracks.instrumental_path` / `vocals_pat
 starting inside it, else its part's). Every sung syllable gets the time it was rapped: the lines' `flow.times` (karaoke,
 guide voice, flow grid) and `audio_at` follow the take. One undo step; logged as `ai_calls.kind = "align"`.
 
+**Parts** (tap a part's name in Lyrics): rename; merge with the part before / after; **make it longer** (+2/4/8
+bars, `extendSection` in `repo.ts`): the part's last bars of the beat repeat where it ends, everything after moves
+later (parts, lines, flows, takes, beat changes), and the new bars get empty lines. The uploaded file stays as it is:
+`settings.extensions` lists the added bars and `src/lib/audio/arrange.ts` applies them when the song loads. One undo
+step (the version saved before keeps the timing too). Each part's header also has **Vocals** (the original vocals
+on/off there) and **Hear** (the whole part in your voice on its flow, 1 call per line not spoken yet).
+
 **Undo / redo** (top bar, ⌘Z): one step per action (`undo_steps`; a multi-request action sends one `x-undo-step`).
 A rebuilt song is undone by restoring the version saved before it.
 

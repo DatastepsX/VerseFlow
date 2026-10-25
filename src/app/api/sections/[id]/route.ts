@@ -1,5 +1,5 @@
 import { draftPlan, draftSection, fillBank, fitLine } from "@/lib/server/ai";
-import { addLine, appendLines, applyDraft, applyPolish, applyRefit, clearBank, deleteSection, getTree, insertBank, mergeIntoPrevious, moveSection, setBankState, updateLine, updateSection } from "@/lib/server/repo";
+import { addLine, appendLines, applyDraft, applyPolish, applyRefit, clearBank, deleteSection, extendSection, getTree, insertBank, mergeIntoPrevious, moveSection, setBankState, updateLine, updateSection } from "@/lib/server/repo";
 import { rhymePartners } from "@/lib/scheme";
 import { db } from "@/lib/server/db";
 import { body, handle, pick, treeResponse } from "@/lib/server/http";
@@ -40,6 +40,7 @@ export async function POST(req: Request, ctx: RouteContext<"/api/sections/[id]">
       lines?: { text: string; status?: LineStatus; bankId?: string }[];
       mode?: "fill" | "replace" | "polish" | "refit";
       indices?: number[];
+      bars?: number;
     }>(req);
     if (b.action === "addLine") {
       const line = await addLine(id, { text: b.text, status: b.status, kind: b.kind, afterLineId: b.afterLineId });
@@ -119,6 +120,8 @@ export async function POST(req: Request, ctx: RouteContext<"/api/sections/[id]">
     }
     if (b.action === "move") return treeResponse(await moveSection(id, b.dir === -1 ? -1 : 1));
     if (b.action === "mergePrevious") return treeResponse(await mergeIntoPrevious(id));
+    // the part made longer: its last bars of the beat again, empty lines to write (free)
+    if (b.action === "extend") return treeResponse(await extendSection(id, [2, 4, 8, 16].includes(Number(b.bars)) ? Number(b.bars) : 4));
     if (b.action === "clearBank") {
       // removes the section's unused suggestions (free)
       const s = await sectionProject(id);

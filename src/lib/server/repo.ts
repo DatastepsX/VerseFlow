@@ -27,6 +27,10 @@ import { barsPerLine, lineFlowFrom, nextFlowName, ownWords } from "@/lib/flow/pa
 import { isExampleText } from "@/lib/flow/example";
 import { fixPairs } from "@/lib/flow/rhymelines";
 import { songSections, type SungLine } from "@/lib/audio/song-lines";
+import { sectionRanges } from "@/lib/audio/song-map";
+import type { Extension } from "@/lib/audio/arrange";
+
+const r3 = (t: number) => Math.round(t * 1000) / 1000;
 
 const TAKE_COLS = "id, section_id, lane, take_no, start_at, duration, sample_rate, peaks, chosen, created_at";
 const LINE_COLS = "id, project_id, section_id, position, text, status, kind, note, audio_at, flow, marks, updated_at";
@@ -94,6 +98,22 @@ async function replaceWithVersion(projectId: string, versionId: string) {
   const v = await getVersion(versionId);
   check(await db().from("sections").delete().eq("project_id", projectId));
   await insertSnapshot(projectId, v.snapshot, true);
+  const timing = (v.snapshot as { timing?: TimingSnapshot }).timing;
+  if (timing) await restoreTiming(projectId, timing);
+}
+
+interface TimingSnapshot {
+  takes: { id: string; start_at: number }[];
+  audio: { duration: number | null; changes: AudioTrack["changes"] } | null;
+  extensions: Extension[];
+}
+
+/** the song's length as it was: where its takes and beat changes sit, and the bars added to it */
+async function restoreTiming(projectId: string, t: TimingSnapshot) {
+  await Promise.all(t.takes.map(async (x) => check(await db().from("takes").update({ start_at: x.start_at }).eq("id", x.id).eq("project_id", projectId))));
+  if (t.audio) check(await db().from("audio_tracks").update({ duration: t.audio.duration, changes: t.audio.changes }).eq("project_id", projectId));
+  const p = check(await db().from("projects").select("settings").eq("id", projectId).single()) as { settings: ProjectSettings | null };
+  check(await db().from("projects").update({ settings: { ...(p.settings ?? {}), extensions: t.extensions } }).eq("id", projectId));
 }
 
 /** what undo / redo can do now (for the buttons) */
@@ -503,7 +523,8 @@ export async function undo(projectId: string): Promise<string | null> {
     if (!step) return (await undoLegacy(projectId)) ? "Last change" : null;
     if (step.version_id) {
       // a rebuilt song: back to the version saved before it (the song as it is now is kept for redo)
-      const redoVersion = await saveVersion(projectId, `Before undoing “${step.label}”`);
+      const timing = !!(((await getVersion(step.version_id)).snapshot as { timing?: unknown }).timing);
+      const redoVersion = await saveVersion(projectId, `Before undoing “${step.label}”`, { timing });
       await replaceWithVersion(projectId, step.version_id);
       check(await db().from("undo_steps").update({ undone: true, redo_version_id: redoVersion }).eq("id", step.id));
       await touch(projectId);
@@ -688,9 +709,19 @@ export async function listVersions(projectId: string) {
   ) as ProjectVersion[];
 }
 
-export async function saveVersion(projectId: string, label: string) {
+export async function saveVersion(projectId: string, label: string, opts: { timing?: boolean } = {}) {
   const tree = await getTree(projectId);
   const snapshot = {
+    // a change to the song's length (a part made longer): undo also brings back where the takes and beat changes were
+    ...(opts.timing
+      ? {
+          timing: {
+            takes: tree.takes.map((t) => ({ id: t.id, start_at: t.start_at })),
+            audio: tree.audio ? { duration: tree.audio.duration, changes: tree.audio.changes } : null,
+            extensions: tree.project.settings?.extensions ?? [],
+          },
+        }
+      : {}),
     project: { title: tree.project.title, concept: tree.project.concept, settings: tree.project.settings },
     sections: tree.sections.map(({ lines, ...s }) => ({
       ...s,
@@ -1075,6 +1106,70 @@ export async function splitSection(lineId: string, name: string, start: number |
   check(await db().from("lines").update({ section_id: row.id }).in("id", moving));
   await touch(section.project_id);
   return section.project_id;
+}
+
+/**
+ * A part made longer by `bars` bars: its last bars of the beat come again where it ends (the uploaded file stays
+ * as it is — `settings.extensions` says where bars were added), everything after it moves later, and the new bars
+ * get empty lines at the part's own line spacing, to write. One undo step (the version saved before, with timing).
+ */
+export async function extendSection(sectionId: string, bars: number) {
+  const s = check(await db().from("sections").select("project_id").eq("id", sectionId).single()) as { project_id: string };
+  const projectId = s.project_id;
+  const tree = await getTree(projectId);
+  const a = tree.audio;
+  if (!a?.bpm || !a.duration) throw new Error("The beat needs its tempo to make a part longer.");
+  const bar = (a.beats_per_bar * 60) / a.bpm;
+  const section = tree.sections.find((x) => x.id === sectionId)!;
+  const range = sectionRanges(tree.sections, a).get(sectionId);
+  if (!range) throw new Error("This part has no place on the beat yet.");
+  // where the part ends, on the bar grid
+  const at = r3(Math.min(a.duration, a.beat_offset + Math.round((range.end - a.beat_offset) / bar) * bar));
+  const len = r3(bars * bar);
+  const from = r3(Math.max(range.start, at - len));
+  if (at - from < bar / 2) throw new Error("This part is too short to repeat.");
+  await markRebuild(projectId, await saveVersion(projectId, `Before making ${section.name} longer`, { timing: true }), `${section.name} · ${bars} bars longer`);
+  const later = (t: number | null | undefined) => t !== null && t !== undefined && t >= at - 0.01;
+  // everything after the part: later by the bars added (a rebuild-style change: its undo is the version saved above)
+  await Promise.all([
+    ...tree.sections
+      .filter((x) => x.id !== sectionId && later(x.audio_start))
+      .map(async (x) => check(await db().from("sections").update({ audio_start: r3(x.audio_start! + len) }).eq("id", x.id))),
+    ...tree.sections
+      .flatMap((x) => x.lines)
+      .filter((l) => later(l.audio_at) || (l.flow?.times ?? []).some(later))
+      .map(async (l) =>
+        check(
+          await db()
+            .from("lines")
+            .update({
+              audio_at: later(l.audio_at) ? r3(l.audio_at! + len) : l.audio_at,
+              flow: l.flow ? { ...l.flow, times: l.flow.times?.map((t) => (later(t) ? r3(t + len) : t)), end: later(l.flow.end) ? r3(l.flow.end! + len) : l.flow.end } : l.flow,
+            })
+            .eq("id", l.id),
+        ),
+      ),
+    // takes after the part, and takes of a later part that start in its count-in
+    ...tree.takes
+      .filter((t) => t.start_at >= at - 0.05 || tree.sections.some((x) => x.id === t.section_id && x.id !== sectionId && later(x.audio_start)))
+      .map(async (t) => check(await db().from("takes").update({ start_at: r3(t.start_at + len) }).eq("id", t.id))),
+  ]);
+  check(
+    await db()
+      .from("audio_tracks")
+      .update({ duration: r3(a.duration + len), changes: (a.changes ?? []).map((c) => (c.t >= at - 0.01 ? { ...c, t: r3(c.t + len) } : c)) })
+      .eq("project_id", projectId),
+  );
+  const settings = tree.project.settings ?? {};
+  check(await db().from("projects").update({ settings: { ...settings, extensions: [...(settings.extensions ?? []), { at, from, len }] } }).eq("id", projectId));
+  // empty lines for the new bars, at the part's own line spacing (a line per bar when it has no timing)
+  const starts = section.lines.filter((l) => l.kind === "lyric" && l.audio_at !== null).map((l) => l.audio_at!).sort((x, y) => x - y);
+  const gaps = starts.slice(1).map((t, i) => t - starts[i]).filter((g) => g > 0.3 * bar && g < 4.5 * bar).sort((x, y) => x - y);
+  const spacing = gaps.length ? gaps[Math.floor(gaps.length / 2)] : bar * (section.bars_per_line || 1);
+  const n = Math.max(1, Math.round(len / spacing));
+  const rows = await appendLines(sectionId, Array.from({ length: n }, () => ({ text: "", status: "OPEN" as LineStatus })));
+  await setLineTimes(projectId, rows.map((r, k) => ({ id: r.id, at: at + (k * len) / n })));
+  return projectId;
 }
 
 /** Moves every line of the section to the end of the section before it and removes the section. */

@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fmtTime } from "@/lib/audio/song-map";
 import { buildTimeline, positionIn } from "@/lib/audio/timeline";
+import { extendBuffers } from "@/lib/audio/arrange";
 import { BEAT_ACCEPT, MAX_BEAT_BYTES, uploadBeat } from "@/lib/client/beat";
 import { chunkLines, processFlow, processTaps, processVocals, type FlowStep } from "@/lib/flow/pipeline";
 import { stressPattern } from "@/lib/flow/lines";
@@ -154,13 +155,16 @@ export function SongApp({
             return { start, end };
           });
   const offKey = JSON.stringify(offRanges);
+  // parts made longer: bars added to the song as it loads
+  const extKey = JSON.stringify(tree.project.settings?.extensions ?? []);
   const songBufs = useRef<{ full: AudioBuffer | null; music: AudioBuffer | null }>({ full: null, music: null });
   const [bufsLoaded, setBufsLoaded] = useState(0);
   useEffect(() => {
-    const { full, music } = songBufs.current;
     const e = engine.current;
+    const loaded = songBufs.current;
+    const { full, music } = loaded.full && e ? extendBuffers(e.ctx, loaded.full, loaded.music, JSON.parse(extKey)) : loaded;
     beat.current = full && music && e ? withoutVocals(e.ctx, full, music, JSON.parse(offKey)) : full;
-  }, [offKey, bufsLoaded]);
+  }, [offKey, extKey, bufsLoaded]);
   const setVocalsOff = (v: "all" | string[]) => void call(`/api/projects/${pid}`, { settings: { ...(tree.project.settings ?? {}), vocalsOff: v } }, "PATCH");
   useEffect(() => {
     if (!filename) return;
@@ -317,6 +321,21 @@ export function SongApp({
     if (!layers?.length) return;
     const g = layers[0];
     void play(Math.max(0, g.at - 0.5), g.at + g.buffer.duration + 0.3, { guide: layers, flow: false });
+  };
+
+  /** the whole part in your voice, on the flow set for it (each line's syllable times): 1 call per line not spoken yet */
+  const hearPart = async (s: ProjectTree["sections"][number]) => {
+    if (!voice) return setVoiceSheet(true);
+    const ids = s.lines.filter((l) => l.kind === "lyric" && l.text.trim() && l.status !== "DECLINED").map((l) => l.id);
+    if (!ids.length) return;
+    const todo = ids.filter((id) => !spoken.has(id)).length;
+    if (todo > 1 && !window.confirm(`Hear ${s.name} in your voice? ${todo} lines to speak · ${todo} calls`)) return;
+    if (playing) stopPlay();
+    const layers = await guide(ids, s.id);
+    if (!layers?.length) return;
+    const r = partRange(s);
+    const first = Math.min(r.start, ...layers.map((g) => g.at));
+    void play(Math.max(0, first - Math.min(bar, 3)), Math.max(r.end, ...layers.map((g) => g.at + g.buffer.duration)) + 0.3, { guide: layers, flow: false });
   };
 
   const play = async (
@@ -632,6 +651,8 @@ export function SongApp({
   const [partMenu, setPartMenu] = useState<string | null>(null);
   /** the part merges into the one before it: its lines move there (one undo step) */
   const mergePart = (id: string) => void call(`/api/sections/${id}`, { action: "mergePrevious" });
+  /** the part made longer by some bars of its beat: empty lines to write (one undo step) */
+  const extendPart = (id: string, bars: number) => void call(`/api/sections/${id}`, { action: "extend", bars });
   const renamePart = (s: ProjectTree["sections"][number]) => {
     const name = window.prompt("Name of this part:", s.name)?.trim();
     if (name && name !== s.name) void call(`/api/sections/${s.id}`, { name: name.slice(0, 60) }, "PATCH");
@@ -1454,6 +1475,17 @@ export function SongApp({
                       </span>
                     )}
                     {tree.audio && <PartVocals off={partVocalsOff(s.id)} busy={separating} onToggle={() => void togglePartVocals(s.id)} />}
+                    {tree.audio && (
+                      <button
+                        className="flex shrink-0 items-center gap-1 rounded-full bg-panel-2 px-2.5 py-1 text-xs font-semibold text-accent disabled:opacity-50"
+                        disabled={!beatReady || guideBusy !== null}
+                        onClick={() => void hearPart(s)}
+                        title="The whole part in your voice, on its flow (1 call per line not spoken yet)"
+                      >
+                        <Headphones className="h-3.5 w-3.5" />
+                        {guideBusy === s.id ? "Speaking…" : "Hear"}
+                      </button>
+                    )}
                     {beatGrid && (
                       <button
                         className="flex shrink-0 items-center gap-1 rounded-full bg-panel-2 px-2.5 py-1 text-xs font-semibold text-accent"
@@ -1713,6 +1745,7 @@ export function SongApp({
               onRename={() => renamePart(sec)}
               onMergePrev={() => mergePart(sec.id)}
               onMergeNext={() => mergePart(tree.sections[i + 1].id)}
+              onExtend={tree.audio?.bpm && partRange(sec).end > partRange(sec).start ? (bars) => extendPart(sec.id, bars) : null}
               onClose={() => setPartMenu(null)}
             />
           );
@@ -2709,6 +2742,8 @@ function PartMenu(props: {
   onRename: () => void;
   onMergePrev: () => void;
   onMergeNext: () => void;
+  /** null: the part has no place on the beat */
+  onExtend: ((bars: number) => void) | null;
   onClose: () => void;
 }) {
   const act = (f: () => void) => () => {
@@ -2742,7 +2777,20 @@ function PartMenu(props: {
             </span>
           </button>
         )}
-        <p className="px-1 text-xs text-muted">To split a part: open a line → “New part here”. Undo brings a merge back.</p>
+        {props.onExtend && (
+          <div className="rounded-2xl bg-panel-2/70 px-4 py-3">
+            <p className="text-[15px] font-semibold">Make it longer</p>
+            <p className="mb-2 text-xs text-muted">Its last bars of the beat come again, the rest of the song moves later — new empty lines to write.</p>
+            <div className="flex gap-2">
+              {[2, 4, 8].map((n) => (
+                <button key={n} className="flex-1 rounded-full bg-panel py-2 text-sm font-semibold text-accent ring-1 ring-line" onClick={act(() => props.onExtend!(n))}>
+                  +{n} bars
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        <p className="px-1 text-xs text-muted">To split a part: open a line → “New part here”. Undo brings a merge or a longer part back.</p>
         <button className="w-full rounded-2xl py-3 text-sm font-semibold text-muted" onClick={props.onClose}>
           Cancel
         </button>
