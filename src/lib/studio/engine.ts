@@ -53,10 +53,11 @@ function installUnlock() {
   for (const ev of ["pointerdown", "keydown", "touchend"]) window.addEventListener(ev, unlock, { capture: true });
 }
 
-/** sound can play in this tab: it was clicked once, or a context runs */
+/** sound can play in this tab: the song's sound runs (no song open: the page was clicked once) */
 export function soundAllowed() {
+  if (open.size) return [...open].every((c) => c.state === "running");
   const ua = (navigator as Navigator & { userActivation?: { hasBeenActive: boolean } }).userActivation;
-  return !!ua?.hasBeenActive || [...open].some((c) => c.state === "running");
+  return !!ua?.hasBeenActive;
 }
 
 export class StudioEngine {
@@ -126,19 +127,7 @@ export class StudioEngine {
       await this.ctx.audioWorklet.addModule("/recorder-worklet.js");
       workletReady.add(this.ctx);
     }
-    this.source = this.ctx.createMediaStreamSource(this.stream);
-    this.recorder = new AudioWorkletNode(this.ctx, "vf-recorder", { numberOfInputs: 1, numberOfOutputs: 1, channelCountMode: "explicit", channelCount: 2 });
-    this.analyser = this.ctx.createAnalyser();
-    this.analyser.fftSize = 1024;
-    // the recorder must be pulled by the graph to run: route it to a silent output
-    const mute = this.ctx.createGain();
-    mute.gain.value = 0;
-    this.source.connect(this.recorder).connect(mute).connect(this.ctx.destination);
-    this.source.connect(this.analyser);
-    this.recorder.port.onmessage = (e) => {
-      if (e.data?.done) this.onDone?.();
-      else if (e.data?.channels) this.chunks.push(e.data);
-    };
+    this.wire();
     const track = this.stream.getAudioTracks()[0];
     const inLat = (track?.getSettings() as { latency?: number }).latency ?? 0;
     const ctx = this.ctx as AudioContext & { outputLatency?: number };
@@ -146,10 +135,59 @@ export class StudioEngine {
     return track?.label ?? "Microphone";
   }
 
+  private mute: GainNode | null = null;
+  /** the microphone into the recorder and the level meter */
+  private wire() {
+    if (!this.stream) return;
+    this.source?.disconnect();
+    this.recorder?.disconnect();
+    this.mute?.disconnect();
+    this.source = this.ctx.createMediaStreamSource(this.stream);
+    this.recorder = new AudioWorkletNode(this.ctx, "vf-recorder", { numberOfInputs: 1, numberOfOutputs: 1, channelCountMode: "explicit", channelCount: 2 });
+    this.analyser = this.ctx.createAnalyser();
+    this.analyser.fftSize = 1024;
+    // the recorder must be pulled by the graph to run: route it to a silent output
+    this.mute = this.ctx.createGain();
+    this.mute.gain.value = 0;
+    this.source.connect(this.recorder).connect(this.mute).connect(this.ctx.destination);
+    this.source.connect(this.analyser);
+    this.recorder.port.onmessage = (e) => {
+      if (e.data?.done) this.onDone?.();
+      else if (e.data?.channels) this.chunks.push(e.data);
+    };
+  }
+
+  /**
+   * Ready to record: the sound runs (it may wait for a click on the page — false then), and the microphone is
+   * wired again now that it runs (Safari can feed silence through a connection made while it was paused).
+   */
+  async readyToRecord() {
+    if (this.ctx.state !== "running") await Promise.race([this.ctx.resume().catch(() => {}), new Promise((r) => setTimeout(r, 400))]);
+    if (this.ctx.state !== "running") return false;
+    this.wire();
+    return true;
+  }
+
+  /** what the microphone and the sound are doing (for the diagnostics of a failed take) */
+  info() {
+    const t = this.stream?.getAudioTracks()[0];
+    const st = (t?.getSettings() ?? {}) as MediaTrackSettings & { latency?: number };
+    return {
+      ctx: this.ctx.state,
+      ctxRate: this.ctx.sampleRate,
+      track: t ? { label: t.label, state: t.readyState, muted: t.muted, enabled: t.enabled } : null,
+      settings: { sampleRate: st.sampleRate, channelCount: st.channelCount, echoCancellation: st.echoCancellation, autoGainControl: st.autoGainControl, noiseSuppression: st.noiseSuppression },
+      lastTake: this.lastTake,
+    };
+  }
+  /** the last take as the recorder got it: its batches, and each input's loudest sample */
+  lastTake: { chunks: number; channels: number; peaks: number[] } | null = null;
+
   disarm() {
     this.stream?.getTracks().forEach((t) => t.stop());
     this.source?.disconnect();
     this.recorder?.disconnect();
+    this.mute?.disconnect();
     this.stream = null;
     this.source = null;
     this.recorder = null;
@@ -297,6 +335,12 @@ export class StudioEngine {
     this.stop();
     const chunks = this.chunks;
     this.chunks = [];
+    const nch = chunks[0]?.channels.length ?? 0;
+    this.lastTake = {
+      chunks: chunks.length,
+      channels: nch,
+      peaks: Array.from({ length: nch }, (_, k) => Math.round(chunks.reduce((m, c) => c.channels[k].reduce((a, v) => Math.max(a, Math.abs(v)), m), 0) * 10000) / 10000),
+    };
     if (!chunks.length) return null;
     const sr = this.ctx.sampleRate;
     const total = chunks.reduce((n, c) => n + c.channels[0].length, 0);

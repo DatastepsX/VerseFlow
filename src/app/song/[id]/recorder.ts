@@ -208,6 +208,8 @@ export function useLocalRecorder(o: {
   /** the microphone is being switched on for the first take */
   const [starting, setStarting] = useState(false);
   const stopAt = useRef<number | null>(null);
+  /** the loudest the level meter showed during the take */
+  const maxLevel = useRef(0);
   const recLane = useRef<string | null>(null);
   const busy = status.kind !== "idle";
 
@@ -392,7 +394,16 @@ export function useLocalRecorder(o: {
   const start = async (e: StudioEngine, l: string) => {
     if (!range) return;
     setError(null);
-    await e.ctx.resume();
+    // the sound must run (the beat to sing on, and the recorder): a browser starts it only after a click on the page
+    if (!(await e.readyToRecord())) {
+      setError(
+        o.host
+          ? `This ${deviceName()} can't play sound yet — click once anywhere on the VerseFlow page on it, then record again.`
+          : "The sound can't start yet — tap the page once, then record again.",
+      );
+      return;
+    }
+    maxLevel.current = 0;
     const w = takeWindow(range, bar, countIn);
     const layers = await layersFor(w.from, w.to, l);
     e.play(Math.max(0, w.from), { beat: beat.current, layers, clicks: clicksFor(w.from, range.start) });
@@ -424,9 +435,11 @@ export function useLocalRecorder(o: {
       return;
     }
     setStatus({ kind: "saving", lane: l });
+    let peak = -1;
     try {
       const w = takeWindow(range, bar, countIn);
       const rec = await e.stopRecording(latency, channel, w.from);
+      if (rec) for (const v of rec.samples) peak = Math.max(peak, Math.abs(v));
       if (!rec || rec.samples.length < rec.sampleRate * 0.3) throw new Error("Nothing was recorded.");
       // pure silence (every sample 0): the browser gave a dead microphone — not saved; the microphone goes on again
       if (rec.samples.every((v) => v === 0)) {
@@ -455,8 +468,6 @@ export function useLocalRecorder(o: {
         peaks: peaksOf(rec.samples, 160),
       });
       // kept, but hardly a voice in it: most likely another microphone than the one sung into
-      let peak = 0;
-      for (const v of rec.samples) peak = Math.max(peak, Math.abs(v));
       if (peak < 0.05)
         setError(`Take kept, but it is very quiet — almost nothing reached “${mic ?? "the microphone"}”. Is it the one you sing into? Choose it in Record → Settings, or check the input in your computer's sound settings.`);
       // kept for playing it back at once
@@ -469,6 +480,12 @@ export function useLocalRecorder(o: {
     } catch (err) {
       failed(err);
     }
+    // what this device saw (to find out why a take fails): the microphone, the sound, what was recorded
+    void fetch("/api/diag", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ diag: { ua: navigator.userAgent.slice(0, 160), host: o.host, headphones, channel, deviceId: deviceId ? "chosen" : "default", meterMax: Math.round(maxLevel.current * 1000) / 1000, peak: Math.round(peak * 10000) / 10000, ...e.info() } }),
+    }).catch(() => {});
     setStatus({ kind: "idle" });
   };
 
@@ -544,7 +561,11 @@ export function useLocalRecorder(o: {
           void stop();
         }
       }
-      if (e.armed) setLevel(Math.round(e.level() * 50) / 50);
+      if (e.armed) {
+        const lv = e.level();
+        setLevel(Math.round(lv * 50) / 50);
+        if (status.kind === "recording" || status.kind === "countin") maxLevel.current = Math.max(maxLevel.current, lv);
+      }
     };
   });
 

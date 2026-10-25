@@ -1949,6 +1949,13 @@ export async function getRemoteNav(): Promise<RemoteNav | null> {
   return row?.prefs?.path ? row.prefs : null;
 }
 
+/** what a device saw while recording a take (the microphone, the sound, what was recorded): the last 20 */
+export async function addRecordingDiag(entry: Record<string, unknown>) {
+  const row = check(await db().from("user_settings").select("prefs").eq("id", "diag").maybeSingle()) as { prefs: { list?: unknown[] } } | null;
+  const list = [...(row?.prefs?.list ?? []), { ...entry, at: new Date().toISOString() }].slice(-20);
+  check(await db().from("user_settings").upsert({ id: "diag", prefs: { list }, updated_at: new Date().toISOString() }));
+}
+
 /** the Mac, when it is the main device: is it there, and can it play sound (a browser needs one click first) */
 export interface RemoteHost {
   sound: "on" | "locked";
