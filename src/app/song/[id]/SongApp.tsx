@@ -189,14 +189,27 @@ export function SongApp({
   /** the song without its vocals: 1 ElevenLabs call */
   const [separating, setSeparating] = useState(false);
   const separate = async () => {
-    if (!window.confirm("Remove the vocals from the song? The song stays as uploaded; the music without vocals is added. · 1 call (ElevenLabs)")) return;
+    if (!window.confirm("Remove the vocals from the song? The song stays as uploaded; the music without vocals is added. · 1 call (ElevenLabs)")) return false;
     stopPlay();
     setSeparating(true);
     try {
-      await call(`/api/projects/${pid}/audio`, { action: "separate" });
+      return !!(await call(`/api/projects/${pid}/audio`, { action: "separate" }));
     } finally {
       setSeparating(false);
     }
+  };
+  /** the original vocals in one part: off (the music alone) or on */
+  const partVocalsOff = (id: string) => !!instrumental && (vocalsOff === "all" || vocalsOff.includes(id));
+  const togglePartVocals = async (id: string) => {
+    const ids = tree.sections.map((x) => x.id);
+    // not split yet: split once (1 call), then the vocals are out of this part only
+    if (!instrumental) {
+      if (await separate()) setVocalsOff([id]);
+      return;
+    }
+    const cur = vocalsOff === "all" ? ids : vocalsOff;
+    const next = cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id];
+    setVocalsOff(ids.every((x) => next.includes(x)) ? "all" : next);
   };
 
   const loadFlow = async () => {
@@ -616,6 +629,9 @@ export function SongApp({
 
   // ---------- the parts bar: where you are, tap to jump ----------
   /** a part's name (Verse 1, Hook, Rap…) */
+  const [partMenu, setPartMenu] = useState<string | null>(null);
+  /** the part merges into the one before it: its lines move there (one undo step) */
+  const mergePart = (id: string) => void call(`/api/sections/${id}`, { action: "mergePrevious" });
   const renamePart = (s: ProjectTree["sections"][number]) => {
     const name = window.prompt("Name of this part:", s.name)?.trim();
     if (name && name !== s.name) void call(`/api/sections/${s.id}`, { name: name.slice(0, 60) }, "PATCH");
@@ -1376,14 +1392,15 @@ export function SongApp({
                     <h3 className="mb-2 flex items-baseline gap-2 px-1">
                       <button
                       className="flex items-center gap-1 rounded-lg text-lg font-bold tracking-tight active:bg-panel-2"
-                      onClick={() => renamePart(s)}
-                      title="Rename this part"
+                      onClick={() => setPartMenu(s.id)}
+                      title="Rename or merge this part"
                     >
                       {s.name}
                       <Pencil className="h-3.5 w-3.5 text-muted" />
                     </button>
                       <PartLength range={r} bar={beatGrid ? bar : null} />
                       <span className="text-xs text-muted">no vocals yet</span>
+                      {tree.audio && <PartVocals off={partVocalsOff(s.id)} busy={separating} onToggle={() => void togglePartVocals(s.id)} />}
                     </h3>
                     <div className="space-y-2.5 rounded-3xl border border-dashed border-accent/40 bg-accent-soft/30 p-4">
                       <p className="text-sm">
@@ -1424,8 +1441,8 @@ export function SongApp({
                   <h3 className="mb-2 flex items-center gap-2 px-1">
                     <button
                       className="flex items-center gap-1 rounded-lg text-lg font-bold tracking-tight active:bg-panel-2"
-                      onClick={() => renamePart(s)}
-                      title="Rename this part"
+                      onClick={() => setPartMenu(s.id)}
+                      title="Rename or merge this part"
                     >
                       {s.name}
                       <Pencil className="h-3.5 w-3.5 text-muted" />
@@ -1436,6 +1453,7 @@ export function SongApp({
                         <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-accent border-r-transparent" /> Writing lyrics…
                       </span>
                     )}
+                    {tree.audio && <PartVocals off={partVocalsOff(s.id)} busy={separating} onToggle={() => void togglePartVocals(s.id)} />}
                     {beatGrid && (
                       <button
                         className="flex shrink-0 items-center gap-1 rounded-full bg-panel-2 px-2.5 py-1 text-xs font-semibold text-accent"
@@ -1679,6 +1697,23 @@ export function SongApp({
                 stopPlay();
                 setFlowSheet(null);
               }}
+            />
+          );
+        })()}
+      {partMenu &&
+        (() => {
+          const i = tree.sections.findIndex((x) => x.id === partMenu);
+          const sec = tree.sections[i];
+          if (!sec) return null;
+          return (
+            <PartMenu
+              name={sec.name}
+              prev={tree.sections[i - 1]?.name ?? null}
+              next={tree.sections[i + 1]?.name ?? null}
+              onRename={() => renamePart(sec)}
+              onMergePrev={() => mergePart(sec.id)}
+              onMergeNext={() => mergePart(tree.sections[i + 1].id)}
+              onClose={() => setPartMenu(null)}
             />
           );
         })()}
@@ -2644,5 +2679,73 @@ function MixRow({ label, sub, on, onToggle }: { label: string; sub?: string; on:
         <span className={`absolute top-0.5 h-6 w-6 rounded-full bg-white shadow transition-all ${on ? "left-[22px]" : "left-0.5"}`} />
       </span>
     </button>
+  );
+}
+
+/** the original vocals in one part: on / off (not split yet: removing them is 1 call) */
+function PartVocals({ off, busy, onToggle }: { off: boolean; busy: boolean; onToggle: () => void }) {
+  return (
+    <button
+      className={`flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold disabled:opacity-50 ${off ? "bg-panel-2 text-muted" : "bg-accent-soft text-accent"}`}
+      onClick={onToggle}
+      disabled={busy}
+      role="switch"
+      aria-checked={!off}
+      aria-label={off ? "Original vocals off in this part — turn them on" : "Original vocals on in this part — turn them off"}
+      title={off ? "The original vocals are off here: you hear the music alone" : "The original vocals play here"}
+    >
+      <Mic className="h-3.5 w-3.5" />
+      <span className={off ? "line-through" : ""}>{busy ? "Removing…" : "Vocals"}</span>
+    </button>
+  );
+}
+
+/** a part: rename it, or merge it with the part before / after (one undo step) */
+function PartMenu(props: {
+  name: string;
+  prev: string | null;
+  next: string | null;
+  onRename: () => void;
+  onMergePrev: () => void;
+  onMergeNext: () => void;
+  onClose: () => void;
+}) {
+  const act = (f: () => void) => () => {
+    props.onClose();
+    f();
+  };
+  const item = "flex w-full items-center gap-3 rounded-2xl bg-panel-2/70 px-4 py-3 text-left text-[15px] font-semibold";
+  return (
+    <div className="fixed inset-0 z-40 flex items-end justify-center bg-black/40" onClick={props.onClose}>
+      <div onClick={(e) => e.stopPropagation()} className="w-full max-w-lg space-y-2.5 rounded-t-3xl bg-panel px-4 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-3">
+        <div className="mx-auto h-1.5 w-10 rounded-full bg-line" />
+        <h2 className="text-xl font-bold">{props.name}</h2>
+        <button className={item} onClick={act(props.onRename)}>
+          <Pencil className="h-4 w-4 text-muted" /> Rename
+        </button>
+        {props.prev && (
+          <button className={item} onClick={act(props.onMergePrev)}>
+            <span className="w-4 text-center text-muted">↑</span>
+            <span className="flex-1">
+              Merge with “{props.prev}”
+              <span className="block text-xs font-normal text-muted">one part: “{props.prev}” with the lines of both</span>
+            </span>
+          </button>
+        )}
+        {props.next && (
+          <button className={item} onClick={act(props.onMergeNext)}>
+            <span className="w-4 text-center text-muted">↓</span>
+            <span className="flex-1">
+              Merge with “{props.next}”
+              <span className="block text-xs font-normal text-muted">one part: “{props.name}” with the lines of both</span>
+            </span>
+          </button>
+        )}
+        <p className="px-1 text-xs text-muted">To split a part: open a line → “New part here”. Undo brings a merge back.</p>
+        <button className="w-full rounded-2xl py-3 text-sm font-semibold text-muted" onClick={props.onClose}>
+          Cancel
+        </button>
+      </div>
+    </div>
   );
 }

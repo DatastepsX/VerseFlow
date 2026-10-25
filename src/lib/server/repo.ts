@@ -25,6 +25,8 @@ import type {
 } from "@/lib/types";
 import { barsPerLine, lineFlowFrom, nextFlowName, ownWords } from "@/lib/flow/pattern";
 import { isExampleText } from "@/lib/flow/example";
+import { fixPairs } from "@/lib/flow/rhymelines";
+import { songSections, type SungLine } from "@/lib/audio/song-lines";
 
 const TAKE_COLS = "id, section_id, lane, take_no, start_at, duration, sample_rate, peaks, chosen, created_at";
 const LINE_COLS = "id, project_id, section_id, position, text, status, kind, note, audio_at, flow, marks, updated_at";
@@ -1082,10 +1084,15 @@ export async function mergeIntoPrevious(sectionId: string) {
   const i = tree.sections.findIndex((x) => x.id === sectionId);
   if (i <= 0) throw new Error("There is no section before this one.");
   const prev = tree.sections[i - 1];
+  // one undo step: the parts as they were come back
+  await markRebuild(s.project_id, await saveVersion(s.project_id, "Before merging parts"), `Merge ${prev.name} + ${tree.sections[i].name}`);
+  // the original vocals: the merged part keeps the setting of the part before
+  const off = tree.project.settings?.vocalsOff;
+  if (Array.isArray(off) && off.includes(sectionId))
+    check(await db().from("projects").update({ settings: { ...tree.project.settings, vocalsOff: off.filter((x) => x !== sectionId) } }).eq("id", s.project_id));
   const base = Math.max(0, ...prev.lines.map((l) => l.position));
   const moving = tree.sections[i].lines;
-  for (const [k, l] of moving.entries())
-    check(await db().from("lines").update({ section_id: prev.id, position: base + k + 1 }).eq("id", l.id));
+  await Promise.all(moving.map(async (l, k) => check(await db().from("lines").update({ section_id: prev.id, position: base + k + 1 }).eq("id", l.id))));
   await deleteSection(sectionId);
   return s.project_id;
 }
@@ -1501,16 +1508,38 @@ export async function buildFlowSong(
     if (newPart) groups.push([]);
     groups[groups.length - 1].push(l);
   }
+  let named: { name: string; start: number; items: Item[] }[] = groups.map((g, i) => ({ name: `Part ${i + 1}`, start: g[0].start, items: g }));
+  // the song's own vocals: parts as the song has them — the repeated lines are the chorus / hook, a beat
+  // change splits a verse (pre-chorus), ad-libs at the start are the intro. Only names to start from:
+  // parts can be renamed, split and merged.
+  if (source === "vocals" && tree.audio && sung.length) {
+    const asSung: SungLine[] = sung.map((l, i) => ({
+      text: l.words ?? "",
+      start: l.sungAt ?? l.start,
+      end: l.end ?? sung[i + 1]?.start ?? l.start + step,
+      syllables: l.syllables,
+      pair: l.pair,
+    }));
+    const vocal = songSections(asSung, { ...tree.audio, duration: tree.audio.duration }, tree.project.type)
+      .filter((x) => x.lines.length)
+      .map((x) => ({ name: x.name, start: x.start, items: fixPairs(x.lines.map((l) => sung[asSung.indexOf(l)])) as Item[] }));
+    const firstSung = sung[0].start;
+    const lastSung = sung[sung.length - 1].start;
+    const empty = groups
+      .filter((g) => "placeholder" in g[0])
+      .map((g) => ({ name: g[0].start < firstSung ? "Intro" : g[0].start > lastSung ? "Outro" : "Break", start: g[0].start, items: g }));
+    named = [...vocal, ...empty].sort((a, b) => a.start - b.start);
+  }
   const secRows = check(
     await db()
       .from("sections")
-      .insert(groups.map((g, i) => ({ project_id: projectId, name: `Part ${i + 1}`, group_size: 2, position: i + 1, audio_start: g[0].start })))
+      .insert(named.map((g, i) => ({ project_id: projectId, name: g.name, group_size: 2, position: i + 1, audio_start: Math.round(g.start * 1000) / 1000 })))
       .select("id, position"),
   ) as { id: string; position: number }[];
   const idAt = new Map(secRows.map((r) => [r.position, r.id]));
   await insertFlowRows(
     projectId,
-    groups.flatMap((g, i) => flowRows(projectId, idAt.get(i + 1)!, g, source, step)),
+    named.flatMap((g, i) => flowRows(projectId, idAt.get(i + 1)!, g.items, source, step)),
   );
   await touch(projectId);
 }

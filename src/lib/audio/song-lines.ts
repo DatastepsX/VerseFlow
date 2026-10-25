@@ -17,6 +17,10 @@ import { snapSectionStart, type SnapGrid } from "./structure";
  * - rap: fast delivery (≥ ~6 syllables per second around the line)
  * - chorus/hook: lines that come back later in the song
  * - verse: the rest; an instrumental gap of ≥ 4 bars is a break
+ * - ad-libs before the first verse ("Ohh yeah", "Ooh babe") are the intro
+ * - a strong beat change between two lines splits a long verse / rap: the
+ *   piece right before a chorus is the pre-chorus, otherwise the next verse
+ * - a short tail after the last chorus is the outro
  * - section starts snap to the beat changes / bar lines, never after the
  *   first sung word (pickups stay in their section)
  */
@@ -26,9 +30,11 @@ export interface SungLine {
   start: number;
   end: number;
   syllables: number;
+  /** 2 = the second line of a rhyming couplet */
+  pair?: 0 | 1 | 2;
 }
 
-export type SectionKind = "intro" | "verse" | "chorus" | "rap" | "break" | "outro";
+export type SectionKind = "intro" | "verse" | "pre" | "chorus" | "rap" | "break" | "outro";
 
 export interface SongSection {
   kind: SectionKind;
@@ -141,6 +147,13 @@ function similar(a: string, b: string) {
 
 const RAP_RATE = 6;
 
+const ADLIB = /^(?:o+h*|a+h*|e+h*|u+h*|m+h*|ye+a*h*|ye+|ya+|yo|hey|babe|baby|na|la|da|uh|huh|wo+h*|woo+|skrt|brr+)$/;
+/** only sounds, no words: "Ohhh, ohhh yeah.", "Ooo babe" */
+export const isAdlib = (text: string) => {
+  const w = text.toLowerCase().match(/[\p{L}']+/gu) ?? [];
+  return w.length > 0 && w.every((x) => ADLIB.test(x));
+};
+
 /** groups of lines that repeat each other (the chorus is one family, a repeated bridge another) */
 export function lineFamilies(lines: SungLine[]) {
   const parent = lines.map((_, i) => i);
@@ -247,20 +260,62 @@ export function songSections(
     if (prev && s.kind === "verse" && s.lines.length < 2 && prev.kind !== "break") prev.lines.push(...s.lines);
     else merged.push(s);
   }
-  // a last lone ad-lib after a break is the outro
+  // ad-libs before the first verse ("Ohhh yeah", "Ooo babe") are the intro
+  if (merged[0] && merged[0].kind !== "break") {
+    const s = merged[0];
+    const k = s.lines.findIndex((l) => !isAdlib(l.text));
+    if (k > 0 && s.lines.length - k >= 2)
+      merged.splice(0, 1, { kind: "intro", lines: s.lines.slice(0, k), vocalStart: s.vocalStart, families: new Set() }, { ...s, lines: s.lines.slice(k), vocalStart: s.lines[k].start });
+  }
+  // where the beat changes between two lines, a long verse / rap splits: the piece right before a chorus is
+  // the pre-chorus, otherwise the next verse
+  const strong = (grid.changes ?? []).filter((c) => c.s >= 0.5);
+  type Part = (typeof merged)[number];
+  const split = (s: Part): Part[] => {
+    const n = s.lines.length;
+    if ((s.kind !== "verse" && s.kind !== "rap") || n < 4) return [s];
+    let best: { k: number; s: number } | null = null;
+    for (const c of strong) {
+      let k = s.lines.findIndex((l) => l.start >= c.t - 0.25);
+      // a couplet stays together: its first line sung right before the change (a pickup) moves along
+      if (k > 0 && s.lines[k].pair === 2 && c.t - s.lines[k - 1].start <= 0.6 * bar) k--;
+      if (k < 2 || k > n - 2 || s.lines[k].pair === 2) continue;
+      // between the lines, not in the middle of one
+      if (s.lines[k - 1].end > c.t + 0.5 * bar) continue;
+      if (c.t - s.lines[0].start < 4 * bar - 0.01 || s.lines[n - 1].end - c.t < 3.5 * bar) continue;
+      if (!best || c.s > best.s) best = { k, s: c.s };
+    }
+    if (!best) return [s];
+    return [...split({ ...s, lines: s.lines.slice(0, best.k) }), ...split({ ...s, lines: s.lines.slice(best.k), vocalStart: s.lines[best.k].start })];
+  };
+  const pieces = merged.flatMap((s, i) => {
+    const out = split(s);
+    const last = out[out.length - 1];
+    if (out.length > 1 && merged[i + 1]?.kind === "chorus" && last.lines.length <= 8 && last.lines[last.lines.length - 1].end - last.vocalStart <= 8.5 * bar)
+      last.kind = "pre";
+    return out;
+  });
+  merged.splice(0, merged.length, ...pieces);
+  // a last lone ad-lib after a break, or a short tail after the last chorus, is the outro
   const tail = merged[merged.length - 1];
-  if (tail && merged.length > 1 && tail.lines.length < 2 && merged[merged.length - 2].kind === "break") tail.kind = "outro";
+  const beforeTail = merged[merged.length - 2]?.kind;
+  if (tail && beforeTail && ((tail.lines.length < 2 && beforeTail === "break") || (beforeTail === "chorus" && tail.kind !== "chorus" && tail.lines.length <= 3)))
+    tail.kind = "outro";
 
   const first = lines[0].start;
   const sections: SongSection[] = [];
-  if (first >= 2 * bar) sections.push({ kind: "intro", name: "Intro", start: 0, lines: [] });
+  if (first >= 2 * bar && merged[0]?.kind !== "intro") sections.push({ kind: "intro", name: "Intro", start: 0, lines: [] });
   const counts: Record<string, number> = {};
   const rapSong = projectType === "rap";
-  for (const s of merged) {
-    // never start after the first sung word: a pickup stays in its section
+  for (const [i, s] of merged.entries()) {
+    // never start after the first sung word: a pickup stays in its section — a bar earlier, or just before
+    // the pickup when the part before still sings there
     let start = snapSectionStart(s.vocalStart, grid);
-    if (start > s.vocalStart + 0.15 && grid.bpm) start = Math.max(0, start - bar);
-    if (!sections.length) start = Math.min(start, s.vocalStart);
+    if (start > s.vocalStart + 0.15 && grid.bpm) {
+      const prev = merged[i - 1]?.lines.at(-1)?.end ?? 0;
+      start = start - bar < prev ? Math.max(prev, s.vocalStart - 0.1) : Math.max(0, start - bar);
+    }
+    if (!sections.length) start = s.kind === "intro" ? 0 : Math.min(start, s.vocalStart);
     const kind = s.kind;
     // the part most of the section's lines belong to: the first repeated part is the chorus, others bridges
     let fam = -1;
@@ -283,7 +338,13 @@ export function songSections(
             : "Chorus"
         : kind === "rap"
           ? "Rap"
-          : kind === "break"
+          : kind === "pre"
+            ? rapSong
+              ? "Pre-hook"
+              : "Pre-chorus"
+            : kind === "intro"
+              ? "Intro"
+              : kind === "break"
             ? "Break"
             : kind === "outro"
               ? "Outro"
