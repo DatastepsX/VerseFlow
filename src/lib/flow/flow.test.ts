@@ -6,7 +6,7 @@ import { dropSounds, isSound } from "./fillers";
 import { cycle, flowFromGrid, gridFor, quantizeTaps } from "./grid";
 import { exampleWords, isExampleText } from "./example";
 import { coupletsOf } from "./couplets";
-import { barsPerLine, chipsOf, lineCuts, lineFlowFrom, lineFromText, linesFromBreaks, linesFromOnsets, nextFlowName, ownWords, relayout } from "./pattern";
+import { barsPerLine, chipsOf, lineCuts, lineFlowFrom, linesFromWords, lineFromText, linesFromBreaks, linesFromOnsets, nextFlowName, ownWords, relayout } from "./pattern";
 import { prosody } from "@/lib/rhyme/prosody";
 import { emptyParts, vocalLines } from "./vocals";
 
@@ -439,4 +439,27 @@ test("sung lines without 'Next line': they break at the singer's longest pauses,
     [15, 15, 15, 15],
   );
   assert.ok(lines.every((l) => l.pauses.join() === "5,9"), lines.map((l) => l.pauses.join()).join(" | "));
+});
+
+test("recognised words: the sung words are the text, their syllables and the breaks between words are the flow", () => {
+  const bar = 4 * (60 / 90);
+  // "Mentre ti guardo ‖ questa notte ‖ io mi sveglio con te" sung from 10.3 s, ~0.17 s a syllable, breaks ~0.3 s
+  const sing = (text: string, t: number) =>
+    text.split(" ").map((w) => {
+      const n = prosody(w, "it").syllables;
+      const word = { text: w, start: t, end: t + n * 0.17 - 0.03 };
+      t += n * 0.17;
+      return word;
+    });
+  const g1 = sing("Mentre ti guardo,", 10.3);
+  const g2 = sing("questa notte,", g1[g1.length - 1].end + 0.3);
+  const g3 = sing("io mi sveglio con te", g2[g2.length - 1].end + 0.3);
+  const [l] = linesFromWords([...g1, ...g2, ...g3], [], 10, bar, 1, "it");
+  assert.equal(l.text, "Mentre ti guardo, questa notte, io mi sveglio con te");
+  // "notte, io": sung with a break, the vowels don't merge (16 sung syllables, "io" two)
+  assert.equal(l.syllables, 16);
+  assert.deepEqual(l.pauses, [5, 9]);
+  assert.deepEqual(chipsOf(l.text, "it", true).slice(7, 10), ["not", "te,", "i"]);
+  assert.equal(l.offsets[0], 0.3);
+  assert.equal(ownWords(l, "it", "sing"), true, "your own words: kept as lyrics unless you change them");
 });

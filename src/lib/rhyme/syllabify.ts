@@ -95,7 +95,7 @@ export interface SyllablePart {
 }
 
 /** the line's syllables with the spaces between words kept (a merged syllable keeps its inner space: "ne an") */
-export function syllableParts(text: string, lang: string): SyllablePart[] | null {
+export function syllableParts(text: string, lang: string, commaPauses = false): SyllablePart[] | null {
   if (!ROMANCE.has(lang)) return null;
   const words = text.trim().split(/\s+/).filter(Boolean);
   const out: SyllablePart[] = [];
@@ -120,12 +120,13 @@ export function syllableParts(text: string, lang: string): SyllablePart[] | null
     parts[0] = lead + parts[0];
     parts[parts.length - 1] += tail;
     // synalepha: this word's first syllable merges into the previous one
-    const merged = i > 0 && prevEndsVowel && p.startsWithVowel && out.length > 0;
+    // (with commaPauses, not across a comma: "notte, io" sung with a break)
+    const merged = i > 0 && prevEndsVowel && p.startsWithVowel && out.length > 0 && !(commaPauses && /[,;:.!?…]["»”’)]*$/.test(words[i - 1]));
     if (merged) out[out.length - 1].text += " " + parts.shift();
     // the word's first syllable gets the space (unless it merged into the previous word's last one)
     const firstOfWord = out.length > 0 && !merged;
     out.push(...parts.map((x, k) => ({ text: x, space: k === 0 && firstOfWord })));
     prevEndsVowel = p.endsWithVowel;
   }
-  return out.length === prosody(text, lang).syllables ? out : null;
+  return out.length === prosody(text, lang, commaPauses).syllables ? out : null;
 }

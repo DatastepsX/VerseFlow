@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { barsPerLine, chipsOf, dropStrays, lineCuts, lineFromText, linesFromBreaks, linesFromOnsets, ownWords, relayout, type Onset } from "@/lib/flow/pattern";
+import { barsPerLine, chipsOf, dropStrays, lineCuts, lineFromText, linesFromWords, linesFromBreaks, linesFromOnsets, ownWords, relayout, type Onset } from "@/lib/flow/pattern";
 import { quantizeTaps } from "@/lib/flow/grid";
 import type { FlowPattern, PatternLine, SongFlow } from "@/lib/types";
 import { Check, Hand, Headphones, LineBreak, Mic, Pencil, Play, Restart, Sparkles } from "@/components/icons";
@@ -19,6 +19,8 @@ export interface SheetAudio {
   armMic: () => Promise<void>;
   /** the microphone's level now, 0..1 (singing: it stops when you do) */
   level?: () => number;
+  /** the words sung in the last take (song time): 1 call */
+  recognise?: () => Promise<{ text: string; start: number; end: number }[]>;
   /** headphones on (no echo cancellation; the delay set for them) — the same setting as in Record */
   headphones?: boolean;
   setHeadphones?: (on: boolean) => void;
@@ -245,6 +247,40 @@ export function FlowSheet({
     if (br.length >= p) void finish.current?.();
   };
 
+  /** the words in the take (1 call): exact syllables, breaks between words, your words as the text */
+  const [hearing, setHearing] = useState(false);
+  const recognise = async () => {
+    if (!audio.recognise) return;
+    setHearing(true);
+    setHint(null);
+    try {
+      const words = await audio.recognise();
+      if (words.length < 3) {
+        setHint("No words were recognised (“ta ta” and other sounds stay as they were found).");
+        return;
+      }
+      // the lines: where "Next line" was tapped, else the longest pauses between words
+      const br = breaksRef.current;
+      const cut = lineCuts(words.map((w) => ({ t: w.start, dur: w.end - w.start })), p);
+      // few words a line: simply the longest pauses between words
+      const longest = words
+        .slice(1)
+        .map((w, i) => ({ k: i + 1, gap: w.start - words[i].end }))
+        .sort((x, y) => y.gap - x.gap)
+        .slice(0, p - 1)
+        .map((x) => x.k)
+        .sort((x, y) => x - y);
+      const firsts = br.length ? br.map((b) => words.filter((w) => w.start < b.t).length) : cut.length ? cut : longest;
+      const got = linesFromWords(words, firsts, barStart, bar, p, lang);
+      fromTake.current = got;
+      edit(got);
+    } catch (e) {
+      setHint(e instanceof Error ? e.message : "The words could not be recognised.");
+    } finally {
+      setHearing(false);
+    }
+  };
+
   const listen = () => {
     const from = barStart - bar;
     // just sung, nothing changed since: your voice, a click on every syllable found in it
@@ -376,6 +412,14 @@ export function FlowSheet({
             <Headphones className="h-4 w-4 text-muted" /> I&apos;m wearing headphones
             {!audio.headphones && <span className="text-xs text-muted">· the beat is filtered out of the mic</span>}
           </label>
+        )}
+        {/* sung real words: recognise them (exact syllables, breaks between words, your words as the text) */}
+        {recorded && phase === "idle" && mode !== "tap" && audio.recognise && (
+          <button className="btn w-full justify-center rounded-2xl border-0 bg-accent-soft py-2.5 text-sm text-accent disabled:opacity-50" disabled={hearing} onClick={() => void recognise()}>
+            <Sparkles className="h-4 w-4" />
+            {hearing ? "Listening to your words…" : "Recognise my words"}
+            <span className="text-xs font-normal opacity-80">· 1 call</span>
+          </button>
         )}
         {/* sing / tap: the first bars of the part */}
         {mode !== "write" && phase === "idle" && (
@@ -524,7 +568,7 @@ function Dots({ line }: { line: PatternLine | undefined }) {
  * long note (or not), the + between two = a pause there (or not).
  */
 function Chips({ line, lang, bar, onChange }: { line: PatternLine; lang: string; bar: number; onChange: (l: PatternLine) => void }) {
-  const labels = chipsOf(line.text, lang);
+  const labels = chipsOf(line.text, lang, !!line.commaPauses);
   const hold = useRef<{ k: number; timer: ReturnType<typeof setTimeout>; fired: boolean } | null>(null);
   const toggle = (arr: number[], k: number) => (arr.includes(k) ? arr.filter((x) => x !== k) : [...arr, k].sort((a, b) => a - b));
   return (

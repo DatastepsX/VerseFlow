@@ -7,6 +7,7 @@ import { fmtTime } from "@/lib/audio/song-map";
 import { buildTimeline, positionIn } from "@/lib/audio/timeline";
 import { extendBuffers } from "@/lib/audio/arrange";
 import { BEAT_ACCEPT, MAX_BEAT_BYTES, uploadBeat } from "@/lib/client/beat";
+import { dropSounds } from "@/lib/flow/fillers";
 import { chunkLines, processFlow, processTaps, processVocals, saveFlowTake, type FlowStep } from "@/lib/flow/pipeline";
 import { stressPattern } from "@/lib/flow/lines";
 import { prosody } from "@/lib/rhyme/prosody";
@@ -800,6 +801,8 @@ export function SongApp({
   }));
   /** the flow just sung in the flow sheet (to hear it back) */
   const sungTake = useRef<PlayLayer | null>(null);
+  /** the flow just sung, being saved as a take: its id (to recognise the words in it) */
+  const sungSave = useRef<Promise<string> | null>(null);
   const sheetAudio: SheetAudio = {
     ready: beatReady,
     play: (from, until, clicks, voice) => void play(from, until, { guide: voice && sungTake.current ? [sungTake.current] : [], flow: false, clicks }),
@@ -809,6 +812,16 @@ export function SongApp({
       await engine.current?.arm(undefined, { voiceProcessing: !headphones });
     },
     level: () => engine.current?.level() ?? 0,
+    // the words sung in the take just recorded: 1 ElevenLabs call (logged), song time
+    recognise: async () => {
+      const takeId = sungSave.current ? await sungSave.current : null;
+      const at = sungTake.current?.at;
+      if (!takeId || at === undefined) throw new Error("Sing first — the take is still being saved.");
+      const res = await fetch(`/api/projects/${pid}/flow`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "transcribe", takeId }) });
+      const data = (await res.json().catch(() => ({}))) as { words?: { text: string; start: number; end: number }[]; error?: string };
+      if (!res.ok) throw new Error(data.error ?? "The words could not be recognised");
+      return dropSounds(data.words ?? []).map((w) => ({ ...w, start: w.start + at, end: w.end + at }));
+    },
     headphones,
     setHeadphones,
     startRec: () => engine.current?.startRecording(),
@@ -824,7 +837,9 @@ export function SongApp({
       sungTake.current = { buffer: vb, at: r.startAt, gain: 1 };
       // kept as a take of the part (lane "Flow"): heard with the song, and there to check the recognition (free)
       const sectionId = flowSheet?.sectionId ?? null;
-      void saveFlowTake(pid, r, sectionId).catch(() => {});
+      const saved = saveFlowTake(pid, r, sectionId);
+      saved.catch(() => {});
+      sungSave.current = saved;
       return detectSyllables(r.samples, r.sampleRate).map((x) => ({ t: x.t + r.startAt, strength: x.strength, dur: x.dur }));
     },
   };

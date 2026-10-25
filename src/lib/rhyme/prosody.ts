@@ -33,11 +33,22 @@ export function isWeakWord(word: string, lang: string) {
 
 const cache = new Map<string, Prosody>();
 
-export function prosody(text: string, lang: string): Prosody {
-  const key = lang + "\u0000" + text;
+/** `commaPauses`: a comma (full stop…) is a sung pause — no vowel merges across it (a flow sung with breaks) */
+export function prosody(text: string, lang: string, commaPauses = false): Prosody {
+  const key = lang + "\u0000" + (commaPauses ? "|" : "") + text;
   const hit = cache.get(key);
   if (hit) return hit;
-  const words = tokenize(text);
+  const pauseAfter: boolean[] = [];
+  const words = commaPauses
+    ? text
+        .split(/\s+/)
+        .filter(Boolean)
+        .flatMap((c) => {
+          const ws = tokenize(c);
+          ws.forEach((_, j) => pauseAfter.push(j === ws.length - 1 && /[,;:.!?…]["»”’)]*$/.test(c)));
+          return ws;
+        })
+    : tokenize(text);
   const weak = WEAK[lang] ?? WEAK.it;
   const stresses: number[] = [];
   let pos = 0;
@@ -48,7 +59,7 @@ export function prosody(text: string, lang: string): Prosody {
     const p = analyzeWord(w, lang);
     if (!p.syllables) return;
     // synalepha: this word's first syllable merges into the previous one
-    const merge = ROMANCE.has(lang) && i > 0 && prevEndsVowel && p.startsWithVowel ? 1 : 0;
+    const merge = ROMANCE.has(lang) && i > 0 && prevEndsVowel && p.startsWithVowel && !pauseAfter[i - 1] ? 1 : 0;
     const start = pos - merge;
     const isWeak = weak.has(w.toLowerCase()) && p.syllables === 1;
     const isLast = i === words.length - 1;

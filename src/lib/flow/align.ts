@@ -37,7 +37,15 @@ export function alignmentText(lines: { text: string }[]) {
   return lines.map((l) => wordsOf(l.text).join(" ")).join("\n");
 }
 
-export function alignTakeLines(lines: { id: string; text: string }[], res: Alignment, offset: number, lang: string, beat: number): AlignedLine[] {
+export function alignTakeLines(
+  lines: { id: string; text: string }[],
+  res: Alignment,
+  offset: number,
+  lang: string,
+  beat: number,
+  /** a comma is a sung pause: no vowel merges across it */
+  commaPauses = false,
+): AlignedLine[] {
   const sent = alignmentText(lines);
   // character times, matched on the non-space characters (the response may or may not list spaces / line breaks)
   const chars = (res.characters ?? []).filter((c) => c.text && !isSpace(c.text));
@@ -72,7 +80,7 @@ export function alignTakeLines(lines: { id: string; text: string }[], res: Align
     const lastWord = byWord?.[wi + ws.length - 1];
     const end = byChar ? byChar[ci + k - 1].end : lastWord!.end;
     // each sung syllable starts at its first letter (a syllable merged across words: at the first one's)
-    const parts = syllableParts(text, lang);
+    const parts = syllableParts(text, lang, commaPauses);
     const starts: number[] = [];
     if (parts) {
       let pos = 0;
@@ -83,7 +91,7 @@ export function alignTakeLines(lines: { id: string; text: string }[], res: Align
       }
     } else for (const w of wordAt) starts.push(w.from);
     const times = starts.map((i) => r3(offset + timeOf(Math.min(i, k - 1))));
-    const p = prosody(text, lang);
+    const p = prosody(text, lang, commaPauses);
     const lineLoss = byWord ? byWord.slice(wi, wi + ws.length).map((w) => w.loss ?? 0) : [];
     out.push({
       id: l.id,

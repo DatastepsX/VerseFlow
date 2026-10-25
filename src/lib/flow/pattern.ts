@@ -2,6 +2,7 @@ import { prosody } from "@/lib/rhyme/prosody";
 import { syllableParts } from "@/lib/rhyme/syllabify";
 import type { FlowPattern, LineFlow, PatternLine } from "@/lib/types";
 import { exampleWords, isExampleText } from "./example";
+import { alignTakeLines } from "./align";
 
 /**
  * Flow patterns: 2 or 4 lines that set the flow of a part (or a stretch of
@@ -14,24 +15,26 @@ import { exampleWords, isExampleText } from "./example";
  */
 
 /** the chips of a line: one per syllable, with its letters when the line can be split */
-export function chipsOf(text: string, lang: string): string[] {
-  const parts = syllableParts(text, lang);
+export function chipsOf(text: string, lang: string, commaPauses = false): string[] {
+  const parts = syllableParts(text, lang, commaPauses);
   if (parts) return parts.map((p) => p.text);
-  const n = prosody(text, lang).syllables;
+  const n = prosody(text, lang, commaPauses).syllables;
   return Array.from({ length: n }, () => "•");
 }
 
 /** a written line → a pattern line: its syllables, natural stresses, a pause at a comma */
 export function lineFromText(text: string, lang: string, bar: number, keep?: PatternLine): PatternLine {
-  const parts = syllableParts(text, lang);
-  const n = parts ? parts.length : prosody(text, lang).syllables;
+  const cp = !!keep?.commaPauses;
+  const parts = syllableParts(text, lang, cp);
+  const n = parts ? parts.length : prosody(text, lang, cp).syllables;
   const sameCount = keep && keep.syllables === n;
-  const natural = prosody(text, lang).stresses.map((s) => s + 1);
+  const natural = prosody(text, lang, cp).stresses.map((s) => s + 1);
   const pauses = parts ? parts.map((p, i) => (/[,;:.!?…—–-]$/.test(p.text.trim()) && i < parts.length - 1 ? i + 1 : 0)).filter(Boolean) : [];
   const line: PatternLine = {
     text,
     written: true,
     ...(keep?.sung ? { sung: true } : {}),
+    ...(cp ? { commaPauses: true } : {}),
     syllables: n,
     // the same number of syllables: what was set (stresses, long notes, pauses, timing) stays
     stress: sameCount ? keep.stress : natural,
@@ -345,3 +348,56 @@ export function nextFlowName(taken: string[]): string {
 }
 
 const round = (t: number) => Math.round(t * 1000) / 1000;
+
+/**
+ * Sung lines from the words recognised in the take (1 call): the words are the text, their syllables (vowels
+ * merged across words counted once) start where the words were sung, a break goes where you stopped between two
+ * words. `firsts`: the index of each new line's first word ("Next line", or the longest pauses).
+ */
+export function linesFromWords(
+  words: { text: string; start: number; end: number }[],
+  firsts: number[],
+  from: number,
+  bar: number,
+  lines: number,
+  lang: string,
+): PatternLine[] {
+  const beat = bar / 4;
+  const cuts = [...new Set([0, ...firsts.filter((k) => k > 0 && k < words.length)])].sort((a, b) => a - b);
+  const groups = cuts.map((c, k) => words.slice(c, cuts[k + 1] ?? words.length));
+  return Array.from({ length: lines }, (_, k) => {
+    const g = groups[k] ?? [];
+    if (!g.length) return sungLine([], from + k * bar, bar, lang, k);
+    // a break after a word: the voice stopped before the next one, clearly longer than between the line's words
+    const gaps = g.slice(1).map((w, i) => w.start - g[i].end);
+    const typical = [...gaps].sort((x, y) => x - y)[Math.floor(gaps.length / 2)] ?? 0;
+    const breakAfter = gaps.map((d) => d >= Math.max(0.12, 0.15 * beat, 1.8 * typical));
+    // the text: the sung words, a comma at each break (a pause: no vowel merges across it)
+    const ws = g.map((w, i) => (breakAfter[i] && !/[,;:.!?…]["»”’)]*$/.test(w.text) ? `${w.text},` : w.text));
+    const text = ws.join(" ");
+    const [a] = alignTakeLines([{ id: "l", text }], { words: g.map((w, i) => ({ ...w, text: ws[i] })) }, 0, lang, beat, true);
+    if (!a || !a.times.length) return sungLine([], from + k * bar, bar, lang, k);
+    const ref = from + bar * Math.max(0, Math.floor((g[0].start - from) / bar + 0.125));
+    const pauses = breakAfter
+      .map((b, i) => (b ? prosody(ws.slice(0, i + 1).join(" "), lang, true).syllables : 0))
+      .filter((n) => n > 0 && n < a.times.length);
+    const n = a.times.length;
+    const long = a.times
+      .map((t, i) => {
+        const next = i + 1 < n ? a.times[i + 1] : a.end;
+        return next - t >= beat * 0.95 && !pauses.includes(i + 1) ? i + 1 : 0;
+      })
+      .filter(Boolean);
+    return {
+      text: text.charAt(0).toUpperCase() + text.slice(1),
+      written: true,
+      sung: true,
+      commaPauses: true,
+      syllables: n,
+      stress: a.stress,
+      long: a.held && !long.includes(n) ? [...long, n] : long,
+      pauses: [...new Set(pauses)],
+      offsets: a.times.map((t) => round(Math.max(0, t - ref))),
+    };
+  });
+}

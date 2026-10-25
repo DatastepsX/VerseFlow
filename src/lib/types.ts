@@ -243,6 +243,8 @@ export interface PatternLine {
   text: string;
   /** the writer wrote these words: they become the lyrics where the flow is first used (see ownWords) */
   written: boolean;
+  /** sung with breaks at its commas (words recognised in the take): no vowel merges across a comma */
+  commaPauses?: boolean;
   /** sung or tapped: its timing is the recording's (example words until the writer types their own) */
   sung?: boolean;
   syllables: number;

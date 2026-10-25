@@ -42,7 +42,7 @@ export async function transcribeBeat(projectId: string, language: string): Promi
   form.append("timestamps_granularity", "word");
   form.append("tag_audio_events", "false");
   if (language) form.append("language_code", language);
-  const res = await fetch("https://api.elevenlabs.io/v1/speech-to-text", {
+  const res = await fetch(`${process.env.ELEVENLABS_BASE_URL || "https://api.elevenlabs.io/v1"}/speech-to-text`, {
     method: "POST",
     headers: { "xi-api-key": key },
     body: form,
@@ -127,7 +127,7 @@ export async function transcribeTake(projectId: string, takeId: string, language
   form.append("timestamps_granularity", "word");
   form.append("tag_audio_events", "false");
   if (language) form.append("language_code", language);
-  const res = await fetch("https://api.elevenlabs.io/v1/speech-to-text", { method: "POST", headers: { "xi-api-key": key }, body: form });
+  const res = await fetch(`${process.env.ELEVENLABS_BASE_URL || "https://api.elevenlabs.io/v1"}/speech-to-text`, { method: "POST", headers: { "xi-api-key": key }, body: form });
   const body = (await res.json().catch(() => ({}))) as { words?: ScribeWord[]; audio_duration_secs?: number | null; detail?: unknown };
   if (!res.ok) {
     const detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail ?? res.statusText);
