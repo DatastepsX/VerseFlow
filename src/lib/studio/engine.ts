@@ -1,6 +1,6 @@
 "use client";
 
-import { measureLatency, songTimeOfFrame } from "./timing";
+import { measureClaps, measureLatency, songTimeOfFrame } from "./timing";
 
 /**
  * The studio's audio engine (browser): the beat, other takes and the
@@ -235,6 +235,24 @@ export class StudioEngine {
     if (!rec) return null;
     // stopRecording returns song time with latency 0 = clock time - base
     return measureLatency(rec.samples, rec.sampleRate, rec.startAt + base, clicks.map((c) => base + c.at));
+  }
+
+  /**
+   * Latency by ear: 4 count-in clicks, then 8 clicks to clap (or say "ta") on. Returns the delay in seconds
+   * (null: the claps weren't heard, or scattered too much).
+   */
+  async calibrateClaps(channel: number): Promise<{ delay: number; spread: number; found: number } | null> {
+    if (!this.recorder) throw new Error("Arm the studio first.");
+    const beat = 0.6;
+    const clicks = Array.from({ length: 12 }, (_, i) => ({ at: 0.5 + i * beat, accent: i < 4 ? i === 0 : (i - 4) % 4 === 0 }));
+    this.play(0, { beat: null, clicks });
+    const base = this.base;
+    this.startRecording();
+    await new Promise((r) => setTimeout(r, (0.5 + 12 * beat + 0.6) * 1000));
+    const rec = await this.stopRecording(0, channel, -10);
+    this.stop();
+    if (!rec) return null;
+    return measureClaps(rec.samples, rec.sampleRate, rec.startAt + base, clicks.slice(4).map((c) => base + c.at));
   }
 
   close() {

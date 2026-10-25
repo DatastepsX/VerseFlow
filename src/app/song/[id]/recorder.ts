@@ -100,7 +100,10 @@ export interface LocalSettings {
   latencyMs: number;
   calibrated: boolean;
   setLatencyMs: (ms: number | null) => void;
-  calibrate: () => void;
+  /** "clicks": hold the headphones to the mic; "claps": clap along (with or without headphones) */
+  calibrate: (how?: "clicks" | "claps") => void;
+  /** the delay set for the other setting (with / without headphones), null: estimated */
+  otherLatencyMs: number | null;
 }
 
 /** a setting saved on this device (read after the first render: the server doesn't know it) */
@@ -466,15 +469,21 @@ export function useLocalRecorder(o: {
     }
   };
 
-  const calibrate = async () => {
+  const calibrate = async (how: "clicks" | "claps" = "clicks") => {
     const e = engine.current;
     if (!e || busy) return;
     if (!e.armed && !(await arm())) return;
     setStatus({ kind: "calibrating" });
     try {
-      const l = await e.calibrate(channel);
-      if (l === null) setError("The clicks weren't heard — hold the headphones to the microphone (or turn the volume up) and try again.");
-      else setLatencyMs(Math.round(l * 1000 * 10) / 10);
+      if (how === "claps") {
+        const r = await e.calibrateClaps(channel);
+        if (r === null) setError("The claps weren't clear — clap (or say “ta”) right on each of the 8 clicks after the 4 count-in clicks, close to the microphone, and try again.");
+        else setLatencyMs(Math.round(Math.max(0, r.delay) * 1000 * 10) / 10);
+      } else {
+        const l = await e.calibrate(channel);
+        if (l === null) setError("The clicks weren't heard — hold the headphones to the microphone (or turn the volume up) and try again.");
+        else setLatencyMs(Math.round(l * 1000 * 10) / 10);
+      }
     } finally {
       setStatus({ kind: "idle" });
     }
@@ -712,7 +721,8 @@ export function useLocalRecorder(o: {
       latencyMs: Math.round(latency * 1000 * 10) / 10,
       calibrated: latencyMs !== null,
       setLatencyMs,
-      calibrate: () => void calibrate(),
+      calibrate: (how) => void calibrate(how),
+      otherLatencyMs: headphones ? latencyVp : latencyRaw,
     },
   };
 }

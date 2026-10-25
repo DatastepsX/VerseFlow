@@ -777,22 +777,36 @@ function RecordSettings({ r, size, setSize, onClose }: { r: Recorder; size: keyo
 
             <div className="space-y-2">
               <p className="label">Timing</p>
-              <div className="flex items-center gap-3 rounded-2xl bg-panel-2 px-4 py-3 text-sm">
-                <span className="flex-1">
-                  Delay <b className="font-mono">{s.latencyMs} ms</b>
+              <div className="space-y-2.5 rounded-2xl bg-panel-2 px-4 py-3 text-sm">
+                <p>
+                  Delay {s.headphones ? "with headphones" : "without headphones"} <b className="font-mono">{s.latencyMs} ms</b>
                   <span className="block text-xs text-muted">
-                    {s.calibrated ? "Measured — every take is moved by it." : "Estimated. Measure it once: hold the headphones to the microphone and tap Measure."}
+                    {s.calibrated ? "Set on this device — every take is moved by it." : "Estimated — set it once on this device: clap along."}
+                    {` ${s.headphones ? "Without" : "With"} headphones: ${s.otherLatencyMs !== null ? `${s.otherLatencyMs} ms` : "not set yet"}.`}
                   </span>
-                </span>
-                <button className="rounded-full bg-panel px-3 py-1.5 text-xs font-semibold ring-1 ring-line disabled:opacity-40" disabled={r.status !== "idle"} onClick={s.calibrate}>
-                  {r.status === "calibrating" ? "Listening…" : "Measure"}
+                </p>
+                <button
+                  className="btn-primary w-full justify-center rounded-xl py-2.5 text-sm disabled:opacity-40"
+                  disabled={r.status !== "idle"}
+                  onClick={() => s.calibrate("claps")}
+                >
+                  {r.status === "calibrating" ? "Clap on each click…" : "Clap along · 4 clicks to count in, then clap 8"}
                 </button>
+                <p className="text-xs text-muted">
+                  Clap (or say “ta”) right on each click, close to the microphone. Do it the way you record: {s.headphones ? "with" : "without"} headphones. The
+                  delay is kept for that setting on this device — iPhone and Mac each have their own.
+                </p>
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                  <button className="text-muted underline disabled:opacity-40" disabled={r.status !== "idle"} onClick={() => s.calibrate("clicks")}>
+                    Measure with clicks (headphones held to the mic)
+                  </button>
+                  {s.calibrated && (
+                    <button className="text-muted underline" onClick={() => s.setLatencyMs(null)}>
+                      Use the estimate again
+                    </button>
+                  )}
+                </div>
               </div>
-              {s.calibrated && (
-                <button className="px-1 text-xs text-muted underline" onClick={() => s.setLatencyMs(null)}>
-                  Use the estimate again
-                </button>
-              )}
             </div>
           </>
         ) : (
