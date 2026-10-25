@@ -7,7 +7,7 @@
  */
 
 /** the settings kept with the profile (others — the microphone, the part you were on — stay on the device) */
-const SYNCED = /^(vf\.studio\.(countin|metronome|headphones|latency(\.vp)?\.[A-Za-z]+)|vf\.rec\.(size|speed|numbers|approvedOnly)|verseflow\.(theme|flowMode))$/;
+const SYNCED = /^(vf\.studio\.(main|countin|metronome|headphones|latency(\.vp)?\.[A-Za-z]+)|vf\.rec\.(size|speed|numbers|approvedOnly)|verseflow\.(theme|flowMode))$/;
 
 export const isProfileKey = (key: string) => SYNCED.test(key);
 
@@ -80,3 +80,6 @@ function migrate(p: Record<string, unknown>) {
     } catch {}
   }
 }
+
+/** a phone or a tablet: with the Mac as the main device it is the remote */
+export const isHandheld = (kind = deviceKind()) => kind === "iPhone" || kind === "iPad" || kind === "Android";

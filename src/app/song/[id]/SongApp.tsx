@@ -2,7 +2,8 @@
 
 import { FlowText } from "@/components/FlowText";
 import type { LyricsBrief } from "@/lib/brief";
-import { deviceKind } from "@/lib/client/profile";
+import { deviceKind, isHandheld } from "@/lib/client/profile";
+import type { RemoteCmd } from "@/lib/studio/remote";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -140,6 +141,23 @@ export function SongApp({
   const wholeFlow = [...tree.takes].reverse().find((t) => t.lane === "Flow" && t.chosen && !t.section_id) ?? null;
   const flowTakes = [...(wholeFlow ? [wholeFlow] : []), ...tree.takes.filter((t) => t.lane === "Flow" && t.chosen && t.section_id && sectionIds.has(t.section_id))];
   const [view, setView] = useState<View>(initialView ?? (hasLines ? "lyrics" : "flow"));
+  // the main device — where you record and play: this phone, or your Mac with the phone as its remote
+  const [mainDevice] = usePref<"phone" | "mac">("vf.studio.main", "phone");
+  const handheld = isHandheld();
+  /** this phone drives the Mac: what it shows and what it plays happen there */
+  const controller = mainDevice === "mac" && handheld;
+  /** this Mac follows the phone */
+  const remoteHost = mainDevice === "mac" && !handheld;
+  const sendRemote = (cmd: RemoteCmd) =>
+    void fetch(`/api/projects/${pid}/remote`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cmd }) }).catch(() => {});
+  /** the phone shows "playing" while the Mac plays what it asked for */
+  const remoteEnd = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const playOnMac = (cmd: Extract<RemoteCmd, { t: "songPlay" }>) => {
+    sendRemote(cmd);
+    setPlaying(true);
+    if (remoteEnd.current) clearTimeout(remoteEnd.current);
+    remoteEnd.current = setTimeout(() => setPlaying(false), Math.min(600, Math.max(2, (cmd.until ?? cmd.from + 30) - cmd.from)) * 1000);
+  };
   /** a take is being recorded on this device: the tabs wait */
   const [recBusy, setRecBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -348,6 +366,8 @@ export function SongApp({
   const hearLine = async (l: Line) => {
     if (!voice) return setVoiceSheet(true);
     if (playing) stopPlay();
+    // the Mac speaks it (and plays it)
+    if (controller) return playOnMac({ t: "songPlay", from: Math.max(0, (l.audio_at ?? 0) - 0.5), until: null, guide: [l.id] });
     const layers = await guide([l.id], l.id);
     if (!layers?.length) return;
     const g = layers[0];
@@ -362,6 +382,7 @@ export function SongApp({
     const todo = ids.filter((id) => !spoken.has(id)).length;
     if (todo > 1 && !window.confirm(`Hear ${s.name} in your voice? ${todo} lines to speak · ${todo} calls`)) return;
     if (playing) stopPlay();
+    if (controller) return playOnMac({ t: "songPlay", from: Math.max(0, partRange(s).start - Math.min(bar, 3)), until: null, guide: ids });
     const layers = await guide(ids, s.id);
     if (!layers?.length) return;
     const r = partRange(s);
@@ -374,6 +395,8 @@ export function SongApp({
     until: number | null = null,
     opts: { guide?: PlayLayer[]; flow?: boolean; clicks?: { at: number; accent: boolean }[] } = {},
   ) => {
+    // the Mac is the main device: it plays (a flow being sung or tapped stays here)
+    if (controller && !opts.clicks && !opts.guide) return playOnMac({ t: "songPlay", from, until });
     const e = engine.current;
     if (!e || !beat.current) return;
     await e.ctx.resume();
@@ -395,6 +418,10 @@ export function SongApp({
     setPlaying(true);
   };
   const stopPlay = () => {
+    if (controller) {
+      sendRemote({ t: "songStop" });
+      if (remoteEnd.current) clearTimeout(remoteEnd.current);
+    }
     engine.current?.stop();
     setPlaying(false);
     setLive(null);
@@ -706,6 +733,62 @@ export function SongApp({
   };
   /** the part being worked on — the same in Flow, Lyrics and Record */
   const [activePart, setActivePart] = useState<string | null>(null);
+  // the phone drives the Mac: where it is (tab, part) goes there
+  useEffect(() => {
+    if (!controller) return;
+    void fetch(`/api/projects/${pid}/remote`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ cmd: { t: "nav", view, part: activePart } }),
+    }).catch(() => {});
+  }, [controller, view, activePart, pid]);
+  // this Mac follows the phone: its tab and part, and it plays what the phone plays
+  const hostRun = useRef<(c: RemoteCmd) => void>(() => {});
+  useEffect(() => {
+    hostRun.current = (c) => {
+      if (c.t === "nav") {
+        if (["flow", "lyrics", "record", "more"].includes(c.view)) setView(c.view as View);
+        if (c.part) {
+          setActivePart(c.part);
+          setTimeout(() => document.getElementById(`part-${c.part}`)?.scrollIntoView({ block: "start", behavior: "smooth" }), 150);
+        }
+      } else if (c.t === "songStop") stopPlay();
+      else if (c.t === "songPlay")
+        void (async () => {
+          const layers = c.guide?.length ? await guide(c.guide, "remote") : null;
+          if (c.guide?.length && !layers?.length) return;
+          const until = c.until ?? (layers ? Math.max(...layers.map((g) => g.at + g.buffer.duration)) + 0.3 : null);
+          void play(c.from, until, layers ? { guide: layers, flow: false } : {});
+        })();
+    };
+  });
+  // a browser plays sound only after a click on the page: until then the Mac asks for one
+  const [soundLocked, setSoundLocked] = useState(false);
+  useEffect(() => {
+    if (!remoteHost) return;
+    const id = setInterval(() => setSoundLocked(engine.current?.ctx.state !== "running"), 1000);
+    return () => clearInterval(id);
+  }, [remoteHost]);
+  useEffect(() => {
+    if (!remoteHost) return;
+    let alive = true;
+    (async () => {
+      let after = -1;
+      while (alive) {
+        try {
+          const r = (await fetch(`/api/projects/${pid}/remote?cmds&after=${after}`, { cache: "no-store" }).then((x) => x.json())) as { last: number; cmds: { id: number; cmd: RemoteCmd }[] };
+          if (!alive) break;
+          after = r.last;
+          for (const c of r.cmds) hostRun.current(c.cmd);
+        } catch {
+          await new Promise((res) => setTimeout(res, 2000));
+        }
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [remoteHost, pid]);
   const activePartRef = useRef(activePart);
   useEffect(() => {
     activePartRef.current = activePart;
@@ -1164,6 +1247,20 @@ export function SongApp({
           <button className="shrink-0 rounded-full bg-bg/15 px-3 py-1 text-xs font-semibold" onClick={() => void undoRedo(toast.then)}>
             {toast.then === "redo" ? "Redo" : "Undo"}
           </button>
+        </div>
+      )}
+      {/* this Mac is driven by the phone */}
+      {remoteHost && (
+        <div className="mx-4 mt-3 flex items-center gap-2 rounded-2xl bg-accent-soft px-3.5 py-2 text-sm">
+          <span className="flex-1">
+            <b>Your phone controls this Mac</b>
+            <span className="block text-xs text-muted">It follows the phone&apos;s tab and part, and plays what the phone plays.</span>
+          </span>
+          {soundLocked && (
+            <button className="btn-primary shrink-0 rounded-full px-3 py-1.5 text-xs" onClick={() => void engine.current?.ctx.resume().then(() => setSoundLocked(false))}>
+              Allow sound
+            </button>
+          )}
         </div>
       )}
       {/* a part copied: where to paste it */}

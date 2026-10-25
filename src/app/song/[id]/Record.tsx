@@ -50,8 +50,16 @@ const SIZES = { S: 17, M: 21, L: 27 } as const;
  */
 export function RecordView(props: Props) {
   const phone = useIsPhone();
-  const [on, setOn] = usePref<On>("vf.rec.on", "here", props.initialOn);
-  // a computer records itself (and your phone can drive it)
+  // the main device — where you record and play: this phone, or your Mac with the phone as its remote (kept with
+  // your profile, so the Mac knows it too); a computer records itself
+  const [main, setMain] = usePref<"phone" | "mac">("vf.studio.main", "phone");
+  const on: On = main === "mac" ? "mac" : "here";
+  // opened as the remote (?on=mac): the Mac becomes the main device
+  useEffect(() => {
+    if (props.initialOn) setMain(props.initialOn === "mac" ? "mac" : "phone");
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once, as opened
+  }, []);
+  const setOn = (v: On) => setMain(v === "mac" ? "mac" : "phone");
   const where: On = phone ? on : "here";
   const parts = props.tree.sections;
   const sectionId = props.part && parts.some((p) => p.id === props.part) ? props.part : (parts[0]?.id ?? null);

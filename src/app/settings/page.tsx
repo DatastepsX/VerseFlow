@@ -26,6 +26,8 @@ export default function Settings() {
     return () => e.close();
   }, []);
 
+  // where you record and play
+  const [main, setMain] = usePref<"phone" | "mac">("vf.studio.main", "phone");
   // recording
   const [countIn, setCountIn] = usePref("vf.studio.countin", 1);
   const [metronome, setMetronome] = usePref("vf.studio.metronome", true);
@@ -94,6 +96,29 @@ export default function Settings() {
           <p className="text-xs text-muted">The same in every song, on your iPhone and your Mac.</p>
         </div>
       </header>
+
+      <section className="space-y-2">
+        <p className="label">Main device</p>
+        <div className={card}>
+          <div className="flex rounded-full bg-panel-2 p-1">
+            {(
+              [
+                ["phone", "My iPhone"],
+                ["mac", "My Mac"],
+              ] as const
+            ).map(([v, label]) => (
+              <button key={v} className={seg(main === v)} onClick={() => setMain(v)}>
+                {label}
+              </button>
+            ))}
+          </div>
+          <p className="text-xs text-muted">
+            {main === "mac"
+              ? "The Mac records and plays; your iPhone is the remote: the tab and the part you open on it, and what you play, happen on the Mac. Keep the song open on the Mac."
+              : "Your iPhone records and plays by itself."}
+          </p>
+        </div>
+      </section>
 
       <section className="space-y-2">
         <p className="label">Recording</p>

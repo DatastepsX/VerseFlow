@@ -18,7 +18,11 @@ export type RemoteCmd =
   | { t: "addLane"; name: string }
   | { t: "countIn"; bars: number }
   | { t: "sound"; lane: string; preset: string }
-  | { t: "key"; key: "chromatic" | { root: number; minor: boolean } };
+  | { t: "key"; key: "chromatic" | { root: number; minor: boolean } }
+  // the phone drives the whole song on the Mac (the Mac is the main device): what it shows, what it plays
+  | { t: "nav"; view: string; part: string | null }
+  | { t: "songPlay"; from: number; until: number | null; guide?: string[] }
+  | { t: "songStop" };
 
 export interface RemoteTake {
   id: string;
