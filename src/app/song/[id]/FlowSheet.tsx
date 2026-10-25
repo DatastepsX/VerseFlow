@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { barsPerLine, chipsOf, lineCuts, lineFromText, linesFromBreaks, linesFromOnsets, ownWords, relayout, type Onset } from "@/lib/flow/pattern";
+import { barsPerLine, chipsOf, dropStrays, lineCuts, lineFromText, linesFromBreaks, linesFromOnsets, ownWords, relayout, type Onset } from "@/lib/flow/pattern";
 import { quantizeTaps } from "@/lib/flow/grid";
 import type { FlowPattern, PatternLine, SongFlow } from "@/lib/types";
 import { Check, Hand, LineBreak, Mic, Pencil, Play, Restart, Sparkles } from "@/components/icons";
@@ -184,7 +184,7 @@ export function FlowSheet({
       const voice = mode !== "tap" ? await audio.stopRec(Math.max(0, barStart - 0.4)) : [];
       audio.stop();
       let onsets: Onset[];
-      if (mode === "sing") onsets = voice;
+      if (mode === "sing") onsets = dropStrays(voice);
       else {
         // taps count the syllables; with the voice, each moves onto the syllable sung there
         const used = new Set<number>();

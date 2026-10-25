@@ -170,10 +170,27 @@ export function phraseBreaks(on: Onset[], beat: number): number[] {
     const dur = on[i].dur;
     const silence = dur !== null && dur !== undefined ? d - dur : null;
     const later = d >= Math.max(1.45 * typical, typical + 0.1);
-    const stopped = silence === null ? d >= Math.max(1.75 * typical, 0.5 * beat) : silence >= Math.max(0.1, 0.12 * beat);
+    // sung: the voice stopped — or, when the beat leaks into the mic and it never looks silent, a gap twice the pace
+    const stopped = silence === null ? d >= Math.max(1.75 * typical, 0.5 * beat) : silence >= Math.max(0.1, 0.12 * beat) || d >= Math.max(2 * typical, typical + 0.15);
     if (later && stopped) out.push(i + 1);
   });
   return out;
+}
+
+/**
+ * What was sung, without the strays: bumps after the singing ended (or before it began) — a few sounds standing
+ * apart, more than a second from the rest — are the beat leaking in or a noise, not syllables.
+ */
+export function dropStrays<T extends Onset>(on: T[]): T[] {
+  const sorted = [...on].sort((a, b) => a.t - b.t);
+  const groups: T[][] = [];
+  for (const o of sorted) {
+    const g = groups[groups.length - 1];
+    const last = g?.[g.length - 1];
+    if (!g || o.t - (last!.t + (last!.dur ?? 0.15)) > 1) groups.push([o]);
+    else g.push(o);
+  }
+  return groups.filter((g) => g.length >= 3).flat();
 }
 
 /**

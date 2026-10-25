@@ -94,11 +94,21 @@ export function detectSyllables(samples: Float32Array, sampleRate: number): Syll
     for (const q of peaks) if (Math.abs(q.f - p.f) <= 100) around = Math.max(around, q.v);
     return { t: Math.round(o * FRAME * 1000) / 1000, strength: Math.round((p.v / (around || p.v)) * 100) / 100, dur: Math.round((e - o) * FRAME * 100) / 100 };
   });
+  // one syllable found twice (its onset traced back close to the one before): the stronger one stays
+  const once: typeof found = [];
+  for (const s of found) {
+    const last = once[once.length - 1];
+    if (last && s.t - last.t < 0.07) {
+      if (s.strength > last.strength) once[once.length - 1] = { ...s, t: last.t, dur: Math.max(last.dur, s.t + s.dur - last.t) };
+      continue;
+    }
+    once.push(s);
+  }
   // a faint bump standing apart in a pause is a breath, not a syllable
-  return found.filter((s, i) => {
+  return once.filter((s, i) => {
     if (s.strength >= 0.25) return true;
-    const prev = found[i - 1];
-    const next = found[i + 1];
+    const prev = once[i - 1];
+    const next = once[i + 1];
     const before = prev ? s.t - (prev.t + prev.dur) : Infinity;
     const after = next ? next.t - (s.t + s.dur) : Infinity;
     return before <= 0.25 && after <= 0.25;
