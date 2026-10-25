@@ -1,5 +1,6 @@
 "use client";
 
+import { deviceKind } from "@/lib/client/profile";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -18,7 +19,6 @@ import { LANGUAGES, type Line, type ProjectTree } from "@/lib/types";
 import { followTo } from "@/components/writer/follow";
 import { download, fullText } from "@/components/writer/util";
 import { VoiceSheet, type VoiceInfo } from "./VoiceSheet";
-import { ThemePicker } from "@/components/ThemePicker";
 import { RecordView } from "./Record";
 import { MarkedText, MarksEditor } from "@/components/Marks";
 import { marksFor, type Mark } from "@/lib/marks";
@@ -415,8 +415,8 @@ export function SongApp({
   // ---------- recording the flow ----------
   // the same on this device as in Record: headphones or not, and the delay found by ear for each
   const [headphones, setHeadphones] = usePref("vf.studio.headphones", true);
-  const [latencyRaw] = usePref<number | null>("vf.studio.latency", null);
-  const [latencyVp] = usePref<number | null>("vf.studio.latency.vp", null);
+  const [latencyRaw] = usePref<number | null>(`vf.studio.latency.${deviceKind()}`, null);
+  const [latencyVp] = usePref<number | null>(`vf.studio.latency.vp.${deviceKind()}`, null);
   /** how late the microphone hears you (s): the delay set in Record, else what the browser reports */
   const recLatency = (e: StudioEngine) => {
     const ms = headphones ? latencyRaw : latencyVp;
@@ -2508,11 +2508,15 @@ function MoreView({
           {vocals.split && <p className="px-1 text-xs text-muted">Playing, recording and flows use what you choose here, part by part. The vocals are still read for lyrics and flow.</p>}
         </div>
       )}
-      <ElevenAccount />
-      <div className="space-y-2">
-        <p className="label">Appearance</p>
-        <ThemePicker />
-      </div>
+      {/* yours, not the song's: recording, timing, your voice, ElevenLabs, appearance */}
+      <Link href="/settings" className={row}>
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-panel-2 "><Sliders className="h-[18px] w-[18px]" /></span>
+        <span className="flex-1">
+          Your settings
+          <span className="block text-xs text-muted">Recording, timing, your voice, ElevenLabs, appearance — the same in every song</span>
+        </span>
+        <ChevronRight className="h-4 w-4 text-muted" />
+      </Link>
       <div className="space-y-2">
         <button
           className={row}
@@ -2583,119 +2587,6 @@ function withoutVocals(ctx: BaseAudioContext, full: AudioBuffer, music: AudioBuf
     for (let i = 0; i < n; i++) o[i] = mix[i] ? f[i] * (1 - mix[i]) + (m[i] ?? 0) * mix[i] : f[i];
   }
   return out;
-}
-
-/** the ElevenLabs account the app uses (lyrics reading, your voice, vocal removal): shown on request */
-function ElevenAccount() {
-  type Info = {
-    connected: boolean;
-    error?: string;
-    name?: string | null;
-    email?: string | null;
-    userId?: string | null;
-    plan?: string | null;
-    status?: string | null;
-    billing?: string | null;
-    used?: number | null;
-    limit?: number | null;
-    resets?: number | null;
-    voiceCloning?: boolean | null;
-    voices?: { used: number | null; limit: number | null };
-    nextInvoice?: { cents: number | null; at: number | null; currency: string | null } | null;
-    app?: { songsRead: number; minutesHeard: number; linesSpoken: number; charactersSpoken: number; vocalsRemoved: number; takesSynced?: number; voicesMade: number };
-  };
-  const [info, setInfo] = useState<Info | null>(null);
-  const [loading, setLoading] = useState(false);
-  const load = async () => {
-    setLoading(true);
-    try {
-      setInfo((await fetch("/api/voice?account").then((r) => r.json())) as Info);
-    } finally {
-      setLoading(false);
-    }
-  };
-  const row = "flex w-full items-center gap-3 rounded-2xl bg-panel px-4 py-3 text-left ring-1 ring-line/60";
-  const date = (unix: number | null | undefined) => (unix ? new Date(unix * 1000).toLocaleDateString() : "");
-  const n = (v: number | null | undefined) => (v ?? 0).toLocaleString();
-  const share = info?.limit ? Math.min(1, (info.used ?? 0) / info.limit) : 0;
-  return (
-    <div className="space-y-2">
-      <p className="label">ElevenLabs account</p>
-      {!info ? (
-        <button className={row} disabled={loading} onClick={() => void load()}>
-          <span className="flex-1 text-sm">{loading ? "Asking ElevenLabs…" : "Show the account the app uses"}</span>
-          <ChevronRight className="h-4 w-4 text-muted" />
-        </button>
-      ) : !info.connected ? (
-        <p className="rounded-2xl bg-panel px-4 py-3 text-sm ring-1 ring-line/60">No ElevenLabs key is set up.</p>
-      ) : info.error ? (
-        <p className="rounded-2xl bg-warn-soft px-4 py-3 text-sm text-warn">{info.error}</p>
-      ) : (
-        <div className="space-y-3 rounded-2xl bg-panel px-4 py-3 text-sm ring-1 ring-line/60">
-          <div className="flex items-center gap-2">
-            <span className="min-w-0 flex-1 truncate">
-              <b>{info.email || info.name || "Account"}</b>
-              {info.email && info.name ? ` · ${info.name}` : ""}
-              {info.userId ? <span className="text-muted"> · id {info.userId}</span> : null}
-            </span>
-            {info.plan && <span className="shrink-0 rounded-full bg-accent-soft px-2.5 py-0.5 text-xs font-semibold capitalize text-accent">{info.plan.replace(/_/g, " ")}</span>}
-          </div>
-          {info.limit ? (
-            <div>
-              <div className="flex justify-between text-xs">
-                <span>
-                  <b>{n(info.used)}</b> of {n(info.limit)} credits used
-                </span>
-                <span className="text-muted">{n(Math.max(0, info.limit - (info.used ?? 0)))} left</span>
-              </div>
-              <div className="mt-1 h-2 overflow-hidden rounded-full bg-panel-2">
-                <div className={`h-full rounded-full ${share > 0.9 ? "bg-bad" : share > 0.7 ? "bg-warn" : "bg-accent"}`} style={{ width: `${share * 100}%` }} />
-              </div>
-              {info.resets ? <p className="mt-1 text-xs text-muted">New credits on {date(info.resets)}</p> : null}
-            </div>
-          ) : null}
-          <div className="divide-y divide-line/60">
-            {info.status && <Item label="Status" value={<span className="capitalize">{info.status.replace(/_/g, " ")}</span>} />}
-            {info.billing && <Item label="Billing" value={<span className="capitalize">{info.billing.replace(/_period$/, "").replace(/_/g, " ")}</span>} />}
-            {info.nextInvoice?.cents != null && (
-              <Item
-                label="Next invoice"
-                value={`${(info.nextInvoice.cents / 100).toLocaleString(undefined, { style: "currency", currency: (info.nextInvoice.currency ?? "usd").toUpperCase() })}${info.nextInvoice.at ? ` · ${date(info.nextInvoice.at)}` : ""}`}
-              />
-            )}
-            {info.voiceCloning !== null && info.voiceCloning !== undefined && (
-              <Item label="Your own voice (cloning)" value={info.voiceCloning ? <span className="text-ok">included</span> : <span className="text-warn">not in this plan</span>} />
-            )}
-            {info.voices?.limit != null && <Item label="Voice slots" value={`${n(info.voices.used)} of ${n(info.voices.limit)}`} />}
-          </div>
-          {info.app && (
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-wide text-muted">VerseFlow this period</p>
-              <div className="divide-y divide-line/60">
-                <Item label="Songs read for lyrics" value={`${info.app.songsRead} · ${info.app.minutesHeard} min heard`} />
-                <Item label="Lines in your voice" value={`${info.app.linesSpoken} · ${n(info.app.charactersSpoken)} characters`} />
-                <Item label="Vocals removed" value={info.app.vocalsRemoved} />
-                <Item label="Takes synced to the lyrics" value={info.app.takesSynced ?? 0} />
-                <Item label="Voices created" value={info.app.voicesMade} />
-              </div>
-            </div>
-          )}
-          <button className="text-xs font-semibold text-accent" disabled={loading} onClick={() => void load()}>
-            {loading ? "Refreshing…" : "Refresh"}
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function Item({ label, value }: { label: string; value: React.ReactNode }) {
-  return (
-    <div className="flex items-baseline justify-between gap-3 py-1">
-      <span className="text-muted">{label}</span>
-      <span className="text-right font-medium">{value}</span>
-    </div>
-  );
 }
 
 /**

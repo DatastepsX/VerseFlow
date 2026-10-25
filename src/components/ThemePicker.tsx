@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { loadProfile, onProfile, saveProfilePref } from "@/lib/client/profile";
 
 export type Theme = "auto" | "light" | "dark";
 const KEY = "verseflow.theme";
@@ -15,7 +16,13 @@ export function storedTheme(): Theme {
   }
 }
 
-/** apply and store the theme: "auto" follows the device's light / dark setting */
+/** apply and store the theme: "auto" follows the device's light / dark setting (kept with your profile) */
+export function chooseTheme(t: Theme) {
+  setTheme(t);
+  saveProfilePref(KEY, t);
+}
+
+/** apply the theme here (this device's copy) */
 export function setTheme(t: Theme) {
   try {
     if (t === "auto") localStorage.removeItem(KEY);
@@ -30,9 +37,20 @@ export function setTheme(t: Theme) {
   });
 }
 
-/** Automatic · Light · Dark — saved on this device */
+/** your profile's theme, applied on every page as it loads (and when it changes on another screen) */
+export function ProfileTheme() {
+  useEffect(() => {
+    const off = onProfile((k, v) => k === KEY && setTheme(v === "light" || v === "dark" ? v : "auto"));
+    void loadProfile();
+    return off;
+  }, []);
+  return null;
+}
+
+/** Automatic · Light · Dark — kept with your profile (every device) */
 export function ThemePicker() {
   const [theme, set] = useState<Theme>(() => (typeof window === "undefined" ? "auto" : storedTheme()));
+  useEffect(() => onProfile((k, v) => k === KEY && set(v === "light" || v === "dark" ? v : "auto")), []);
   return (
     <div className="flex rounded-full bg-panel-2 p-1" role="radiogroup" aria-label="Appearance">
       {(
@@ -49,7 +67,7 @@ export function ThemePicker() {
           className={`flex-1 rounded-full py-2 text-sm font-semibold transition-colors ${theme === t ? "bg-panel text-fg shadow-sm" : "text-muted"}`}
           onClick={() => {
             set(t);
-            setTheme(t);
+            chooseTheme(t);
           }}
         >
           {label}

@@ -812,6 +812,9 @@ function RecordSettings({ r, size, setSize, onClose }: { r: Recorder; size: keyo
         ) : (
           <p className="rounded-2xl bg-panel-2 px-4 py-3 text-sm text-muted">The microphone and the timing are set on your Mac (Record → Settings).</p>
         )}
+        <a href="/settings" className="block text-center text-xs text-muted underline">
+          All your settings (the same in every song): timing for each device, your voice, appearance
+        </a>
         <button className="btn-primary w-full rounded-2xl py-3" onClick={onClose}>
           Done
         </button>

@@ -1,5 +1,7 @@
 "use client";
 
+import { deviceKind } from "@/lib/client/profile";
+import { usePref } from "@/lib/client/usePref";
 import { useEffect, useRef, useState, useSyncExternalStore, type RefObject } from "react";
 import { positionIn, type Timeline } from "@/lib/audio/timeline";
 import type { PlayLayer, StudioEngine } from "@/lib/studio/engine";
@@ -106,32 +108,7 @@ export interface LocalSettings {
   otherLatencyMs: number | null;
 }
 
-/** a setting saved on this device (read after the first render: the server doesn't know it) */
-export function usePref<T>(key: string, initial: T, override?: T): [T, (v: T) => void] {
-  const [v, setV] = useState<T>(override ?? initial);
-  useEffect(() => {
-    try {
-      if (override !== undefined) {
-        localStorage.setItem(key, JSON.stringify(override));
-        return;
-      }
-      const raw = localStorage.getItem(key);
-      // restoring a saved preference from browser storage after hydration
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      if (raw !== null) setV(JSON.parse(raw) as T);
-    } catch {}
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- once
-  }, [key]);
-  return [
-    v,
-    (nv: T) => {
-      setV(nv);
-      try {
-        localStorage.setItem(key, JSON.stringify(nv));
-      } catch {}
-    },
-  ];
-}
+export { usePref };
 
 /** a phone or a tablet (touch screen): it can be the remote for the Mac */
 export function useIsPhone() {
@@ -205,8 +182,10 @@ export function useLocalRecorder(o: {
   const [metronome, setMetronome] = usePref("vf.studio.metronome", true);
   const [headphones, setHeadphones] = usePref("vf.studio.headphones", true);
   // the delay differs with echo cancellation (no headphones): one setting each
-  const [latencyRaw, setLatencyRaw] = usePref<number | null>("vf.studio.latency", null);
-  const [latencyVp, setLatencyVp] = usePref<number | null>("vf.studio.latency.vp", null);
+  // kept with your profile, one per kind of device (iPhone, Mac…): each has its own delay
+  const kind = deviceKind();
+  const [latencyRaw, setLatencyRaw] = usePref<number | null>(`vf.studio.latency.${kind}`, null);
+  const [latencyVp, setLatencyVp] = usePref<number | null>(`vf.studio.latency.vp.${kind}`, null);
   const latencyMs = headphones ? latencyRaw : latencyVp;
   const setLatencyMs = headphones ? setLatencyRaw : setLatencyVp;
   const [reported, setReported] = useState(0);

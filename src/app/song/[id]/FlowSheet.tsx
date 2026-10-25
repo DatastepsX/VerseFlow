@@ -1,5 +1,6 @@
 "use client";
 
+import { saveProfilePref } from "@/lib/client/profile";
 import { useEffect, useRef, useState } from "react";
 import { chipsOf, dropStrays, lineCuts, lineFromText, lineStarts, linesFromWords, linesFromBreaks, linesFromOnsets, ownWords, relayout, type Onset } from "@/lib/flow/pattern";
 import { quantizeTaps } from "@/lib/flow/grid";
@@ -104,6 +105,7 @@ export function FlowSheet({
     try {
       localStorage.setItem(MODE_KEY, m);
     } catch {}
+    saveProfilePref(MODE_KEY, m);
   };
   const edit = (next: PatternLine[]) => {
     setLines(next);

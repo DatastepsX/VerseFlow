@@ -135,6 +135,12 @@ later (parts, lines, flows, takes, beat changes), and the new bars get empty lin
 step (the version saved before keeps the timing too). Each part's header also has **Vocals** (the original vocals
 on/off there) and **Hear** (the whole part in your voice on its flow, 1 call per line not spoken yet).
 
+**Your settings** (`/settings`: the slider button on Home, More → Your settings, Record → Settings): recording
+(count-in, click, lyrics size, headphones), timing, your voice, the ElevenLabs account, appearance — the same in every
+song and on every device. Kept with the profile (table `user_settings`, one row; `/api/profile`), with a copy in the
+browser for a fast start (`src/lib/client/profile.ts`, `usePref`). The timing is kept per kind of device
+(`vf.studio.latency[.vp].iPhone`, `.Mac`…): each has its own delay. The microphone choice stays on the device.
+
 **Undo / redo** (top bar, ⌘Z): one step per action (`undo_steps`; a multi-request action sends one `x-undo-step`).
 A rebuilt song is undone by restoring the version saved before it.
 

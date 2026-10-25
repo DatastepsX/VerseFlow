@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { ChevronRight, Mic, Music, Plus } from "@/components/icons";
+import { ChevronRight, Mic, Music, Plus, Sliders } from "@/components/icons";
 import { api } from "@/lib/client/api";
 import { BEAT_ACCEPT, MAX_BEAT_BYTES, uploadBeat } from "@/lib/client/beat";
 import { LANGUAGES, PROJECT_TYPES, type Project, type ProjectType } from "@/lib/types";
@@ -76,9 +76,14 @@ export default function Home() {
 
   return (
     <main className="mx-auto flex min-h-dvh w-full max-w-lg flex-col px-4 pb-28 pt-[max(1.5rem,env(safe-area-inset-top))]">
-      <header className="mb-6">
-        <h1 className="text-3xl font-extrabold tracking-tight">VerseFlow</h1>
-        <p className="mt-1 text-sm text-muted">Upload a beat · sing your flow · get your lyrics</p>
+      <header className="mb-6 flex items-start gap-3">
+        <div className="flex-1">
+          <h1 className="text-3xl font-extrabold tracking-tight">VerseFlow</h1>
+          <p className="mt-1 text-sm text-muted">Upload a beat · sing your flow · get your lyrics</p>
+        </div>
+        <Link href="/settings" className="flex h-10 w-10 items-center justify-center rounded-full bg-panel text-muted ring-1 ring-line/60" aria-label="Your settings">
+          <Sliders className="h-[18px] w-[18px]" />
+        </Link>
       </header>
 
       {error && !sheet && <p className="mb-4 rounded-xl bg-bad-soft px-3 py-2 text-sm text-bad">{error}</p>}

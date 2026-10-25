@@ -1884,3 +1884,22 @@ export async function applyFlowOptions(projectId: string, items: { id: string; o
   if (alts.length) check(await db().from("alternatives").insert(alts));
   await touch(projectId);
 }
+
+// ---------- your settings (the profile: the same in every song, on every device) ----------
+
+/** the writer's settings: recording, timing per kind of device, appearance… */
+export async function getProfile(): Promise<Record<string, unknown>> {
+  const row = check(await db().from("user_settings").select("prefs").eq("id", "me").maybeSingle()) as { prefs: Record<string, unknown> } | null;
+  return row?.prefs ?? {};
+}
+
+/** changes some settings (null removes one) */
+export async function updateProfile(patch: Record<string, unknown>) {
+  const prefs = { ...(await getProfile()) };
+  for (const [k, v] of Object.entries(patch)) {
+    if (v === null) delete prefs[k];
+    else prefs[k] = v;
+  }
+  check(await db().from("user_settings").upsert({ id: "me", prefs, updated_at: new Date().toISOString() }));
+  return prefs;
+}
