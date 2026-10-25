@@ -258,7 +258,8 @@ export function exampleLine(n: number, stress: number[], breaks: number[], lang:
 /** one sung / tapped line: its onsets timed from the bar line `start` */
 function sungLine(on: Onset[], start: number, bar: number, lang: string, seed: number, until = bar): PatternLine {
   const beat = bar / 4;
-  const offsets = on.map((o) => round(Math.max(0, o.t - start)));
+  // sung before its bar line (a pickup): a little before 0, as sung — not pushed onto the bar line
+  const offsets = on.map((o) => round(Math.max(-bar / 2, o.t - start)));
   const top = Math.max(0, ...on.map((o) => o.strength ?? 0));
   const loudness = (i: number) => on[i]?.strength ?? 0;
   const onBeat = offsets.map((o) => Math.abs(o / beat - Math.round(o / beat)) < 0.15);
@@ -453,7 +454,8 @@ export function linesFromWords(
       stress: a.stress,
       long: a.held && !long.includes(n) ? [...long, n] : long,
       pauses: [...new Set(pauses)],
-      offsets: a.times.map((t) => round(Math.max(0, t - ref))),
+      // a pickup before the bar line keeps its time (a little below 0), not pushed onto the bar
+      offsets: a.times.map((t) => round(Math.max(-bar / 2, t - ref))),
     };
   });
 }

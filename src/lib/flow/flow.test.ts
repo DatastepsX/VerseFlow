@@ -490,3 +490,18 @@ test("a sung pattern repeats at the spacing it was sung with, not a line every t
   // a 30 s part takes 8 lines, not 5
   assert.equal(linesIn(pattern, bar, 30), 8);
 });
+
+test("a line sung a little before its bar line (a pickup) keeps its time — it isn't pushed onto the bar", () => {
+  const bar = 4 * (60 / 90);
+  let t = 9.64; // 0.36 s before the part's first bar line (10 s)
+  const words = ["Mentre", "ti", "guardo", "questa", "notte"].map((w) => {
+    const word = { text: w, start: t, end: t + 0.25 };
+    t += 0.3;
+    return word;
+  });
+  const [l] = linesFromWords(words, [], 10, bar, 1, "it");
+  assert.equal(l.offsets[0], -0.36);
+  // and from the sound alone, the same
+  const [s] = linesFromBreaks(words.map((w) => ({ t: w.start })), [], 10, bar, 1, "it");
+  assert.equal(s.offsets[0], -0.36);
+});
