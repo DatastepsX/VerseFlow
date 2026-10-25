@@ -127,6 +127,8 @@ export function FlowSheet({
   const finish = useRef<(() => Promise<void>) | null>(null);
   /** where the syllables of the last take were found (song time) */
   const sungAt = useRef<number[]>([]);
+  /** the syllables heard in the last take, with how long each was held (its silences show the breaks) */
+  const sungVoice = useRef<Onset[]>([]);
   /** the lines as the last take made them (an edit makes new ones) */
   const fromTake = useRef<PatternLine[] | null>(null);
   /** singing: the loudest level so far and when the voice was last heard */
@@ -215,7 +217,10 @@ export function FlowSheet({
         .map((x) => x.k)
         .sort((x, y) => x - y);
       const firsts = br.length ? br.map((b) => words.filter((w) => w.start < b.t).length) : cut.length ? cut : longest;
-      const got = linesFromWords(words, firsts, barStart, bar, p, lang);
+      // where the voice was silent in the take: breaks the recognised words don't show
+      const v = sungVoice.current;
+      const silences = v.slice(0, -1).map((o, i) => ({ from: o.t + (o.dur ?? 0.15), to: v[i + 1].t })).filter((x) => x.to > x.from);
+      const got = linesFromWords(words, firsts, barStart, bar, p, lang, silences);
       fromTake.current = got;
       edit(got);
     } catch (e) {
@@ -259,6 +264,7 @@ export function FlowSheet({
       // without it, sung: the lines break where the singing rests longest (not at the bar lines)
       const sorted = [...onsets].sort((x, y) => x.t - y.t);
       sungAt.current = sorted.map((o) => o.t);
+      sungVoice.current = mode === "sing" ? sorted : [];
       const firsts = br.length ? br.map((b) => (mode === "sing" ? onsets.filter((o) => o.t < b.t).length : b.taps)) : mode !== "tap" ? lineCuts(sorted, p) : [];
       const got = firsts.length ? linesFromBreaks(sorted, firsts, barStart, bar, p, lang, seed.current++) : linesFromOnsets(onsets, barStart, bar, p, lang, seed.current++);
       if (got.every((l) => !l.syllables)) {

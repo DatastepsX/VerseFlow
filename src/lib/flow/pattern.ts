@@ -416,6 +416,8 @@ export function linesFromWords(
   bar: number,
   lines: number,
   lang: string,
+  /** where the voice was silent in the take (from its sound): a break shows there even when the recognised words run on */
+  silences: { from: number; to: number }[] = [],
 ): PatternLine[] {
   const beat = bar / 4;
   const cuts = [...new Set([0, ...firsts.filter((k) => k > 0 && k < words.length)])].sort((a, b) => a - b);
@@ -424,9 +426,21 @@ export function linesFromWords(
     const g = groups[k] ?? [];
     if (!g.length) return sungLine([], from + k * bar, bar, lang, k);
     // a break after a word: the voice stopped before the next one, clearly longer than between the line's words
+    // (recognised words often end where the next one starts, so also: the next word comes clearly later than the
+    // line's pace per syllable would bring it, or the take was silent there)
     const gaps = g.slice(1).map((w, i) => w.start - g[i].end);
     const typical = [...gaps].sort((x, y) => x - y)[Math.floor(gaps.length / 2)] ?? 0;
-    const breakAfter = gaps.map((d) => d >= Math.max(0.12, 0.15 * beat, 1.8 * typical));
+    const syl = (w: { text: string }) => Math.max(1, prosody(w.text, lang).syllables);
+    const perSyl = g.slice(0, -1).map((w, i) => (g[i + 1].start - w.start) / syl(w)).sort((x, y) => x - y);
+    const pace = perSyl[Math.floor(perSyl.length / 2)] ?? 0.2;
+    const breakAfter = gaps.map((d, i) => {
+      const w = g[i];
+      const next = g[i + 1];
+      const late = next.start - w.start - syl(w) * pace;
+      // (a real pause, not a consonant: those are silent for ~0.1 s too)
+      const silent = silences.some((x) => x.to - x.from >= Math.max(0.18, 0.25 * beat) && x.from < next.start + 0.08 && x.to > Math.max(w.start, next.start - 0.6) && x.to > w.end - 0.15);
+      return d >= Math.max(0.12, 0.15 * beat, 1.8 * typical) || late >= Math.max(0.15, 0.25 * beat) || silent;
+    });
     // the text: the sung words, a comma at each break (a pause: no vowel merges across it)
     const ws = g.map((w, i) => (breakAfter[i] && !/[,;:.!?…]["»”’)]*$/.test(w.text) ? `${w.text},` : w.text));
     const text = ws.join(" ");

@@ -505,3 +505,16 @@ test("a line sung a little before its bar line (a pickup) keeps its time — it 
   const [s] = linesFromBreaks(words.map((w) => ({ t: w.start })), [], 10, bar, 1, "it");
   assert.equal(s.offsets[0], -0.36);
 });
+
+test("recognised words that run on into each other: the breaks still show (timing, and the take's silences)", () => {
+  const bar = 4 * (60 / 90);
+  // speech recognition often ends a word where the next one starts: no gaps between the words at all
+  const starts = [10, 10.34, 10.51, /* break */ 11.15, 11.49, /* */ 11.83, 12.0, 12.17, 12.51, 12.68];
+  const texts = ["Mentre", "ti", "guardo", "questa", "notte", "io", "mi", "sveglio", "con", "te"];
+  const words = texts.map((text, i) => ({ text, start: starts[i], end: starts[i + 1] ?? starts[i] + 0.3 }));
+  const [l] = linesFromWords(words, [], 10, bar, 1, "it");
+  assert.equal(l.text, "Mentre ti guardo, questa notte io mi sveglio con te");
+  // and where the take was silent (between "notte" and "io"), a break too
+  const [m] = linesFromWords(words, [], 10, bar, 1, "it", [{ from: 11.6, to: 11.83 }]);
+  assert.equal(m.text, "Mentre ti guardo, questa notte, io mi sveglio con te");
+});

@@ -2,7 +2,7 @@
 
 import type { PlayLayer } from "@/lib/studio/engine";
 import type { ProjectTree } from "@/lib/types";
-import { lineSlots, planLine, renderLine, type SpokenWord } from "./guide";
+import { lineSlots, planLine, planSyllables, renderLine, type SpokenWord } from "./guide";
 
 /**
  * The guide vocal in the browser: the lines spoken in the writer's voice
@@ -50,7 +50,8 @@ export async function guideLayers(pid: string, tree: ProjectTree, lineIds: strin
         const next = all[all.indexOf(l) + 1];
         const slots = lineSlots(l, next?.audio_at ?? null, tree.project.language);
         if (!slots) return;
-        const plan = planLine(s.words, tree.project.language, slots);
+        // syllable by syllable on the flow (breaks stay silent, long notes held); else word by word
+        const plan = planSyllables(l.text, s.words, tree.project.language, slots, l.flow) ?? planLine(s.words, tree.project.language, slots);
         const { samples, origin } = renderLine(buf.getChannelData(0), buf.sampleRate, plan);
         if (!samples.length) return;
         const out = ctx.createBuffer(1, samples.length, buf.sampleRate);

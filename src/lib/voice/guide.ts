@@ -1,5 +1,6 @@
 import { prosody } from "@/lib/rhyme/prosody";
 import type { LineFlow } from "@/lib/types";
+import { syllableParts } from "@/lib/rhyme/syllabify";
 
 /**
  * The guide voice: a line spoken in the writer's cloned voice, cut into
@@ -66,12 +67,65 @@ export function lineSlots(
 }
 
 export interface WordPlan {
-  /** the word in the spoken audio (s) */
+  /** the word (or syllable) in the spoken audio (s) */
   from: number;
   to: number;
   /** where it starts in the song and how long it may last (s) */
   at: number;
   dur: number;
+  /** a long note: held to fill its time (else only a little longer, so a break stays a break) */
+  fill?: boolean;
+}
+
+/**
+ * The line laid onto its flow syllable by syllable: every sung syllable of the text (vowels merged across words
+ * counted once, as the flow counts them) is cut from the spoken audio — within a word by its letters — and
+ * starts on its flow syllable. A long note fills its time; the others stay about as long as spoken, so the
+ * flow's breaks stay silent. Null when the spoken words don't match the text (then: planLine, word by word).
+ */
+export function planSyllables(text: string, words: SpokenWord[], lang: string, slots: Slots, flow?: Pick<LineFlow, "long" | "held" | "pauses"> | null): WordPlan[] | null {
+  const parts = syllableParts(text.trim(), lang);
+  const textWords = text.trim().split(/\s+/).filter(Boolean);
+  if (!parts?.length || textWords.length !== words.length) return null;
+  const letters = (t: string) => [...t].filter((c) => !/\s/.test(c)).length;
+  // where each part starts in the spoken audio: its first letter, by its place in its word
+  let wi = 0;
+  let ci = 0;
+  const at = (w: number, c: number) => {
+    const word = words[Math.min(w, words.length - 1)];
+    return word.start + (c / Math.max(1, letters(textWords[Math.min(w, words.length - 1)]))) * Math.max(0, word.end - word.start);
+  };
+  const spans: { from: number; to: number }[] = [];
+  for (const p of parts) {
+    const from = at(wi, ci);
+    for (const ch of p.text) {
+      if (/\s/.test(ch)) continue;
+      ci++;
+      if (ci >= letters(textWords[wi] ?? "")) {
+        wi++;
+        ci = 0;
+      }
+    }
+    spans.push({ from, to: from });
+  }
+  // a part ends where the next one starts — or, at a word's end, where its word ends
+  spans.forEach((sp, i) => {
+    const next = spans[i + 1];
+    const endsWord = !parts[i + 1] || parts[i + 1].space;
+    const wEnd = words.find((w) => w.start <= sp.from + 1e-6 && w.end >= sp.from - 1e-6);
+    sp.to = endsWord ? Math.max(sp.from + 0.03, wEnd ? wEnd.end : (next?.from ?? sp.from + 0.2)) : Math.max(sp.from + 0.03, next.from);
+  });
+  const m = slots.times.length;
+  const n = parts.length;
+  const slot = (i: number) => (i >= n ? slots.end : m === n ? slots.times[i] : slots.times[Math.min(m - 1, Math.round((i * m) / n))]);
+  const mapped = (k: number) => (m === n ? k : Math.round((k * n) / Math.max(1, m)));
+  const long = new Set((flow?.long ?? []).map((k) => mapped(k) - 1));
+  if (flow?.held) long.add(n - 1);
+  return spans.map((sp, i) => {
+    const start = slot(i);
+    const nextStart = i + 1 < n ? slot(i + 1) : slots.end;
+    return { from: sp.from, to: sp.to, at: start, dur: Math.max(0.05, nextStart - start), fill: long.has(i) };
+  });
 }
 
 /**
@@ -167,7 +221,9 @@ export function renderLine(src: Float32Array, sr: number, plan: WordPlan[]): { s
     if (b - a < 16) return;
     const seg = src.subarray(a, b);
     const isLast = i === plan.length - 1;
-    const ratio = Math.max(0.6, Math.min(isLast ? 1.8 : 1.4, w.dur / (seg.length / sr)));
+    // a long note fills its time; otherwise about as spoken (a break after it stays silent)
+    const max = w.fill ? 2.6 : w.fill === false ? 1.35 : isLast ? 1.8 : 1.4;
+    const ratio = Math.max(w.fill === undefined ? 0.6 : 0.45, Math.min(max, w.dur / (seg.length / sr)));
     const y = timeStretch(seg, ratio, sr);
     const start = Math.round((w.at - origin) * sr);
     // room until the next word starts

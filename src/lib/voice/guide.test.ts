@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { lineSlots, planLine, renderLine, timeStretch, wordsFromAlignment } from "./guide";
+import { lineSlots, planLine, planSyllables, renderLine, timeStretch, wordsFromAlignment } from "./guide";
 
 test("character timings → words", () => {
   const text = "ciao  bella notte";
@@ -73,4 +73,39 @@ test("render: each word lands where it is sung", () => {
   assert.equal(at(1.97), 0);
   assert.ok(at(2.1) > 0.3);
   assert.ok(at(2.6) < -0.3);
+});
+
+test("syllable by syllable: each sung syllable on its flow syllable, a break stays silent, a long note is held", () => {
+  const sr = 8000;
+  // "Mentre ti guardo questa notte" spoken evenly: 9 syllables, 0.15 s each
+  const text = "Mentre ti guardo, questa notte";
+  const spoken = [
+    { text: "Mentre", start: 0.1, end: 0.4 },
+    { text: "ti", start: 0.4, end: 0.55 },
+    { text: "guardo,", start: 0.55, end: 0.85 },
+    { text: "questa", start: 0.9, end: 1.2 },
+    { text: "notte", start: 1.2, end: 1.5 },
+  ];
+  // the flow: men-tre-ti-guar-do quick, a break, que-sta-not quick, "te" held
+  const times = [10, 10.15, 10.3, 10.45, 10.6, 11.3, 11.45, 11.6, 11.75];
+  const plan = planSyllables(text, spoken, "it", { times, end: 12.6 }, { long: [9], held: true, pauses: [5] })!;
+  assert.equal(plan.length, 9);
+  assert.deepEqual(plan.map((p) => p.at), times);
+  // "do" (before the break) isn't stretched over the break; "te" fills its time
+  assert.equal(plan[4].fill, false);
+  assert.equal(plan[8].fill, true);
+  // inside a word, by its letters: "guar" starts where "guardo," starts, "do" a bit over halfway
+  assert.ok(Math.abs(plan[3].from - 0.55) < 1e-6 && plan[4].from > 0.7 && plan[4].from < 0.75, JSON.stringify(plan[4]));
+  // rendered: silence in the break (10.75 … 11.25 s), sound where "te" is held (12.2 s)
+  const src = new Float32Array(Math.round(1.6 * sr)).map((_, i) => Math.sin(i / 3) * 0.5);
+  const { samples, origin } = renderLine(src, sr, plan);
+  const rms = (t0: number, t1: number) => {
+    let e = 0;
+    const a = Math.round((t0 - origin) * sr);
+    const b = Math.round((t1 - origin) * sr);
+    for (let i = a; i < b; i++) e += samples[i] ** 2;
+    return Math.sqrt(e / (b - a));
+  };
+  assert.ok(rms(10.85, 11.25) < 0.01, `break: ${rms(10.85, 11.25)}`);
+  assert.ok(rms(12.1, 12.3) > 0.1, `held: ${rms(12.1, 12.3)}`);
 });
