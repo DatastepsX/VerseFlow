@@ -225,6 +225,8 @@ export function FlowSheet({
       if (br.length && missing) setHint(`${p - missing} of ${p} lines — tap “Next line” after each line (or type the missing one).`);
       fromTake.current = got;
       edit(got);
+      // sung: the words in it are always recognised (1 call) — exact syllables, breaks between words, your words
+      if (mode !== "tap" && audio.recognise) void autoRecognise.current?.();
     };
   });
 
@@ -251,9 +253,16 @@ export function FlowSheet({
 
   /** the words in the take (1 call): exact syllables, breaks between words, your words as the text */
   const [hearing, setHearing] = useState(false);
+  /** the recognition failed (the result from the sound stays): try it again */
+  const [wordsFailed, setWordsFailed] = useState(false);
+  const autoRecognise = useRef<(() => Promise<void>) | null>(null);
+  useEffect(() => {
+    autoRecognise.current = recognise;
+  });
   const recognise = async () => {
     if (!audio.recognise) return;
     setHearing(true);
+    setWordsFailed(false);
     setHint(null);
     try {
       const words = await audio.recognise();
@@ -277,6 +286,7 @@ export function FlowSheet({
       fromTake.current = got;
       edit(got);
     } catch (e) {
+      setWordsFailed(true);
       setHint(e instanceof Error ? e.message : "The words could not be recognised.");
     } finally {
       setHearing(false);
@@ -417,11 +427,12 @@ export function FlowSheet({
             {!audio.headphones && <span className="text-xs text-muted">· the beat is filtered out of the mic</span>}
           </label>
         )}
-        {/* sung real words: recognise them (exact syllables, breaks between words, your words as the text) */}
-        {recorded && phase === "idle" && mode !== "tap" && audio.recognise && (
+        {/* the words sung are recognised after every take (exact syllables, breaks between words, your words):
+            while that runs, and to try again when it failed */}
+        {recorded && phase === "idle" && mode !== "tap" && audio.recognise && (hearing || wordsFailed) && (
           <button className="btn w-full justify-center rounded-2xl border-0 bg-accent-soft py-2.5 text-sm text-accent disabled:opacity-50" disabled={hearing} onClick={() => void recognise()}>
             <Sparkles className="h-4 w-4" />
-            {hearing ? "Listening to your words…" : "Recognise my words"}
+            {hearing ? "Listening to your words…" : "Recognise my words again"}
             <span className="text-xs font-normal opacity-80">· 1 call</span>
           </button>
         )}
@@ -436,7 +447,7 @@ export function FlowSheet({
             {!audio.ready
               ? "Loading the beat…"
               : `${recorded ? "Again: " : ""}${mode === "sing" ? `sing ${p} bars` : mode === "tap" ? `tap ${p} bars` : `sing and tap ${p} bars`}`.replace(/^./, (c) => c.toUpperCase())}
-            <span className="text-xs font-normal opacity-80">· 1 bar to count in</span>
+            <span className="text-xs font-normal opacity-80">· 1 bar to count in{mode !== "tap" && audio.recognise ? " · words recognised, 1 call" : ""}</span>
           </button>
         )}
         {phase === "running" && (
@@ -529,7 +540,7 @@ export function FlowSheet({
           <button className="btn justify-center rounded-2xl border-0 bg-panel-2 px-4 py-3" disabled={!ready || phase !== "idle"} onClick={listen}>
             <Play className="h-4 w-4" /> Listen
           </button>
-          <button className="btn-primary flex-1 justify-center rounded-2xl py-3 text-[15px]" disabled={!ready || busy || phase !== "idle"} onClick={() => void use()}>
+          <button className="btn-primary flex-1 justify-center rounded-2xl py-3 text-[15px]" disabled={!ready || busy || hearing || phase !== "idle"} onClick={() => void use()}>
             {busy ? (
               "Writing…"
             ) : (
