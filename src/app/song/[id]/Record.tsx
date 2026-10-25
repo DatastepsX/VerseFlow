@@ -1,5 +1,6 @@
 "use client";
 
+import { FlowText } from "@/components/FlowText";
 import { useEffect, useState, type ReactNode, type RefObject } from "react";
 import { syllableParts } from "@/lib/rhyme/syllabify";
 import { marksFor } from "@/lib/marks";
@@ -290,7 +291,7 @@ function RecordScreen({ r, tree, setTree, rangeOf, bar, timeline, onBusy, host, 
                   ) : marksFor(l).length ? (
                     <MarkedText text={l.text.trim()} marks={marksFor(l)} />
                   ) : (
-                    l.text
+                    <FlowText text={l.text.trim()} lang={tree.project.language} flow={l.flow} beat={bar / 4} />
                   )}
                 </p>
               );
@@ -541,16 +542,8 @@ function Karaoke({ line, lang, from, until, clock }: { line: Line; lang: string;
     });
     return <MarkedText text={line.text.trim()} marks={marks} lit={(w) => now >= (wordStart[w] ?? Infinity) - 0.03} />;
   }
-  return (
-    <>
-      {parts.map((p, i) => (
-        <span key={i}>
-          {p.space && " "}
-          <span className={now >= times[i] - 0.03 ? "text-accent" : ""}>{p.text}</span>
-        </span>
-      ))}
-    </>
-  );
+  // as it is sung: word groups, breaks, long notes — each syllable lighting up on its time
+  return <FlowText text={line.text.trim()} lang={lang} flow={line.flow} lit={(i) => now >= (times[i] ?? Infinity) - 0.03} />;
 }
 
 function DockButton({ label, disabled, onClick, children }: { label: string; disabled?: boolean; onClick: () => void; children: ReactNode }) {

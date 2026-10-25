@@ -1,5 +1,6 @@
 "use client";
 
+import { FlowText } from "@/components/FlowText";
 import type { LyricsBrief } from "@/lib/brief";
 import { deviceKind } from "@/lib/client/profile";
 import Link from "next/link";
@@ -32,7 +33,6 @@ import { FlowSheet, type SheetAudio } from "./FlowSheet";
 import { exampleWords } from "@/lib/flow/example";
 import { coupletsOf } from "@/lib/flow/couplets";
 import { analyzeLine, compareLines } from "@/lib/rhyme/analyze";
-import { syllableParts } from "@/lib/rhyme/syllabify";
 import { gridFor, type BeatGrid, type FlowGridModel } from "@/lib/flow/grid";
 import {
   AudioLines,
@@ -1934,7 +1934,7 @@ function LineCard(props: {
         marks.length ? (
           <MarkedText text={l.text.trim()} marks={marks} />
         ) : (
-          <Syllables text={l.text.trim()} lang={lang} rhyme={!!props.pair} />
+          <FlowText text={l.text.trim()} lang={lang} flow={l.flow} rhyme={!!props.pair} />
         )
       ) : props.busy ? (
         "Writing…"
@@ -2245,52 +2245,6 @@ function rhymeMoves(l: LyricLine, partner: LyricLine, lang: string): RhymeMove[]
 const rhymesWell = (x: string, y: string, lang: string) => !x.trim() || !y.trim() || rhymeScore(x, y, lang) >= RHYMES;
 const lastWordOf = (t: string) => t.trim().split(/\s+/).pop()?.replace(/[^\p{L}\p{N}']+/gu, "") ?? "";
 
-/**
- * The line as written, its sung syllables marked underneath: one short segment per syllable (as the flow
- * counts them — vowels merged across words share one), stressed ones in the accent colour; the rhyme
- * word coloured in a couplet. Lines that can't be split show as written.
- */
-function Syllables({ text, lang, rhyme }: { text: string; lang: string; rhyme: boolean }) {
-  const parts = syllableParts(text, lang);
-  if (!parts) return rhyme ? <RhymeEnd text={text} /> : <>{text}</>;
-  const { stresses } = prosody(text, lang);
-  const stressed = new Set(stresses);
-  // the rhyme word: from where the last word starts (a merged syllable counts as its start)
-  let rhymeFrom = parts.length - 1;
-  while (rhymeFrom > 0 && !parts[rhymeFrom].space && !parts[rhymeFrom].text.includes(" ")) rhymeFrom--;
-  return (
-    <span className="leading-[1.75]">
-      {parts.map((p, i) => (
-        <span key={i}>
-          {p.space && " "}
-          <span
-            className={rhyme && (i > rhymeFrom || (i === rhymeFrom && !p.text.includes(" "))) ? "text-accent" : undefined}
-            style={{
-              backgroundImage: `linear-gradient(${stressed.has(i) ? "var(--accent)" : "color-mix(in srgb, var(--muted) 35%, transparent)"}, ${stressed.has(i) ? "var(--accent)" : "color-mix(in srgb, var(--muted) 35%, transparent)"})`,
-              backgroundRepeat: "no-repeat",
-              backgroundPosition: "0 100%",
-              backgroundSize: `calc(100% - 3px) ${stressed.has(i) ? 3 : 2}px`,
-              paddingBottom: 4,
-              boxDecorationBreak: "clone",
-              WebkitBoxDecorationBreak: "clone",
-            }}
-          >
-            {rhyme && i === rhymeFrom && p.text.includes(" ") ? (
-              // a syllable merged across words ("mio amore"): the rhyme word is the part after the space
-              <>
-                {p.text.slice(0, p.text.lastIndexOf(" ") + 1)}
-                <span className="text-accent">{p.text.slice(p.text.lastIndexOf(" ") + 1)}</span>
-              </>
-            ) : (
-              p.text
-            )}
-          </span>
-        </span>
-      ))}
-    </span>
-  );
-}
-
 /** where a part starts and how long it is: "1:14 · 27 s · 10 bars" */
 function PartLength({ range, bar }: { range: { start: number; end: number }; bar: number | null }) {
   const len = Math.max(0, range.end - range.start);
@@ -2303,18 +2257,6 @@ function PartLength({ range, bar }: { range: { start: number; end: number }; bar
   );
 }
 
-/** the line with its last word — the rhyme — marked */
-function RhymeEnd({ text }: { text: string }) {
-  const m = text.match(/^(.*?)(\S+?)([^\p{L}\p{N}']*)$/u);
-  if (!m) return <>{text}</>;
-  return (
-    <>
-      {m[1]}
-      <span className="font-semibold text-accent">{m[2]}</span>
-      {m[3]}
-    </>
-  );
-}
 
 /** tapping a line's flow (its bar on the beat taken once, when opened) */
 function TapFor({

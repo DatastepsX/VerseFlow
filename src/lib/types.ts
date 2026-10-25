@@ -231,6 +231,8 @@ export interface LineFlow {
   pair?: 0 | 1 | 2;
   /** short breaks in the singing: after these syllables (1-based) a word group ends ("Mentre ti guardo, | questa notte…") */
   pauses?: number[];
+  /** long (held) syllables, 1-based */
+  long?: number[];
   /** the line's text before a new flow was set for its part: rewritten to the new rhythm (meaning and key words kept) */
   draft?: string;
   /** the song flow this line follows (flows table), which of its pattern lines, and its rhyme scheme */

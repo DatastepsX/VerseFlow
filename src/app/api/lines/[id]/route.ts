@@ -102,5 +102,6 @@ function cleanFlow(v: unknown): LineFlow | undefined {
     end: num(f.end) ? (f.end as number) : undefined,
     pair: f.pair === 1 || f.pair === 2 || f.pair === 0 ? (f.pair as 0 | 1 | 2) : undefined,
     ...(Array.isArray(f.pauses) && f.pauses.length ? { pauses: nums(f.pauses, 32).map(Math.round) } : {}),
+    ...(Array.isArray(f.long) && f.long.length ? { long: nums(f.long, 32).map(Math.round) } : {}),
   };
 }
