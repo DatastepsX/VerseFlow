@@ -10,6 +10,8 @@ import { FX_CATEGORIES, FX_PRESETS, layerPreset } from "@/lib/fx/presets";
 import { keyName, NOTE_NAMES } from "@/lib/fx/tune";
 import { followTo } from "@/components/writer/follow";
 import { fmtTime } from "@/lib/audio/song-map";
+import { pct } from "@/lib/studio/mix";
+import { VolumeSlider } from "@/components/VolumeSlider";
 import { undoHeaders, undoStep } from "@/lib/undo-group";
 import type { Timeline } from "@/lib/audio/timeline";
 import type { StudioEngine } from "@/lib/studio/engine";
@@ -341,7 +343,7 @@ function RecordScreen({ r, tree, setTree, rangeOf, bar, timeline, onBusy, host, 
             <button
               className="flex shrink-0 items-center gap-1 rounded-full bg-panel-2 px-3 py-2 text-sm font-semibold text-fg/80"
               onClick={onMix}
-              aria-label="What you hear"
+              aria-label="Mixer"
             >
               <Sliders className="h-4 w-4" />
               Mix
@@ -469,9 +471,9 @@ function RecordScreen({ r, tree, setTree, rangeOf, bar, timeline, onBusy, host, 
                             className={`mt-1.5 ml-1.5 inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-semibold disabled:opacity-40 ${cut ? "bg-accent-soft text-accent" : "bg-panel-2 text-fg/80"}`}
                             disabled={!idle || !full}
                             onClick={() => setCutting(t.id)}
-                            aria-label={`Cut take ${t.take_no}`}
+                            aria-label={`Cut take ${t.take_no} and set its volume`}
                           >
-                            ✂ {cut ? `Cut · ${fmtTime((full!.trim_out ?? full!.duration) - full!.trim_in)}` : "Cut"}
+                            ✂ {cut ? `Cut · ${fmtTime((full!.trim_out ?? full!.duration) - full!.trim_in)}` : "Cut"} · {full && (full.gain ?? 1) !== 1 ? pct(full.gain) : "Volume"}
                           </button>
                         );
                       })()}
@@ -542,9 +544,15 @@ function RecordScreen({ r, tree, setTree, rangeOf, bar, timeline, onBusy, host, 
                 const res = await fetch(`/api/takes/${full.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ trim: { from, to } }) });
                 if (res.ok) setTree((await res.json()) as ProjectTree);
               }}
-              onPlay={() => r.playTake(full.id)}
+              onPreview={(clip, gain) => r.previewTake(full.id, clip, gain)}
               onStop={() => r.stop()}
               playing={r.status === "playing" && r.playingTake === full.id}
+              clock={r.clock}
+              onGain={(g) => r.takeGain(full.id, g)}
+              onSaveGain={async (gain) => {
+                const res = await fetch(`/api/takes/${full.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ gain }) });
+                if (res.ok) setTree((await res.json()) as ProjectTree);
+              }}
               onClose={() => setCutting(null)}
             />
           );
@@ -881,19 +889,29 @@ function Toggle({ on, onChange }: { on: boolean; onChange: (on: boolean) => void
  * waveform shows what plays; the outside is dimmed.
  */
 function TakeCut(props: {
-  take: { id: string; take_no: number; lane: string; duration: number; trim_in: number; trim_out: number | null };
+  take: { id: string; take_no: number; lane: string; duration: number; start_at: number; trim_in: number; trim_out: number | null; gain: number };
   peaks: number[];
   onSave: (from: number, to: number | null) => Promise<void>;
-  onPlay: () => void;
+  /** hear the whole recording (null) or the cut as set now (saved or not) */
+  onPreview: (clip: { from: number; to: number | null } | null, gain: number) => void;
   onStop: () => void;
   playing: boolean;
+  /** the song position being heard (on this device) */
+  clock: (() => number) | null;
+  /** the volume, heard at once */
+  onGain: (gain: number) => void;
+  onSaveGain: (gain: number) => Promise<void>;
   onClose: () => void;
 }) {
   const d = props.take.duration;
   const [from, setFrom] = useState(props.take.trim_in);
   const [to, setTo] = useState(props.take.trim_out ?? d);
+  const [gain, setGain] = useState(props.take.gain ?? 1);
   const [busy, setBusy] = useState(false);
+  /** what is playing: the whole take or the cut */
+  const [hearing, setHearing] = useState<"whole" | "cut" | null>(null);
   const changed = Math.abs(from - props.take.trim_in) > 0.005 || Math.abs(to - (props.take.trim_out ?? d)) > 0.005;
+  const gainChanged = Math.abs(gain - (props.take.gain ?? 1)) > 0.005;
   const save = async (a: number, b: number) => {
     setBusy(true);
     try {
@@ -902,20 +920,64 @@ function TakeCut(props: {
       setBusy(false);
     }
   };
+  const finish = async () => {
+    setBusy(true);
+    try {
+      if (changed) await props.onSave(from, to >= d - 0.01 ? null : to);
+      if (gainChanged) await props.onSaveGain(gain);
+    } finally {
+      setBusy(false);
+    }
+    props.onClose();
+  };
+  const hear = (what: "whole" | "cut") => {
+    if (props.playing && hearing === what) {
+      setHearing(null);
+      return props.onStop();
+    }
+    setHearing(what);
+    props.onPreview(what === "whole" ? { from: 0, to: null } : { from, to: to >= d - 0.01 ? null : to }, gain);
+  };
+  const now = props.playing ? hearing : null;
+  // where it is in the recording (a line over the waveform)
+  const [head, setHead] = useState<number | null>(null);
+  const { clock, playing } = props;
+  const start = props.take.start_at;
+  useEffect(() => {
+    if (!playing || !clock) return;
+    let id = requestAnimationFrame(function loop() {
+      setHead(clock() - start);
+      id = requestAnimationFrame(loop);
+    });
+    return () => {
+      cancelAnimationFrame(id);
+      setHead(null);
+    };
+  }, [playing, clock, start]);
   const n = 120;
   const step = Math.max(1, props.peaks.length / n);
   const bars = Array.from({ length: Math.min(n, props.peaks.length) }, (_, i) => props.peaks[Math.floor(i * step)] ?? 0);
-  const pct = (t: number) => `${(t / Math.max(0.01, d)) * 100}%`;
+  const at = (t: number) => `${(t / Math.max(0.01, d)) * 100}%`;
+  const heardBtn = (what: "whole" | "cut", label: string) => (
+    <button
+      className={`btn flex-1 justify-center rounded-2xl border-0 py-3 text-sm disabled:opacity-50 ${now === what ? "bg-accent text-white" : "bg-panel-2"}`}
+      disabled={busy}
+      onClick={() => hear(what)}
+      aria-pressed={now === what}
+    >
+      {now === what ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />} {now === what ? "Stop" : label}
+    </button>
+  );
   return (
     <div className="fixed inset-0 z-40 flex items-end justify-center bg-black/40" onClick={() => !busy && props.onClose()}>
-      <div onClick={(e) => e.stopPropagation()} className="w-full max-w-lg space-y-4 rounded-t-3xl bg-panel px-4 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-3">
+      <div onClick={(e) => e.stopPropagation()} className="max-h-[92dvh] w-full max-w-lg space-y-4 overflow-auto rounded-t-3xl bg-panel px-4 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-3">
         <div className="mx-auto h-1.5 w-10 rounded-full bg-line" />
         <div>
           <h2 className="text-xl font-bold">
-            Cut {props.take.lane} take {props.take.take_no}
+            {props.take.lane} take {props.take.take_no}
           </h2>
           <p className="text-xs text-muted">
-            {fmtTime(from)} – {fmtTime(to)} · {Math.round((to - from) * 10) / 10} s of {Math.round(d * 10) / 10} s. The rest stays in the recording.
+            Cut {fmtTime(from)} – {fmtTime(to)} · {Math.round((to - from) * 10) / 10} s of {Math.round(d * 10) / 10} s. The rest stays in the recording.
           </p>
         </div>
         <div className="relative h-16 overflow-hidden rounded-xl bg-panel-2">
@@ -924,10 +986,11 @@ function TakeCut(props: {
               <rect key={i} x={i * 3} y={10 - Math.max(0.5, v * 9)} width={2} height={Math.max(1, v * 18)} fill="currentColor" />
             ))}
           </svg>
-          <div className="absolute inset-y-0 left-0 bg-bg/70" style={{ width: pct(from) }} />
-          <div className="absolute inset-y-0 right-0 bg-bg/70" style={{ width: `calc(100% - ${pct(to)})` }} />
-          <div className="absolute inset-y-0 w-0.5 bg-fg" style={{ left: pct(from) }} />
-          <div className="absolute inset-y-0 w-0.5 bg-fg" style={{ left: `calc(${pct(to)} - 2px)` }} />
+          <div className="absolute inset-y-0 left-0 bg-bg/70" style={{ width: at(from) }} />
+          <div className="absolute inset-y-0 right-0 bg-bg/70" style={{ width: `calc(100% - ${at(to)})` }} />
+          <div className="absolute inset-y-0 w-0.5 bg-fg" style={{ left: at(from) }} />
+          <div className="absolute inset-y-0 w-0.5 bg-fg" style={{ left: `calc(${at(to)} - 2px)` }} />
+          {head !== null && head >= 0 && head <= d && <div className="absolute inset-y-0 w-0.5 bg-[#dc2626]" style={{ left: at(head) }} />}
         </div>
         <label className="block space-y-1 text-sm">
           <span className="flex justify-between">
@@ -944,25 +1007,24 @@ function TakeCut(props: {
           <input type="range" className="w-full accent-[var(--accent)]" min={0} max={d} step={0.01} value={to} onChange={(e) => setTo(Math.max(Number(e.target.value), from + 0.2))} aria-label="End of the cut" />
         </label>
         <div className="flex gap-2">
-          <button
-            className="btn flex-1 justify-center rounded-2xl border-0 bg-panel-2 py-3 text-sm disabled:opacity-50"
-            disabled={busy}
-            onClick={async () => {
-              if (props.playing) return props.onStop();
-              // what you hear is what is saved
-              if (changed) await save(from, to);
-              props.onPlay();
-            }}
-          >
-            {props.playing ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />} {props.playing ? "Stop" : "Play the cut"}
-          </button>
-          <button className="btn-primary flex-1 justify-center rounded-2xl py-3 text-sm disabled:opacity-50" disabled={busy} onClick={async () => {
-            if (changed) await save(from, to);
-            props.onClose();
-          }}>
-            <Check className="h-4 w-4" /> Done
-          </button>
+          {heardBtn("whole", "Whole take")}
+          {heardBtn("cut", "The cut")}
         </div>
+        <div className="rounded-2xl bg-panel-2/70 px-4 py-3">
+          <p className="text-sm font-semibold">Volume of this take</p>
+          <VolumeSlider
+            value={gain}
+            label={`Take ${props.take.take_no}`}
+            onValue={(v) => {
+              setGain(v);
+              props.onGain(v);
+            }}
+          />
+          <p className="text-[11px] text-muted">The whole {props.take.lane} layer: the Mixer.</p>
+        </div>
+        <button className="btn-primary w-full justify-center rounded-2xl py-3 text-sm disabled:opacity-50" disabled={busy} onClick={() => void finish()}>
+          <Check className="h-4 w-4" /> {changed || gainChanged ? "Save" : "Done"}
+        </button>
         {(props.take.trim_in > 0 || props.take.trim_out !== null) && (
           <button
             className="w-full text-center text-xs text-muted underline"

@@ -21,6 +21,10 @@ export interface PlayLayer {
   fx?: (ctx: BaseAudioContext) => { input: AudioNode; output: AudioNode };
   /** a cut take: only this part of the buffer plays (seconds of the buffer; `at` stays where the buffer starts) */
   clip?: { from: number; to: number | null };
+  /** its mixer channel ("lane:Lead", "flow"…): turned up / down live with setVolume */
+  bus?: string;
+  /** a take's id: its own volume can change while it plays (setLayerGain) */
+  id?: string;
 }
 
 export interface Recording {
@@ -39,6 +43,11 @@ export class StudioEngine {
   private playing: AudioScheduledSourceNode[] = [];
   /** the effect chains of what plays (cut off on stop) */
   private chains: AudioNode[] = [];
+  /** the mixer: a channel per key, its volume kept between plays */
+  private buses = new Map<string, GainNode>();
+  private volumes = new Map<string, number>();
+  /** what plays now, by take id: its volume */
+  private layerGains = new Map<string, GainNode>();
   private chunks: { frame: number; channels: Float32Array[] }[] = [];
   private onDone: (() => void) | null = null;
   base = 0;
@@ -148,7 +157,8 @@ export class StudioEngine {
     this.stop();
     const start = this.ctx.currentTime + 0.12;
     this.base = start - from;
-    const schedule = (buffer: AudioBuffer, at: number, gainValue: number, fx?: PlayLayer["fx"], clip?: PlayLayer["clip"]) => {
+    this.layerGains.clear();
+    const schedule = (buffer: AudioBuffer, at: number, gainValue: number, fx?: PlayLayer["fx"], clip?: PlayLayer["clip"], bus?: string, id?: string) => {
       // a cut take: only [c0, c1] of the buffer, at its place in the song
       const c0 = Math.max(0, clip?.from ?? 0);
       const c1 = Math.min(buffer.duration, clip?.to ?? buffer.duration);
@@ -156,31 +166,60 @@ export class StudioEngine {
       if (offset >= c1) return;
       const src = this.ctx.createBufferSource();
       src.buffer = buffer;
+      // g: the cut's fades; level: the take's volume; then its sound; then its mixer channel
       const g = this.ctx.createGain();
-      g.gain.value = gainValue;
       src.connect(g);
+      const level = this.ctx.createGain();
+      level.gain.value = gainValue;
+      g.connect(level);
+      if (id) this.layerGains.set(id, level);
+      this.chains.push(level);
+      const out = bus ? this.bus(bus) : this.ctx.destination;
       if (fx) {
         const chain = fx(this.ctx);
-        g.connect(chain.input);
-        chain.output.connect(this.ctx.destination);
+        level.connect(chain.input);
+        chain.output.connect(out);
         this.chains.push(chain.output);
-      } else g.connect(this.ctx.destination);
+      } else level.connect(out);
       // a short fade at a cut's edges: no click
       if (clip && (c0 > 0 || c1 < buffer.duration)) {
         const t0 = this.base + Math.max(at + c0, from);
         const t1 = t0 + (c1 - offset);
         g.gain.setValueAtTime(0, t0);
-        g.gain.linearRampToValueAtTime(gainValue, t0 + 0.008);
-        g.gain.setValueAtTime(gainValue, Math.max(t0 + 0.008, t1 - 0.012));
+        g.gain.linearRampToValueAtTime(1, t0 + 0.008);
+        g.gain.setValueAtTime(1, Math.max(t0 + 0.008, t1 - 0.012));
         g.gain.linearRampToValueAtTime(0, t1);
       }
       src.start(this.base + Math.max(at + c0, from), offset, c1 - offset);
       this.playing.push(src);
     };
-    if (opts.beat) schedule(opts.beat, 0, opts.beatGain ?? 1);
-    for (const l of opts.layers ?? []) schedule(l.buffer, l.at, l.gain ?? 1, l.fx, l.clip);
+    if (opts.beat) schedule(opts.beat, 0, opts.beatGain ?? 1, undefined, undefined, "beat");
+    for (const l of opts.layers ?? []) schedule(l.buffer, l.at, l.gain ?? 1, l.fx, l.clip, l.bus, l.id);
     for (const c of opts.clicks ?? []) if (c.at >= from) this.click(this.base + c.at, c.accent);
     return this.base;
+  }
+
+  /** a mixer channel's volume (1: as is), live — also for what plays now */
+  setVolume(key: string, v: number) {
+    this.volumes.set(key, v);
+    const b = this.buses.get(key);
+    if (b) b.gain.setTargetAtTime(v, this.ctx.currentTime, 0.02);
+  }
+
+  /** a take's own volume while it plays */
+  setLayerGain(id: string, v: number) {
+    this.layerGains.get(id)?.gain.setTargetAtTime(v, this.ctx.currentTime, 0.02);
+  }
+
+  private bus(key: string) {
+    let b = this.buses.get(key);
+    if (!b) {
+      b = this.ctx.createGain();
+      b.gain.value = this.volumes.get(key) ?? 1;
+      b.connect(this.ctx.destination);
+      this.buses.set(key, b);
+    }
+    return b;
   }
 
   stop() {

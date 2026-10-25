@@ -118,3 +118,39 @@ body {
     display: none;
   }
 }
+
+/* a mixer volume: a thick track filled up to the value, a big thumb (a phone) */
+.vf-volume {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 36px;
+  background: transparent;
+  touch-action: pan-y;
+}
+.vf-volume::-webkit-slider-runnable-track {
+  height: 8px;
+  border-radius: 999px;
+  background: linear-gradient(to right, var(--accent) var(--fill, 66%), color-mix(in srgb, var(--muted) 30%, transparent) var(--fill, 66%));
+}
+.vf-volume::-moz-range-track {
+  height: 8px;
+  border-radius: 999px;
+  background: linear-gradient(to right, var(--accent) var(--fill, 66%), color-mix(in srgb, var(--muted) 30%, transparent) var(--fill, 66%));
+}
+.vf-volume::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  margin-top: -10px;
+  height: 28px;
+  width: 28px;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: 0 1px 4px rgb(0 0 0 / 0.3);
+}
+.vf-volume::-moz-range-thumb {
+  height: 28px;
+  width: 28px;
+  border: 0;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: 0 1px 4px rgb(0 0 0 / 0.3);
+}

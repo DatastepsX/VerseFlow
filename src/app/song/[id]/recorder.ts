@@ -10,6 +10,7 @@ import { takeWindow } from "@/lib/studio/timing";
 import { encodeWav, peaksOf } from "@/lib/studio/wav";
 import type { ProjectSettings, ProjectTree, Take } from "@/lib/types";
 import { buildChain } from "@/lib/fx/chain";
+import { clipOf, laneBus } from "@/lib/studio/mix";
 import { detectKey } from "@/lib/fx/key";
 import { layerPreset, presetById, type FxPreset } from "@/lib/fx/presets";
 import { retune, type MusicKey } from "@/lib/fx/tune";
@@ -69,6 +70,10 @@ export interface Recorder {
   restart: () => void;
   play: () => void;
   playTake: (id: string) => void;
+  /** hear a take on its own stretch of the beat: the whole recording (clip null) or a cut not saved yet */
+  previewTake: (id: string, clip: { from: number; to: number | null } | null, gain?: number) => void;
+  /** a take's volume, heard at once (on the device that plays) */
+  takeGain: (id: string, gain: number) => void;
   choose: (id: string) => void;
   remove: (id: string) => void;
   /** a take earlier (−) / later (+) on the beat, in seconds; on this device later takes follow (the delay setting) */
@@ -164,8 +169,6 @@ export function useLocalRecorder(o: {
   timeline: Timeline;
   section: [string | null, (id: string) => void];
   host: boolean;
-  /** layers not heard (a take played on its own still plays) */
-  muted?: string[];
 }): Recorder {
   const { tree, setTree, engine, beat, bar } = o;
   const pid = tree.project.id;
@@ -298,15 +301,19 @@ export function useLocalRecorder(o: {
    * its layer's sound — `trying`: a sound being tried on a layer before the song knows it
    */
   const layersFor = async (from: number, to: number, skipLane?: string, only?: Take, trying?: { lane: string; preset: string }) => {
+    // a layer off in the mix plays on its silent channel (turned on: heard at once)
     const takes = only
-      ? [only, ...tree.takes.filter((t) => t.chosen && lanes.includes(t.lane) && !o.muted?.includes(t.lane) && t.lane !== only.lane && t.start_at < to && t.start_at + t.duration > from)]
-      : tree.takes.filter((t) => t.chosen && lanes.includes(t.lane) && !o.muted?.includes(t.lane) && t.lane !== skipLane && t.start_at < to && t.start_at + t.duration > from);
+      ? [only, ...tree.takes.filter((t) => t.chosen && lanes.includes(t.lane) && t.lane !== only.lane && t.start_at < to && t.start_at + t.duration > from)]
+      : tree.takes.filter((t) => t.chosen && lanes.includes(t.lane) && t.lane !== skipLane && t.start_at < to && t.start_at + t.duration > from);
+    const off = tree.project.settings?.mixOff ?? [];
     await loadTakes(takes);
     const out: PlayLayer[] = [];
     for (const t of takes) {
       const p = trying?.lane === t.lane ? presetById(trying.preset) : layerPreset(sounds, t.lane);
       const buffer = await voiced(t, p);
-      if (buffer) out.push({ buffer, at: t.start_at, fx: p.id === "raw" ? undefined : (ctx) => buildChain(ctx, p, bpm), clip: t.trim_in > 0 || t.trim_out !== null ? { from: t.trim_in ?? 0, to: t.trim_out } : undefined });
+      // the take played on its own is heard even when its layer is off
+      const bus = t === only && off.includes(t.lane) ? undefined : laneBus(t.lane);
+      if (buffer) out.push({ buffer, at: t.start_at, gain: t.gain ?? 1, bus, id: t.id, fx: p.id === "raw" ? undefined : (ctx) => buildChain(ctx, p, bpm), clip: clipOf(t) });
     }
     return out;
   };
@@ -432,14 +439,17 @@ export function useLocalRecorder(o: {
     await record(l, true);
   };
 
-  const play = async (take?: Take, trying?: { lane: string; preset: string }) => {
+  /** `clip`: the take on its own stretch, the whole recording (null) or this cut (not saved yet) */
+  const play = async (take?: Take, trying?: { lane: string; preset: string }, clip?: { from: number; to: number | null } | null, gain?: number) => {
     const e = engine.current;
     // playing already: starts again (another take)
-    if (!e || !beat.current || !range || (busy && status.kind !== "playing")) return;
+    if (!e || !beat.current || (!range && clip === undefined) || (busy && status.kind !== "playing")) return;
     await e.ctx.resume();
-    const w = takeWindow(range, bar, Math.max(1, countIn));
+    const c0 = clip?.from ?? 0;
+    const c1 = clip?.to ?? take?.duration ?? 0;
+    const w = take && clip !== undefined ? { from: take.start_at + c0 - 0.4, to: take.start_at + c1 + 0.3 } : takeWindow(range!, bar, Math.max(1, countIn));
     try {
-      const layers = await layersFor(w.from, w.to, undefined, take, trying);
+      const layers = (await layersFor(w.from, w.to, undefined, take, trying)).map((l) => (take && clip !== undefined && l.id === take.id ? { ...l, clip: clip ?? undefined, gain: gain ?? l.gain } : l));
       e.play(Math.max(0, w.from), { beat: beat.current, layers });
       stopAt.current = w.to;
       setStatus({ kind: "playing", take: take?.id ?? null });
@@ -564,7 +574,7 @@ export function useLocalRecorder(o: {
           break;
         case "playTake": {
           const t = tree.takes.find((x) => x.id === c.takeId);
-          if (t) await play(t);
+          if (t) await play(t, undefined, c.clip, c.gain);
           break;
         }
         case "stop":
@@ -677,6 +687,11 @@ export function useLocalRecorder(o: {
       const t = tree.takes.find((x) => x.id === id);
       if (t) void play(t);
     },
+    previewTake: (id, clip, gain) => {
+      const t = tree.takes.find((x) => x.id === id);
+      if (t) void play(t, undefined, clip, gain);
+    },
+    takeGain: (id, gain) => engine.current?.setLayerGain(id, gain),
     choose,
     remove,
     shift,
@@ -792,6 +807,9 @@ export function useRemoteRecorder(o: { tree: ProjectTree; section: [string | nul
     restart: () => send({ t: "retake", lane: state?.statusLane ?? lane }),
     play: () => send({ t: "play" }),
     playTake: (takeId) => send({ t: "playTake", takeId }),
+    previewTake: (takeId, clip, gain) => send({ t: "playTake", takeId, clip, gain }),
+    // the Mac hears it once the volume is saved (the song syncs)
+    takeGain: () => {},
     choose: (takeId) => send({ t: "choose", takeId }),
     remove: (takeId) => send({ t: "delete", takeId }),
     shift: (takeId, by) => send({ t: "shift", takeId, by }),

@@ -13,7 +13,7 @@ export type RemoteCmd =
   | { t: "delete"; takeId: string }
   | { t: "shift"; takeId: string; by: number }
   | { t: "play" }
-  | { t: "playTake"; takeId: string }
+  | { t: "playTake"; takeId: string; clip?: { from: number; to: number | null } | null; gain?: number }
   | { t: "stop" }
   | { t: "addLane"; name: string }
   | { t: "countIn"; bars: number }

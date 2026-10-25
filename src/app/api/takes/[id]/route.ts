@@ -1,4 +1,4 @@
-import { chooseTake, deleteTake, getTree, setLineTimes, shiftTake, takeProject, trimTake, updateLine } from "@/lib/server/repo";
+import { chooseTake, deleteTake, getTree, setLineTimes, setTakeGain, shiftTake, takeProject, trimTake, updateLine } from "@/lib/server/repo";
 import { alignTake } from "@/lib/server/transcribe";
 import { alignmentText, alignTakeLines } from "@/lib/flow/align";
 import { body, handle, treeResponse } from "@/lib/server/http";
@@ -6,12 +6,14 @@ import type { LineFlow } from "@/lib/types";
 
 export const maxDuration = 120;
 
-/** choose this take for its section + layer; {shift: s} moves it on the beat instead (± 0.5 s at most) */
+/** choose this take for its section + layer; {shift: s} moves it on the beat instead (± 0.5 s at most); {gain}: its volume */
 export async function PATCH(req: Request, ctx: RouteContext<"/api/takes/[id]">) {
   return handle(async () => {
     const { id } = await ctx.params;
-    const b = await body<{ shift?: unknown; trim?: { from?: unknown; to?: unknown } }>(req);
+    const b = await body<{ shift?: unknown; gain?: unknown; trim?: { from?: unknown; to?: unknown } }>(req);
     if (typeof b.shift === "number" && Number.isFinite(b.shift)) return treeResponse(await shiftTake(id, Math.max(-0.5, Math.min(0.5, b.shift))));
+    // its volume in the mix
+    if (typeof b.gain === "number" && Number.isFinite(b.gain)) return treeResponse(await setTakeGain(id, b.gain));
     // cut: {trim: {from, to}} (to null: to the end; {from: 0, to: null}: the whole take again)
     if (b.trim && typeof b.trim.from === "number" && Number.isFinite(b.trim.from))
       return treeResponse(await trimTake(id, b.trim.from, typeof b.trim.to === "number" && Number.isFinite(b.trim.to) ? b.trim.to : null));

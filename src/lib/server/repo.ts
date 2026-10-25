@@ -32,7 +32,7 @@ import type { Extension } from "@/lib/audio/arrange";
 
 const r3 = (t: number) => Math.round(t * 1000) / 1000;
 
-const TAKE_COLS = "id, section_id, lane, take_no, start_at, duration, sample_rate, peaks, chosen, trim_in, trim_out, created_at";
+const TAKE_COLS = "id, section_id, lane, take_no, start_at, duration, sample_rate, peaks, chosen, trim_in, trim_out, gain, created_at";
 const LINE_COLS = "id, project_id, section_id, position, text, status, kind, note, audio_at, flow, marks, updated_at";
 const SNAPSHOT_FIELDS = ["text", "status", "kind", "note", "deleted", "flow", "marks"] as const;
 
@@ -1455,7 +1455,14 @@ export async function chooseTake(id: string) {
   return t.project_id;
 }
 
-/** a take moved on the beat (seconds, + later / − earlier): to fix its timing by ear */
+/** a take's volume in the mix (1: as recorded; 0–2) */
+export async function setTakeGain(id: string, gain: number) {
+  const t = await getTake(id);
+  check(await db().from("takes").update({ gain: Math.round(Math.max(0, Math.min(2, gain)) * 100) / 100 }).eq("id", id));
+  await touch(t.project_id);
+  return t.project_id;
+}
+
 /** a take cut: only its part from `from` to `to` (seconds of the recording) plays; the recording stays whole */
 export async function trimTake(id: string, from: number, to: number | null) {
   const t = check(await db().from("takes").select("project_id, duration").eq("id", id).maybeSingle()) as { project_id: string; duration: number } | null;
@@ -1467,6 +1474,7 @@ export async function trimTake(id: string, from: number, to: number | null) {
   return t.project_id;
 }
 
+/** a take moved on the beat (seconds, + later / − earlier): to fix its timing by ear */
 export async function shiftTake(id: string, by: number) {
   const t = await getTake(id);
   const row = check(await db().from("takes").select("start_at").eq("id", id).single()) as { start_at: number };

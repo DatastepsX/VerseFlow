@@ -51,6 +51,10 @@ export interface ProjectSettings {
   lanes?: string[];
   /** the sound of each layer: an effect preset id (lib/fx/presets; none: raw) */
   fx?: Record<string, string>;
+  /** the mix: each channel's volume (1: as is; 0–1.5) — "beat", "flow", "voice" (Hear) and "lane:<layer>" */
+  mix?: Record<string, number>;
+  /** recording layers turned off in the mix */
+  mixOff?: string[];
   /** where the song's original vocals are out (once removed): everywhere ("all", the default) or these parts */
   vocalsOff?: "all" | string[];
   /** the writer's brief for each part's lyrics (mood, perspective, words, rhymes, topic): lib/brief */
@@ -193,6 +197,8 @@ export interface Take {
   /** cut: the part of the recording that plays (seconds from its start; trim_out null = to its end) */
   trim_in: number;
   trim_out: number | null;
+  /** its volume in the mix (1: as recorded) */
+  gain: number;
   /** the take used for playback and exports (one per section + layer) */
   chosen: boolean;
   created_at: string;
