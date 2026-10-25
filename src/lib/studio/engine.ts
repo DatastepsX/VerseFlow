@@ -34,6 +34,26 @@ export interface Recording {
   startAt: number;
 }
 
+let shared: AudioContext | null = null;
+const workletReady = new WeakSet<BaseAudioContext>();
+
+/**
+ * One AudioContext for the whole tab: a browser plays sound only after a click on the page, so once a click
+ * has unlocked it, it stays unlocked on every page (the Mac following the phone moves between pages by itself).
+ */
+export function audioContext() {
+  if (!shared) {
+    const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    shared = new Ctx({ latencyHint: "interactive" });
+    // any click or key anywhere unlocks it
+    const unlock = () => {
+      if (shared && shared.state !== "running") void shared.resume().catch(() => {});
+    };
+    for (const ev of ["pointerdown", "keydown", "touchend"]) window.addEventListener(ev, unlock, { capture: true });
+  }
+  return shared;
+}
+
 export class StudioEngine {
   ctx: AudioContext;
   private stream: MediaStream | null = null;
@@ -55,8 +75,7 @@ export class StudioEngine {
   reportedLatency = 0;
 
   constructor() {
-    const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-    this.ctx = new Ctx({ latencyHint: "interactive" });
+    this.ctx = audioContext();
   }
 
   get armed() {
@@ -81,7 +100,10 @@ export class StudioEngine {
         channelCount: { ideal: 2 },
       },
     });
-    await this.ctx.audioWorklet.addModule("/recorder-worklet.js");
+    if (!workletReady.has(this.ctx)) {
+      await this.ctx.audioWorklet.addModule("/recorder-worklet.js");
+      workletReady.add(this.ctx);
+    }
     this.source = this.ctx.createMediaStreamSource(this.stream);
     this.recorder = new AudioWorkletNode(this.ctx, "vf-recorder", { numberOfInputs: 1, numberOfOutputs: 1, channelCountMode: "explicit", channelCount: 2 });
     this.analyser = this.ctx.createAnalyser();
@@ -308,9 +330,11 @@ export class StudioEngine {
     return measureClaps(rec.samples, rec.sampleRate, rec.startAt + base, clicks.slice(4).map((c) => base + c.at));
   }
 
+  /** this engine's sound stops; the tab's AudioContext stays (unlocked) for the next page */
   close() {
     this.stop();
     this.disarm();
-    void this.ctx.close();
+    for (const b of this.buses.values()) b.disconnect();
+    this.buses.clear();
   }
 }

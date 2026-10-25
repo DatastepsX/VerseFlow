@@ -21,7 +21,8 @@ export type RemoteCmd =
   | { t: "key"; key: "chromatic" | { root: number; minor: boolean } }
   // the phone drives the whole song on the Mac (the Mac is the main device): what it shows, what it plays
   | { t: "nav"; view: string; part: string | null }
-  | { t: "songPlay"; from: number; until: number | null; guide?: string[] }
+  /** song: the song plays on (the voice along with it), not just the lines in `guide` */
+  | { t: "songPlay"; from: number; until: number | null; guide?: string[]; song?: boolean }
   | { t: "songStop" };
 
 export interface RemoteTake {

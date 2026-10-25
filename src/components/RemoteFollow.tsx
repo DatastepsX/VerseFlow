@@ -1,7 +1,8 @@
 "use client";
 
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { audioContext } from "@/lib/studio/engine";
 import { isHandheld } from "@/lib/client/profile";
 import { usePref } from "@/lib/client/usePref";
 
@@ -67,5 +68,38 @@ export function RemoteFollow() {
     };
   }, [host, router]);
 
-  return null;
+  // the Mac tells the phone it is there, and whether it can play sound (a browser needs one click on the page)
+  const [locked, setLocked] = useState(false);
+  useEffect(() => {
+    if (!host) return;
+    const ctx = audioContext();
+    let sent = "";
+    let sentAt = 0;
+    const report = () => {
+      const sound = ctx.state === "running" ? "on" : "locked";
+      setLocked(sound === "locked");
+      // on a change at once; otherwise every 20 s
+      if (sound === sent && Date.now() - sentAt < 20_000) return;
+      sent = sound;
+      sentAt = Date.now();
+      void fetch("/api/remote/nav", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ host: { sound, path: pathRef.current } }) }).catch(() => {});
+    };
+    report();
+    ctx.addEventListener("statechange", report);
+    const id = setInterval(report, 2000);
+    return () => {
+      ctx.removeEventListener("statechange", report);
+      clearInterval(id);
+    };
+  }, [host]);
+
+  if (!host || !locked) return null;
+  return (
+    <button
+      className="fixed bottom-24 left-1/2 z-50 flex -translate-x-1/2 items-center gap-2 rounded-full bg-accent px-5 py-3 text-sm font-semibold text-white shadow-xl"
+      onClick={() => void audioContext().resume()}
+    >
+      🔊 Click once to let your phone play sound on this Mac
+    </button>
+  );
 }

@@ -160,6 +160,16 @@ export function SongApp({
     setPlaying(true);
     if (remoteEnd.current) clearTimeout(remoteEnd.current);
     remoteEnd.current = setTimeout(() => setPlaying(false), Math.min(600, Math.max(2, (cmd.until ?? cmd.from + 30) - cmd.from)) * 1000);
+    // can the Mac play it? (it is open, and its sound is allowed)
+    setTimeout(() => {
+      void fetch("/api/remote/nav", { cache: "no-store" })
+        .then((r) => r.json())
+        .then((r: { host: { sound: string; at: number } | null; now: number }) => {
+          if (!r.host || r.now - r.host.at > 45_000) setError("Your Mac doesn't answer — open VerseFlow in the browser on your Mac (any page), then press Play again.");
+          else if (r.host.sound === "locked") setError("On your Mac, click once anywhere on the VerseFlow page to allow sound — it starts playing then.");
+        })
+        .catch(() => {});
+    }, 1200);
   };
   /** a take is being recorded on this device: the tabs wait */
   const [recBusy, setRecBusy] = useState(false);
@@ -410,15 +420,19 @@ export function SongApp({
   const play = async (
     from: number,
     until: number | null = null,
-    opts: { guide?: PlayLayer[]; flow?: boolean; clicks?: { at: number; accent: boolean }[] } = {},
+    /** noVoice: the lyrics in your voice not added (the phone decides that when it drives the Mac) */
+    opts: { guide?: PlayLayer[]; flow?: boolean; clicks?: { at: number; accent: boolean }[]; noVoice?: boolean } = {},
   ) => {
     // the Mac is the main device: it plays (a flow being sung or tapped stays here)
-    if (controller && !opts.clicks && !opts.guide) return playOnMac({ t: "songPlay", from, until });
+    if (controller && !opts.clicks && !opts.guide) {
+      if (withGuide && voice && unspoken.length && !window.confirm(`Hear the song in your voice? ${unspoken.length} line${unspoken.length === 1 ? "" : "s"} still to speak · ${unspoken.length} call${unspoken.length === 1 ? "" : "s"}`)) return;
+      return playOnMac({ t: "songPlay", from, until, guide: withGuide && voice ? lyricLines.map((l) => l.id) : undefined, song: true });
+    }
     const e = engine.current;
     if (!e || !beat.current) return;
     await e.ctx.resume();
     let guideL = opts.guide ?? [];
-    if (!opts.guide && withGuide && voice) {
+    if (!opts.guide && !opts.noVoice && withGuide && voice) {
       if (unspoken.length && !window.confirm(`Hear the song in your voice? ${unspoken.length} line${unspoken.length === 1 ? "" : "s"} still to speak · ${unspoken.length} call${unspoken.length === 1 ? "" : "s"}`))
         return;
       guideL = (await guide(lyricLines.map((l) => l.id), "all")) ?? [];
@@ -756,6 +770,8 @@ export function SongApp({
   }, [controller, view, activePart, pid]);
   // this Mac follows the phone: its tab and part, and it plays what the phone plays
   const hostRun = useRef<(c: RemoteCmd) => void>(() => {});
+  /** the play the phone asked for, waiting for the beat or the sound */
+  const hostPending = useRef(0);
   useEffect(() => {
     hostRun.current = (c) => {
       if (c.t === "nav") {
@@ -764,14 +780,29 @@ export function SongApp({
           setActivePart(c.part);
           setTimeout(() => document.getElementById(`part-${c.part}`)?.scrollIntoView({ block: "start", behavior: "smooth" }), 150);
         }
-      } else if (c.t === "songStop") stopPlay();
-      else if (c.t === "songPlay")
+      } else if (c.t === "songStop") {
+        hostPending.current = 0;
+        stopPlay();
+      }
+      else if (c.t === "songPlay") {
+        const asked = Date.now();
+        hostPending.current = asked;
         void (async () => {
+          // the song just opened (the phone switched part or song): its beat is still loading — and the sound
+          // waits for a click on this Mac (a browser rule); it plays once both are there (within a minute)
+          const ctx = engine.current?.ctx;
+          while ((!beat.current || ctx?.state !== "running") && Date.now() - asked < 60_000) {
+            if (hostPending.current !== asked) return;
+            if (ctx && ctx.state !== "running") void ctx.resume().catch(() => {});
+            await new Promise((r) => setTimeout(r, 250));
+          }
+          if (hostPending.current !== asked || !beat.current) return;
           const layers = c.guide?.length ? await guide(c.guide, "remote") : null;
           if (c.guide?.length && !layers?.length) return;
-          const until = c.until ?? (layers ? Math.max(...layers.map((g) => g.at + g.buffer.duration)) + 0.3 : null);
-          void play(c.from, until, layers ? { guide: layers, flow: false } : {});
+          const until = c.until ?? (!c.song && layers ? Math.max(...layers.map((g) => g.at + g.buffer.duration)) + 0.3 : null);
+          void play(c.from, until, layers ? { guide: layers, flow: false } : { noVoice: true });
         })();
+      }
     };
   });
   // the Mac: the phone's tab and part in this song
@@ -785,13 +816,7 @@ export function SongApp({
     return () => window.removeEventListener(NAV_EVENT, on);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the listener reads the tab it is in
   }, [remoteHost, pid]);
-  // a browser plays sound only after a click on the page: until then the Mac asks for one
-  const [soundLocked, setSoundLocked] = useState(false);
-  useEffect(() => {
-    if (!remoteHost) return;
-    const id = setInterval(() => setSoundLocked(engine.current?.ctx.state !== "running"), 1000);
-    return () => clearInterval(id);
-  }, [remoteHost]);
+  // a browser plays sound only after a click on the page: until then the Mac asks for one (components/RemoteFollow)
   useEffect(() => {
     if (!remoteHost) return;
     let alive = true;
@@ -799,9 +824,16 @@ export function SongApp({
       let after = -1;
       while (alive) {
         try {
-          const r = (await fetch(`/api/projects/${pid}/remote?cmds&after=${after}`, { cache: "no-store" }).then((x) => x.json())) as { last: number; cmds: { id: number; cmd: RemoteCmd }[] };
+          const r = (await fetch(`/api/projects/${pid}/remote?cmds&after=${after}`, { cache: "no-store" }).then((x) => x.json())) as {
+            last: number;
+            cmds: { id: number; cmd: RemoteCmd }[];
+            recent?: { id: number; cmd: RemoteCmd }[];
+          };
           if (!alive) break;
           after = r.last;
+          // just opened: a play the phone asked for while this page was loading (if it wasn't stopped since)
+          const asked = r.recent?.at(-1)?.cmd;
+          if (asked?.t === "songPlay") hostRun.current(asked);
           for (const c of r.cmds) hostRun.current(c.cmd);
         } catch {
           await new Promise((res) => setTimeout(res, 2000));
@@ -1279,11 +1311,6 @@ export function SongApp({
             <b>Your phone controls this Mac</b>
             <span className="block text-xs text-muted">It follows the phone&apos;s tab and part, and plays what the phone plays.</span>
           </span>
-          {soundLocked && (
-            <button className="btn-primary shrink-0 rounded-full px-3 py-1.5 text-xs" onClick={() => void engine.current?.ctx.resume().then(() => setSoundLocked(false))}>
-              Allow sound
-            </button>
-          )}
         </div>
       )}
       {/* a part copied: where to paste it */}

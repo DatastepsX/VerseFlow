@@ -1590,10 +1590,12 @@ export async function postRemoteCommand(projectId: string, cmd: unknown) {
 /** commands after `after` (id); after < 0 → only the latest id (to start listening from now) */
 export async function remoteCommandsAfter(projectId: string, after: number) {
   if (after < 0) {
+    // starting: from now on — plus what was asked in the last seconds (the page was still opening), as `recent`
     const last = check(
-      await db().from("studio_commands").select("id").eq("project_id", projectId).order("id", { ascending: false }).limit(1),
-    ) as { id: number }[];
-    return { last: last[0]?.id ?? 0, cmds: [] as { id: number; cmd: unknown }[] };
+      await db().from("studio_commands").select("id, cmd, created_at").eq("project_id", projectId).order("id", { ascending: false }).limit(5),
+    ) as { id: number; cmd: unknown; created_at: string }[];
+    const recent = last.filter((r) => Date.now() - new Date(r.created_at).getTime() < 8000).reverse().map(({ id, cmd }) => ({ id, cmd }));
+    return { last: last[0]?.id ?? 0, cmds: [] as { id: number; cmd: unknown }[], recent };
   }
   const rows = check(
     await db().from("studio_commands").select("id, cmd").eq("project_id", projectId).gt("id", after).order("id").limit(50),
@@ -1945,6 +1947,24 @@ export interface RemoteNav {
 export async function getRemoteNav(): Promise<RemoteNav | null> {
   const row = check(await db().from("user_settings").select("prefs").eq("id", "nav").maybeSingle()) as { prefs: RemoteNav } | null;
   return row?.prefs?.path ? row.prefs : null;
+}
+
+/** the Mac, when it is the main device: is it there, and can it play sound (a browser needs one click first) */
+export interface RemoteHost {
+  sound: "on" | "locked";
+  path: string;
+  at: number;
+}
+
+export async function getRemoteHost(): Promise<RemoteHost | null> {
+  const row = check(await db().from("user_settings").select("prefs").eq("id", "host").maybeSingle()) as { prefs: RemoteHost } | null;
+  return row?.prefs?.sound ? row.prefs : null;
+}
+
+export async function putRemoteHost(h: Omit<RemoteHost, "at">) {
+  const value: RemoteHost = { ...h, at: Date.now() };
+  check(await db().from("user_settings").upsert({ id: "host", prefs: value, updated_at: new Date().toISOString() }));
+  return value;
 }
 
 export async function putRemoteNav(nav: Omit<RemoteNav, "at">) {
