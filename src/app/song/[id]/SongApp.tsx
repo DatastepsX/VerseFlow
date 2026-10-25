@@ -1,5 +1,6 @@
 "use client";
 
+import type { LyricsBrief } from "@/lib/brief";
 import { deviceKind } from "@/lib/client/profile";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -843,17 +844,24 @@ export function SongApp({
       return detectSyllables(r.samples, r.sampleRate).map((x) => ({ t: x.t + r.startAt, strength: x.strength, dur: x.dur }));
     },
   };
-  const useFlow = async (use: { flowId: string } | { pattern: import("@/lib/types").FlowPattern }) => {
+  type UseOpts = { keepSung: boolean; write: boolean; brief: LyricsBrief | null };
+  const useFlow = async (use: { flowId: string } | { pattern: import("@/lib/types").FlowPattern }, opts: UseOpts) => {
     if (!flowSheet) return;
     const sec0 = tree.sections.find((x) => x.id === flowSheet.sectionId);
+    // the brief stays with the part: its lyrics now, and every rewrite later, follow it
+    const briefs = { ...(tree.project.settings?.briefs ?? {}) };
+    if (opts.brief) briefs[flowSheet.sectionId] = opts.brief;
+    else delete briefs[flowSheet.sectionId];
+    if (JSON.stringify(briefs) !== JSON.stringify(tree.project.settings?.briefs ?? {}))
+      await call(`/api/projects/${pid}`, { settings: { ...(tree.project.settings ?? {}), briefs } }, "PATCH");
     // one undo step: the part's new lines and their lyrics
     const sheet = flowSheet;
-    await undoStep(`New flow · ${sec0?.name ?? "part"}`, () => applyFlowSheet(use));
+    await undoStep(`New flow · ${sec0?.name ?? "part"}`, () => applyFlowSheet(use, opts));
     setLastFlow({ label: `New flow · ${sec0?.name ?? "part"}`, again: () => openFlowSheet({ ...sheet, flowId: null }) });
     // the result: the part's new lines (Lyrics opens on it)
     setView("lyrics");
   };
-  const applyFlowSheet = async (use: { flowId: string } | { pattern: import("@/lib/types").FlowPattern }) => {
+  const applyFlowSheet = async (use: { flowId: string } | { pattern: import("@/lib/types").FlowPattern }, opts: UseOpts) => {
     if (!flowSheet) return;
     const post = async <T,>(body: unknown): Promise<T> => {
       const res = await fetch(`/api/projects/${pid}/flows`, { method: "POST", headers: { "content-type": "application/json", ...undoHeaders() }, body: JSON.stringify(body) });
@@ -863,14 +871,15 @@ export function SongApp({
     };
     let flowId = "flowId" in use ? use.flowId : null;
     if (!flowId) flowId = (await post<{ flow: { id: string } }>({ action: "create", pattern: (use as { pattern: unknown }).pattern })).flow.id;
-    const out = await post<{ tree: ProjectTree; write: string[] }>({ action: "apply", flowId, sectionId: flowSheet.sectionId, fromLineId: flowSheet.fromLineId, withText: true });
+    const out = await post<{ tree: ProjectTree; write: string[] }>({ action: "apply", flowId, sectionId: flowSheet.sectionId, fromLineId: flowSheet.fromLineId, withText: opts.keepSung });
     setTree(out.tree);
     setFlowSheet(null);
     // the new lines without words: written in the flow (1 call per ~8 lines)
     const write = new Set(out.write);
     const sec = out.tree.sections.find((x) => x.id === flowSheet.sectionId);
     const todo = sec ? sec.lines.filter((l) => write.has(l.id)) : [];
-    if (todo.length) {
+    // "flow only, write later": the lines stay empty (✨ Write them any time — the brief is kept)
+    if (todo.length && opts.write) {
       await lineAction(flowSheet.sectionId, async () => {
         for (const ids of chunkLines(todo)) await call(`/api/projects/${pid}/flow`, { action: "suggest", lineIds: ids });
       });
@@ -1775,6 +1784,8 @@ export function SongApp({
               bar={bar}
               barStart={st.start}
               linesInStretch={st.lines}
+              stretchSeconds={st.end - st.start}
+              brief={tree.project.settings?.briefs?.[sec.id] ?? null}
               audio={sheetAudio}
               onUse={useFlow}
               onClose={() => {

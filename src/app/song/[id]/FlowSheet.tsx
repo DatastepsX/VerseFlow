@@ -1,8 +1,9 @@
 "use client";
 
 import { saveProfilePref } from "@/lib/client/profile";
+import { cleanBrief, MOODS, PERSPECTIVES, RHYMES, WORDS, type LyricsBrief } from "@/lib/brief";
 import { useEffect, useRef, useState } from "react";
-import { chipsOf, dropStrays, lineCuts, lineFromText, lineStarts, linesFromWords, linesFromBreaks, linesFromOnsets, ownWords, relayout, type Onset } from "@/lib/flow/pattern";
+import { chipsOf, dropStrays, lineCuts, lineFromText, lineStarts, linesFromWords, linesIn, linesFromBreaks, linesFromOnsets, ownWords, relayout, type Onset } from "@/lib/flow/pattern";
 import { quantizeTaps } from "@/lib/flow/grid";
 import type { FlowPattern, PatternLine, SongFlow } from "@/lib/types";
 import { Check, Hand, Headphones, LineBreak, Mic, Pencil, Play, Restart, Sparkles } from "@/components/icons";
@@ -49,6 +50,8 @@ export function FlowSheet({
   bar,
   barStart,
   linesInStretch,
+  stretchSeconds,
+  brief: initialBrief,
   audio,
   onUse,
   onClose,
@@ -66,8 +69,12 @@ export function FlowSheet({
   /** how many lines the stretch will get with a 1-bar pattern line */
   linesInStretch: number;
   audio: SheetAudio;
-  /** use it: an existing flow (unchanged) or a new one */
-  onUse: (use: { flowId: string } | { pattern: FlowPattern }) => Promise<void>;
+  /** how long the stretch is (s): how many lines the flow gives there */
+  stretchSeconds: number;
+  /** the part's brief for its lyrics, as set before */
+  brief: LyricsBrief | null;
+  /** use it: an existing flow (unchanged) or a new one — with your sung lines kept or not, the lyrics written or not */
+  onUse: (use: { flowId: string } | { pattern: FlowPattern }, opts: { keepSung: boolean; write: boolean; brief: LyricsBrief | null }) => Promise<void>;
   onClose: () => void;
 }) {
   const initial = flows.find((f) => f.id === initialFlowId) ?? null;
@@ -181,6 +188,44 @@ export function FlowSheet({
     setNow(from);
     setPhase("running");
   };
+  /** the words in the take (1 call): exact syllables, breaks between words, your words as the text */
+  const [hearing, setHearing] = useState(false);
+  /** the recognition failed (the result from the sound stays): try it again */
+  const [wordsFailed, setWordsFailed] = useState(false);
+  const recognise = async () => {
+    if (!audio.recognise) return;
+    setHearing(true);
+    setWordsFailed(false);
+    setHint(null);
+    try {
+      const words = await audio.recognise();
+      if (words.length < 3) {
+        setHint("No words were recognised (“ta ta” and other sounds stay as they were found).");
+        return;
+      }
+      // the lines: where "Next line" was tapped, else the longest pauses between words
+      const br = breaksRef.current;
+      const cut = lineCuts(words.map((w) => ({ t: w.start, dur: w.end - w.start })), p);
+      // few words a line: simply the longest pauses between words
+      const longest = words
+        .slice(1)
+        .map((w, i) => ({ k: i + 1, gap: w.start - words[i].end }))
+        .sort((x, y) => y.gap - x.gap)
+        .slice(0, p - 1)
+        .map((x) => x.k)
+        .sort((x, y) => x - y);
+      const firsts = br.length ? br.map((b) => words.filter((w) => w.start < b.t).length) : cut.length ? cut : longest;
+      const got = linesFromWords(words, firsts, barStart, bar, p, lang);
+      fromTake.current = got;
+      edit(got);
+    } catch (e) {
+      setWordsFailed(true);
+      setHint(e instanceof Error ? e.message : "The words could not be recognised.");
+    } finally {
+      setHearing(false);
+    }
+  };
+
   const finishing = useRef(false);
   useEffect(() => {
     finish.current = async () => {
@@ -226,7 +271,7 @@ export function FlowSheet({
       fromTake.current = got;
       edit(got);
       // sung: the words in it are always recognised (1 call) — exact syllables, breaks between words, your words
-      if (mode !== "tap" && audio.recognise) void autoRecognise.current?.();
+      if (mode !== "tap" && audio.recognise) void recognise();
     };
   });
 
@@ -251,47 +296,6 @@ export function FlowSheet({
     if (br.length >= p) void finish.current?.();
   };
 
-  /** the words in the take (1 call): exact syllables, breaks between words, your words as the text */
-  const [hearing, setHearing] = useState(false);
-  /** the recognition failed (the result from the sound stays): try it again */
-  const [wordsFailed, setWordsFailed] = useState(false);
-  const autoRecognise = useRef<(() => Promise<void>) | null>(null);
-  useEffect(() => {
-    autoRecognise.current = recognise;
-  });
-  const recognise = async () => {
-    if (!audio.recognise) return;
-    setHearing(true);
-    setWordsFailed(false);
-    setHint(null);
-    try {
-      const words = await audio.recognise();
-      if (words.length < 3) {
-        setHint("No words were recognised (“ta ta” and other sounds stay as they were found).");
-        return;
-      }
-      // the lines: where "Next line" was tapped, else the longest pauses between words
-      const br = breaksRef.current;
-      const cut = lineCuts(words.map((w) => ({ t: w.start, dur: w.end - w.start })), p);
-      // few words a line: simply the longest pauses between words
-      const longest = words
-        .slice(1)
-        .map((w, i) => ({ k: i + 1, gap: w.start - words[i].end }))
-        .sort((x, y) => y.gap - x.gap)
-        .slice(0, p - 1)
-        .map((x) => x.k)
-        .sort((x, y) => x - y);
-      const firsts = br.length ? br.map((b) => words.filter((w) => w.start < b.t).length) : cut.length ? cut : longest;
-      const got = linesFromWords(words, firsts, barStart, bar, p, lang);
-      fromTake.current = got;
-      edit(got);
-    } catch (e) {
-      setWordsFailed(true);
-      setHint(e instanceof Error ? e.message : "The words could not be recognised.");
-    } finally {
-      setHearing(false);
-    }
-  };
 
   const listen = () => {
     const from = barStart - bar;
@@ -314,14 +318,21 @@ export function FlowSheet({
   };
 
   const ready = lines.every((l) => l.syllables > 0);
-  // lines in your own words are kept; the rest (example words, "pa pam") only set the rhythm and get written
+  // lines in your own words can be kept; the rest (example words, "pa pam") only set the rhythm and get written
   const own = lines.map((l) => ownWords(l, lang, mode));
-  const toWrite = Math.max(0, linesInStretch - own.filter(Boolean).length);
+  const pattern: FlowPattern = { lines, scheme: p === 4 ? scheme : "AABB", bar, source: mode };
+  const total = ready ? linesIn(pattern, bar, stretchSeconds) : linesInStretch;
+  // the confirm step: where, your sung lines, the brief for the lyrics
+  const [confirming, setConfirming] = useState(false);
+  const [keepSung, setKeepSung] = useState(true);
+  const [brief, setBrief] = useState<LyricsBrief>(initialBrief ?? {});
+  const kept = keepSung ? Math.min(total, own.filter(Boolean).length) : 0;
+  const toWrite = Math.max(0, total - kept);
   const calls = Math.ceil(toWrite / 8);
-  const use = async () => {
+  const use = async (write: boolean) => {
     setBusy(true);
     try {
-      await onUse(picked && !changed ? { flowId: picked } : { pattern: { lines, scheme: p === 4 ? scheme : "AABB", bar, source: mode } });
+      await onUse(picked && !changed ? { flowId: picked } : { pattern }, { keepSung, write, brief: cleanBrief(brief) });
     } catch (err) {
       setHint(err instanceof Error ? err.message : "Something went wrong");
       setBusy(false);
@@ -540,21 +551,28 @@ export function FlowSheet({
           <button className="btn justify-center rounded-2xl border-0 bg-panel-2 px-4 py-3" disabled={!ready || phase !== "idle"} onClick={listen}>
             <Play className="h-4 w-4" /> Listen
           </button>
-          <button className="btn-primary flex-1 justify-center rounded-2xl py-3 text-[15px]" disabled={!ready || busy || hearing || phase !== "idle"} onClick={() => void use()}>
-            {busy ? (
-              "Writing…"
-            ) : (
-              <>
-                <Check className="h-4 w-4" /> Use for {scope}
-                {calls > 0 && (
-                  <span className="flex items-center gap-0.5 text-xs font-normal opacity-80">
-                    · <Sparkles className="h-3 w-3" /> {calls} call{calls === 1 ? "" : "s"}
-                  </span>
-                )}
-              </>
-            )}
-          </button>
+          {!confirming && (
+            <button className="btn-primary flex-1 justify-center rounded-2xl py-3 text-[15px]" disabled={!ready || busy || hearing || phase !== "idle"} onClick={() => setConfirming(true)}>
+              <Check className="h-4 w-4" /> This is the flow · next
+            </button>
+          )}
         </div>
+        {confirming && (
+          <WriteStep
+            scope={scope}
+            total={total}
+            ownLines={own.filter(Boolean).length}
+            keepSung={keepSung}
+            setKeepSung={setKeepSung}
+            brief={brief}
+            setBrief={setBrief}
+            toWrite={toWrite}
+            calls={calls}
+            busy={busy}
+            onBack={() => setConfirming(false)}
+            onUse={(write) => void use(write)}
+          />
+        )}
         <button className="w-full text-center text-sm text-muted" onClick={onClose} disabled={busy}>
           Cancel
         </button>
@@ -635,6 +653,101 @@ function Chips({ line, lang, bar, onChange }: { line: PatternLine; lang: string;
           </span>
         );
       })}
+    </div>
+  );
+}
+
+/**
+ * After the flow: confirm it and decide how the part is written — where, your sung lines kept or not, and a
+ * brief for the lyrics (mood, perspective, words, rhymes, what it is about). The brief stays with the part.
+ */
+function WriteStep(props: {
+  scope: string;
+  total: number;
+  ownLines: number;
+  keepSung: boolean;
+  setKeepSung: (on: boolean) => void;
+  brief: LyricsBrief;
+  setBrief: (b: LyricsBrief) => void;
+  toWrite: number;
+  calls: number;
+  busy: boolean;
+  onBack: () => void;
+  onUse: (write: boolean) => void;
+}) {
+  const { brief, setBrief } = props;
+  const chip = (on: boolean) => `shrink-0 rounded-full px-3 py-1.5 text-xs font-semibold ${on ? "bg-accent text-white" : "bg-panel text-fg/80 ring-1 ring-line/60"}`;
+  const toggle = (list: string[] | undefined, id: string) => ((list ?? []).includes(id) ? (list ?? []).filter((x) => x !== id) : [...(list ?? []), id]);
+  const group = (title: string, items: { id: string; label: string }[], on: (id: string) => boolean, flip: (id: string) => void) => (
+    <div className="space-y-1.5">
+      <p className="label">{title}</p>
+      <div className="flex flex-wrap gap-1.5">
+        {items.map((m) => (
+          <button key={m.id} className={chip(on(m.id))} aria-pressed={on(m.id)} onClick={() => flip(m.id)}>
+            {m.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+  return (
+    <div className="space-y-3.5 rounded-3xl bg-panel-2/60 p-4">
+      <div>
+        <p className="text-base font-bold">Write {props.scope}</p>
+        <p className="text-xs text-muted">
+          {props.total} line{props.total === 1 ? "" : "s"} in this flow · {props.total - props.toWrite} kept · {props.toWrite} to write
+        </p>
+      </div>
+      {props.ownLines > 0 && (
+        <div className="flex rounded-full bg-panel p-1 text-sm">
+          <button className={`flex-1 rounded-full py-2 font-semibold ${props.keepSung ? "bg-accent text-white" : "text-muted"}`} onClick={() => props.setKeepSung(true)}>
+            Keep my {props.ownLines} sung line{props.ownLines === 1 ? "" : "s"}
+          </button>
+          <button className={`flex-1 rounded-full py-2 font-semibold ${!props.keepSung ? "bg-accent text-white" : "text-muted"}`} onClick={() => props.setKeepSung(false)}>
+            Only the rhythm
+          </button>
+        </div>
+      )}
+      {group("Mood", MOODS, (id) => !!brief.moods?.includes(id), (id) => setBrief({ ...brief, moods: toggle(brief.moods, id) }))}
+      {group("Perspective", PERSPECTIVES, (id) => brief.perspective === id, (id) => setBrief({ ...brief, perspective: brief.perspective === id ? undefined : id }))}
+      {group("Words", WORDS, (id) => !!brief.words?.includes(id), (id) => setBrief({ ...brief, words: toggle(brief.words, id) }))}
+      {group("Rhymes", RHYMES, (id) => brief.rhymes === id, (id) => setBrief({ ...brief, rhymes: brief.rhymes === id ? undefined : id }))}
+      <label className="block space-y-1.5">
+        <span className="label">What is this part about?</span>
+        <textarea
+          className="input min-h-16 text-sm"
+          value={brief.about ?? ""}
+          onChange={(e) => setBrief({ ...brief, about: e.target.value })}
+          placeholder="e.g. I see her at the party again, I want to tell her, but I stay quiet"
+        />
+      </label>
+      <label className="block space-y-1.5">
+        <span className="label">Words or images to use</span>
+        <input className="input text-sm" value={brief.keywords ?? ""} onChange={(e) => setBrief({ ...brief, keywords: e.target.value })} placeholder="e.g. stasera, specchi, la sua giacca rossa" />
+      </label>
+      <p className="text-[11px] text-muted">The brief stays with this part: rewriting its lines later follows it too. The rest of the song is the context.</p>
+      <div className="flex flex-col gap-2">
+        <button className="btn-primary w-full justify-center rounded-2xl py-3 text-[15px]" disabled={props.busy} onClick={() => props.onUse(props.toWrite > 0)}>
+          {props.busy ? (
+            "Writing…"
+          ) : (
+            <>
+              <Sparkles className="h-4 w-4" /> {props.toWrite > 0 ? `Use the flow & write ${props.toWrite} line${props.toWrite === 1 ? "" : "s"}` : "Use the flow"}
+              {props.calls > 0 && <span className="text-xs font-normal opacity-80">· {props.calls} call{props.calls === 1 ? "" : "s"}</span>}
+            </>
+          )}
+        </button>
+        <div className="flex gap-2">
+          <button className="btn flex-1 justify-center rounded-2xl border-0 bg-panel py-2.5 text-sm" disabled={props.busy} onClick={props.onBack}>
+            Back to the flow
+          </button>
+          {props.toWrite > 0 && (
+            <button className="btn flex-1 justify-center rounded-2xl border-0 bg-panel py-2.5 text-sm" disabled={props.busy} onClick={() => props.onUse(false)}>
+              Flow only, write later
+            </button>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

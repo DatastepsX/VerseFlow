@@ -1,4 +1,5 @@
 import "server-only";
+import { briefPrompt } from "@/lib/brief";
 import { performedBy } from "@/lib/artists";
 import { adjustLength } from "@/lib/rhyme/fit";
 import { songRhymeDistance } from "@/lib/scheme";
@@ -93,6 +94,12 @@ export interface GenerateRequest {
   count: number;
   instruction?: string;
   rhymeStrength?: "exact" | "loose" | "none";
+}
+
+/** the writer's brief for a part (mood, perspective, words, rhymes, topic), as a block of the prompt */
+function partBrief(tree: ProjectTree, sectionId: string) {
+  const b = briefPrompt(tree.project.settings?.briefs?.[sectionId]);
+  return b ? `\nTHE WRITER'S BRIEF FOR THIS PART — follow it:\n${b}` : "";
 }
 
 function langName(code: string) {
@@ -190,7 +197,7 @@ Title: ${project.title}
 Type: ${PROJECT_TYPES.find((t) => t.value === project.type)?.label ?? project.type}
 Language: ${langName(lang)}${st.secondaryLanguage ? ` (occasional ${st.secondaryLanguage} words are welcome)` : ""}
 ${st.genre ? `Genre: ${st.genre}\n` : ""}${st.style ? `Style / references: ${st.style}\n` : ""}${st.mood ? `Mood: ${st.mood}\n` : ""}${st.simpleLanguage ? "Vocabulary: simple, modern, direct — avoid overly poetic words\n" : ""}${st.explicitness ? `Explicit content: ${st.explicitness}\n` : ""}${project.concept ? `Story / concept: ${project.concept}\n` : ""}
-${otherSections ? `OTHER SECTIONS (context only)\n${otherSections}\n\n` : ""}CURRENT SECTION: ${section.name}${section.story_beat ? `\nStory beat: ${section.story_beat}` : ""}${section.intensity ? `\nEmotional intensity: ${section.intensity}/10` : ""}${section.notes ? `\nNotes: ${section.notes}` : ""}${performedBy(tree, section)}
+${otherSections ? `OTHER SECTIONS (context only)\n${otherSections}\n\n` : ""}CURRENT SECTION: ${section.name}${section.story_beat ? `\nStory beat: ${section.story_beat}` : ""}${section.intensity ? `\nEmotional intensity: ${section.intensity}/10` : ""}${section.notes ? `\nNotes: ${section.notes}` : ""}${performedBy(tree, section)}${partBrief(tree, section.id)}
 Lines are grouped in ${g === 1 ? "single lines" : g === 2 ? "couplets" : `groups of ${g}`}.
 ${sectionText}
 
@@ -315,7 +322,7 @@ Title: ${project.title}
 Type: ${PROJECT_TYPES.find((t) => t.value === project.type)?.label ?? project.type}
 Language: ${langName(lang)}${st.secondaryLanguage ? ` (occasional ${st.secondaryLanguage} words are welcome)` : ""}
 ${st.genre ? `Genre: ${st.genre}\n` : ""}${st.style ? `Style / references: ${st.style}\n` : ""}${st.mood ? `Mood: ${st.mood}\n` : ""}${st.simpleLanguage ? "Vocabulary: simple, modern, direct — avoid overly poetic words\n" : ""}${st.explicitness ? `Explicit content: ${st.explicitness}\n` : ""}${project.concept ? `Story / concept: ${project.concept}\n` : ""}
-${otherSections ? `OTHER SECTIONS (context only)\n${otherSections}\n\n` : ""}CURRENT SECTION: ${section.name}${section.story_beat ? `\nStory beat: ${section.story_beat}` : ""}${section.intensity ? `\nEmotional intensity: ${section.intensity}/10` : ""}${section.notes ? `\nNotes: ${section.notes}` : ""}${performedBy(tree, section)}
+${otherSections ? `OTHER SECTIONS (context only)\n${otherSections}\n\n` : ""}CURRENT SECTION: ${section.name}${section.story_beat ? `\nStory beat: ${section.story_beat}` : ""}${section.intensity ? `\nEmotional intensity: ${section.intensity}/10` : ""}${section.notes ? `\nNotes: ${section.notes}` : ""}${performedBy(tree, section)}${partBrief(tree, section.id)}
 ${sectionText}
 
 TASK — build a bank of candidate bars the writer can pick from while continuing this section.
@@ -526,7 +533,7 @@ export async function draftSection(tree: ProjectTree, sectionId: string, mode: D
 Title: ${project.title}
 Language: ${langName(lang)}${st.secondaryLanguage ? ` (occasional ${st.secondaryLanguage} words are welcome)` : ""}
 ${st.genre ? `Genre: ${st.genre}\n` : ""}${st.style ? `Style / references: ${st.style}\n` : ""}${st.mood ? `Mood: ${st.mood}\n` : ""}${st.simpleLanguage ? "Vocabulary: simple, modern, direct — avoid overly poetic words\n" : ""}${st.explicitness ? `Explicit content: ${st.explicitness}\n` : ""}${project.concept ? `Story / concept: ${project.concept}\n` : ""}
-${others ? `REST OF THE SONG (context — stay consistent with it)\n${others}\n\n` : ""}SECTION: ${section.name}${section.story_beat ? `\nStory beat: ${section.story_beat}` : ""}${section.intensity ? `\nIntensity: ${section.intensity}/10` : ""}${section.notes ? `\nNotes: ${section.notes}` : ""}${performedBy(tree, section)}
+${others ? `REST OF THE SONG (context — stay consistent with it)\n${others}\n\n` : ""}SECTION: ${section.name}${section.story_beat ? `\nStory beat: ${section.story_beat}` : ""}${section.intensity ? `\nIntensity: ${section.intensity}/10` : ""}${section.notes ? `\nNotes: ${section.notes}` : ""}${performedBy(tree, section)}${partBrief(tree, section.id)}
 Lines grouped in ${g === 2 ? "couplets" : g === 1 ? "single lines" : `groups of ${g}`}. ${
     polish
       ? refit
@@ -623,6 +630,14 @@ export async function flowSuggest(tree: ProjectTree, lineIds: string[]) {
     }
   }
   const st = project.settings ?? {};
+  // the writer's brief for each part being written: it comes before what they sang
+  const briefs = [...new Set(targets.map((x) => x.s.id))]
+    .map((id) => {
+      const b = briefPrompt(project.settings?.briefs?.[id]);
+      return b ? `THE WRITER'S BRIEF FOR ${tree.sections.find((x) => x.id === id)?.name ?? "the part"} — follow it (it comes before what they sang):\n${b}` : "";
+    })
+    .filter(Boolean)
+    .join("\n\n");
   const prompt = `PROJECT
 Title: ${project.title}
 Language: ${langName(lang)}
@@ -635,7 +650,7 @@ From these words, work out the song's topic, mood and imagery (e.g. love, longin
 THE SONG (rhythm per line: DUM = stressed syllable, ~ = the last note is held, | = a short break in the singing)
 ${listing}
 
-${rhymes.length ? `RHYMES\n${rhymes.join("\n")}\n` : ""}
+${rhymes.length ? `RHYMES\n${rhymes.join("\n")}\n` : ""}${briefs ? `\n${briefs}\n` : ""}
 TASK
 For every [WRITE] line write 3 options. Each option must:
 - have exactly the line's number of syllables (sung syllables, ±1) with the stressed syllables on the DUM positions — it must fit the rhythm the writer sang;

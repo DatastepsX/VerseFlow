@@ -135,6 +135,12 @@ later (parts, lines, flows, takes, beat changes), and the new bars get empty lin
 step (the version saved before keeps the timing too). Each part's header also has **Vocals** (the original vocals
 on/off there) and **Hear** (the whole part in your voice on its flow, 1 call per line not spoken yet).
 
+**Writing a part after its flow** (flow sheet → "This is the flow · next"): confirm the flow, keep your sung lines
+or use only their rhythm, and give the part a **brief** — mood, perspective (me / to you / us / a story), words
+(modern, street, poetic, simple, + English, images), rhymes (clean / multi-syllable / inner), what it is about, words
+to use (`src/lib/brief.ts`). The brief is kept per part (`settings.briefs`) and every AI writing for the part follows
+it (`partBrief` / `flowSuggest` in `ai.ts`). "Flow only, write later" applies the flow without a call.
+
 **Your settings** (`/settings`: the slider button on Home, More → Your settings, Record → Settings): recording
 (count-in, click, lyrics size, headphones), timing, your voice, the ElevenLabs account, appearance — the same in every
 song and on every device. Kept with the profile (table `user_settings`, one row; `/api/profile`), with a copy in the

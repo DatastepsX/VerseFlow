@@ -53,6 +53,8 @@ export interface ProjectSettings {
   fx?: Record<string, string>;
   /** where the song's original vocals are out (once removed): everywhere ("all", the default) or these parts */
   vocalsOff?: "all" | string[];
+  /** the writer's brief for each part's lyrics (mood, perspective, words, rhymes, topic): lib/brief */
+  briefs?: Record<string, import("./brief").LyricsBrief>;
   /** bars added to parts (a part made longer): applied in order to the uploaded song when it loads (lib/audio/arrange) */
   extensions?: { at: number; from: number; to?: number; len: number; vocals?: boolean }[];
   /** the song's key for autotune (found in the beat, or chosen); "chromatic": every semitone is a note */
