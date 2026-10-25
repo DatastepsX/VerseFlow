@@ -176,6 +176,50 @@ export function phraseBreaks(on: Onset[], beat: number): number[] {
   return out;
 }
 
+/**
+ * Sung lines without "Next line": where each line starts (the index of its first syllable), for `lines`
+ * lines. The cuts go where the singing rests longest — a line break is the longest silence around — with
+ * the lines about equally long and at least 3 syllables each (never at the bar lines: a sung line often
+ * starts before or after one).
+ */
+export function lineCuts(on: Onset[], lines: number): number[] {
+  const n = on.length;
+  if (lines < 2 || n < lines * 3) return [];
+  const rest = on.slice(0, -1).map((o, i) => {
+    const d = on[i + 1].t - o.t;
+    return o.dur !== null && o.dur !== undefined ? Math.max(0, d - o.dur) : d;
+  });
+  const top = Math.max(...rest) || 1;
+  const span = on[n - 1].t + (on[n - 1].dur ?? 0.2) - on[0].t;
+  const target = span / lines;
+  const len = (a: number, b: number) => on[b].t + (on[b].dur ?? 0.2) - on[a].t;
+  // best[k][i]: lines 0..k-1 cover syllables 0..i-1
+  const best = Array.from({ length: lines + 1 }, () => new Array<number>(n + 1).fill(-Infinity));
+  const prev = Array.from({ length: lines + 1 }, () => new Array<number>(n + 1).fill(-1));
+  best[0][0] = 0;
+  for (let k = 1; k <= lines; k++)
+    for (let i = 3 * k; i <= n; i++) {
+      if (k === lines && i !== n) continue;
+      for (let j = 3 * (k - 1); j <= i - 3; j++) {
+        if (best[k - 1][j] === -Infinity) continue;
+        // the silence before this line starts (none before the first), and how far its length is from the typical
+        const gap = j > 0 ? rest[j - 1] / top : 0;
+        const score = best[k - 1][j] + 2 * gap - Math.abs(len(j, i - 1) - target) / target;
+        if (score > best[k][i]) {
+          best[k][i] = score;
+          prev[k][i] = j;
+        }
+      }
+    }
+  if (best[lines][n] === -Infinity) return [];
+  const cuts: number[] = [];
+  for (let k = lines, i = n; k > 1; k--) {
+    i = prev[k][i];
+    cuts.unshift(i);
+  }
+  return cuts;
+}
+
 /** example words group by group, a comma at each break: the words are as long as the singing's phrases */
 export function exampleLine(n: number, stress: number[], breaks: number[], lang: string, seed: number): string {
   const cuts = [0, ...breaks.filter((b) => b > 0 && b < n), n];

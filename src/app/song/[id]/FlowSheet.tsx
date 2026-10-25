@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { barsPerLine, chipsOf, lineFromText, linesFromBreaks, linesFromOnsets, ownWords, relayout, type Onset } from "@/lib/flow/pattern";
+import { barsPerLine, chipsOf, lineCuts, lineFromText, linesFromBreaks, linesFromOnsets, ownWords, relayout, type Onset } from "@/lib/flow/pattern";
 import { quantizeTaps } from "@/lib/flow/grid";
 import type { FlowPattern, PatternLine, SongFlow } from "@/lib/types";
 import { Check, Hand, LineBreak, Mic, Pencil, Play, Restart, Sparkles } from "@/components/icons";
@@ -17,6 +17,8 @@ export interface SheetAudio {
   /** the song time being heard now */
   songTime: () => number;
   armMic: () => Promise<void>;
+  /** the microphone's level now, 0..1 (singing: it stops when you do) */
+  level?: () => number;
   startRec: () => void;
   /** stops recording → where the sung syllables start (song time), how loud they were and how long held */
   stopRec: (keepFrom: number) => Promise<{ t: number; strength: number; dur?: number }[]>;
@@ -109,6 +111,9 @@ export function FlowSheet({
 
   // recording / tapping: count-in bar, then the pattern's bars; over → the lines
   const finish = useRef<(() => Promise<void>) | null>(null);
+  /** singing: the loudest level so far and when the voice was last heard */
+  const peak = useRef(0);
+  const lastVoice = useRef(0);
   const audioRef = useRef(audio);
   useEffect(() => {
     audioRef.current = audio;
@@ -119,6 +124,15 @@ export function FlowSheet({
       const t = audioRef.current.songTime();
       setNow(t);
       const br = breaksRef.current;
+      // singing without "Next line": on until you stop singing (a bar of quiet after the pattern's bars), at most
+      // twice as long — a sung line is often longer than its bar
+      if (mode !== "tap" && !br.length) {
+        const lvl = audioRef.current.level?.() ?? 0;
+        peak.current = Math.max(peak.current * 0.999, lvl);
+        if (lvl > Math.max(0.02, 0.2 * peak.current)) lastVoice.current = t;
+        if (t > limit || (t > end && t - Math.max(lastVoice.current, end - bar) > bar)) void finish.current?.();
+        return;
+      }
       // no "Next line": a line per bar, over after the last bar
       if (!br.length) {
         if (t > end + 0.15) void finish.current?.();
@@ -137,6 +151,8 @@ export function FlowSheet({
     setHint(null);
     tapsRef.current = [];
     setTaps(0);
+    peak.current = 0;
+    lastVoice.current = 0;
     breaksRef.current = [];
     setBreaks(0);
     finishing.current = false;
@@ -183,8 +199,10 @@ export function FlowSheet({
       }
       // "Next line" splits the lines (else the bar lines do): where the next line's first syllable is
       const br = breaksRef.current;
-      const firsts = br.map((b) => (mode === "sing" ? onsets.filter((o) => o.t < b.t).length : b.taps));
-      const got = br.length ? linesFromBreaks(onsets, firsts, barStart, bar, p, lang, seed.current++) : linesFromOnsets(onsets, barStart, bar, p, lang, seed.current++);
+      // without it, sung: the lines break where the singing rests longest (not at the bar lines)
+      const sorted = [...onsets].sort((x, y) => x.t - y.t);
+      const firsts = br.length ? br.map((b) => (mode === "sing" ? onsets.filter((o) => o.t < b.t).length : b.taps)) : mode !== "tap" ? lineCuts(sorted, p) : [];
+      const got = firsts.length ? linesFromBreaks(sorted, firsts, barStart, bar, p, lang, seed.current++) : linesFromOnsets(onsets, barStart, bar, p, lang, seed.current++);
       if (got.every((l) => !l.syllables)) {
         setHint(mode === "sing" ? "Nothing was heard — sing a bit louder, or closer to the phone." : "No taps — tap once per syllable while the bars play.");
         return;
@@ -369,7 +387,7 @@ export function FlowSheet({
               <>
                 {mode === "sing" ? <Mic className="h-10 w-10" /> : <Hand className="h-10 w-10" />}
                 <span className="text-lg font-bold">
-                  {mode === "sing" ? "Sing!" : "Tap!"} · {breaks ? `line ${Math.min(p, breaks + 1)} of ${p}` : `bar ${Math.min(p, Math.floor((now - barStart) / bar) + 1)}`}
+                  {mode === "sing" ? "Sing!" : "Tap!"} · {breaks ? `line ${Math.min(p, breaks + 1)} of ${p}` : `bar ${mode === "tap" ? Math.min(p, Math.floor((now - barStart) / bar) + 1) : Math.floor((now - barStart) / bar) + 1}`}
                 </span>
                 {mode !== "sing" && <span className="text-sm tabular-nums opacity-90">{taps} syllables</span>}
               </>
@@ -391,7 +409,9 @@ export function FlowSheet({
             <span className="text-base font-bold leading-tight">{breaks >= p - 1 ? "Done" : <>Next<br />line</>}</span>
           </button>
           </div>
-          <p className="text-center text-[11px] text-muted">“Next line” when a line is done — or leave it: each bar is a line.</p>
+          <p className="text-center text-[11px] text-muted">
+            {mode === "tap" ? "“Next line” when a line is done — or leave it: each bar is a line." : "“Next line” when a line is done — or just sing: it stops when you do, the lines break at your longest pauses."}
+          </p>
           </div>
         )}
 

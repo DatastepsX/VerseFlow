@@ -790,6 +790,7 @@ export function SongApp({
     armMic: async () => {
       await engine.current?.arm(undefined, { voiceProcessing: !headphones });
     },
+    level: () => engine.current?.level() ?? 0,
     startRec: () => engine.current?.startRecording(),
     stopRec: async (keepFrom) => {
       const e = engine.current;

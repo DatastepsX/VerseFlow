@@ -6,7 +6,7 @@ import { dropSounds, isSound } from "./fillers";
 import { cycle, flowFromGrid, gridFor, quantizeTaps } from "./grid";
 import { exampleWords, isExampleText } from "./example";
 import { coupletsOf } from "./couplets";
-import { barsPerLine, chipsOf, lineFlowFrom, lineFromText, linesFromBreaks, linesFromOnsets, nextFlowName, ownWords, relayout } from "./pattern";
+import { barsPerLine, chipsOf, lineCuts, lineFlowFrom, lineFromText, linesFromBreaks, linesFromOnsets, nextFlowName, ownWords, relayout } from "./pattern";
 import { prosody } from "@/lib/rhyme/prosody";
 import { emptyParts, vocalLines } from "./vocals";
 
@@ -411,4 +411,32 @@ test("taps: a clearly longer gap is a break between word groups, not a long note
   assert.deepEqual(l.pauses, [4, 7]);
   assert.deepEqual(l.long, [10]);
   assert.equal(l.text.split(", ").length, 3, l.text);
+});
+
+test("sung lines without 'Next line': they break at the singer's longest pauses, not at the bar lines", () => {
+  // 4 lines of "Mentre ti guardo ‖ questa notte ‖ io mi sveglio con te" (5 + 4 + 6), each starting mid-bar,
+  // ~0.25 s breaks inside a line, ~0.7 s between lines
+  const events: { t: number; dur: number; amp: number }[] = [];
+  let t = 0.9;
+  for (let line = 0; line < 4; line++) {
+    for (const [g, n] of [5, 4, 6].entries()) {
+      for (let k = 0; k < n; k++) {
+        events.push({ t, dur: 0.12, amp: k === 1 ? 0.5 : 0.35 });
+        t += 0.17;
+      }
+      if (g < 2) t += 0.25;
+    }
+    t += 0.7;
+  }
+  const syl = detectSyllables(voice(events, t + 1), SR).map((s) => ({ ...s, t: s.t + 10 }));
+  assert.equal(syl.length, 60);
+  const cuts = lineCuts(syl, 4);
+  assert.deepEqual(cuts, [15, 30, 45]);
+  const bar = 4 * (60 / 90);
+  const lines = linesFromBreaks(syl, cuts, 10, bar, 4, "it");
+  assert.deepEqual(
+    lines.map((l) => l.syllables),
+    [15, 15, 15, 15],
+  );
+  assert.ok(lines.every((l) => l.pauses.join() === "5,9"), lines.map((l) => l.pauses.join()).join(" | "));
 });
