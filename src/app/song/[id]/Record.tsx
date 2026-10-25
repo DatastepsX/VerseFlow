@@ -123,6 +123,8 @@ function RecordScreen({ r, tree, setTree, rangeOf, bar, timeline, onBusy, host, 
     const inside = all.filter((l) => l.audio_at !== null && l.audio_at >= t.start_at - 0.3 && l.audio_at < t.start_at + t.duration - 0.3);
     return inside.length ? inside : all.filter((l) => l.section_id === t.section_id);
   };
+  /** the take being cut */
+  const [cutting, setCutting] = useState<string | null>(null);
   /** forced alignment: the take + its lines' text → every syllable's time (1 call); the lines' flow follows the take */
   const [syncing, setSyncing] = useState<string | null>(null);
   const [synced, setSynced] = useState<Record<string, string>>({});
@@ -459,6 +461,20 @@ function RecordScreen({ r, tree, setTree, rangeOf, bar, timeline, onBusy, host, 
                         </button>
                       )}
                       {synced[t.id] && <p className="mt-1 text-[11px] text-accent">{synced[t.id]}</p>}
+                      {(() => {
+                        const full = tree.takes.find((x) => x.id === t.id);
+                        const cut = full && (full.trim_in > 0 || full.trim_out !== null);
+                        return (
+                          <button
+                            className={`mt-1.5 ml-1.5 inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-semibold disabled:opacity-40 ${cut ? "bg-accent-soft text-accent" : "bg-panel-2 text-fg/80"}`}
+                            disabled={!idle || !full}
+                            onClick={() => setCutting(t.id)}
+                            aria-label={`Cut take ${t.take_no}`}
+                          >
+                            ✂ {cut ? `Cut · ${fmtTime((full!.trim_out ?? full!.duration) - full!.trim_in)}` : "Cut"}
+                          </button>
+                        );
+                      })()}
                     </div>
                     {!t.chosen && (
                       <button className="flex h-8 shrink-0 items-center gap-1 rounded-full bg-panel-2 px-3 text-xs font-semibold disabled:opacity-40" disabled={!idle} onClick={() => r.choose(t.id)}>
@@ -513,6 +529,26 @@ function RecordScreen({ r, tree, setTree, rangeOf, bar, timeline, onBusy, host, 
       {r.note && <div className="fixed left-1/2 top-20 z-30 -translate-x-1/2 rounded-full bg-fg px-3.5 py-1.5 text-xs font-semibold text-bg shadow-lg">{r.note}</div>}
 
       {sheet && <RecordSettings r={r} size={size} setSize={setSize} onClose={() => setSheet(false)} />}
+      {cutting &&
+        (() => {
+          const full = tree.takes.find((x) => x.id === cutting);
+          const rt = r.takes.find((x) => x.id === cutting);
+          if (!full) return null;
+          return (
+            <TakeCut
+              take={full}
+              peaks={rt?.peaks ?? full.peaks ?? []}
+              onSave={async (from, to) => {
+                const res = await fetch(`/api/takes/${full.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ trim: { from, to } }) });
+                if (res.ok) setTree((await res.json()) as ProjectTree);
+              }}
+              onPlay={() => r.playTake(full.id)}
+              onStop={() => r.stop()}
+              playing={r.status === "playing" && r.playingTake === full.id}
+              onClose={() => setCutting(null)}
+            />
+          );
+        })()}
       {soundFor && <SoundLibrary r={r} lane={soundFor} hasTake={r.takes.some((t) => t.lane === soundFor)} onClose={() => setSoundFor(null)} />}
     </>
   );
@@ -837,5 +873,110 @@ function Toggle({ on, onChange }: { on: boolean; onChange: (on: boolean) => void
     >
       <span className={`absolute top-0.5 h-6 w-6 rounded-full bg-white shadow transition-all ${on ? "left-[22px]" : "left-0.5"}`} />
     </button>
+  );
+}
+
+/**
+ * Cut a take: where it starts and ends (the rest stays in the recording: a cut can be undone or moved). The
+ * waveform shows what plays; the outside is dimmed.
+ */
+function TakeCut(props: {
+  take: { id: string; take_no: number; lane: string; duration: number; trim_in: number; trim_out: number | null };
+  peaks: number[];
+  onSave: (from: number, to: number | null) => Promise<void>;
+  onPlay: () => void;
+  onStop: () => void;
+  playing: boolean;
+  onClose: () => void;
+}) {
+  const d = props.take.duration;
+  const [from, setFrom] = useState(props.take.trim_in);
+  const [to, setTo] = useState(props.take.trim_out ?? d);
+  const [busy, setBusy] = useState(false);
+  const changed = Math.abs(from - props.take.trim_in) > 0.005 || Math.abs(to - (props.take.trim_out ?? d)) > 0.005;
+  const save = async (a: number, b: number) => {
+    setBusy(true);
+    try {
+      await props.onSave(a, b >= d - 0.01 ? null : b);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const n = 120;
+  const step = Math.max(1, props.peaks.length / n);
+  const bars = Array.from({ length: Math.min(n, props.peaks.length) }, (_, i) => props.peaks[Math.floor(i * step)] ?? 0);
+  const pct = (t: number) => `${(t / Math.max(0.01, d)) * 100}%`;
+  return (
+    <div className="fixed inset-0 z-40 flex items-end justify-center bg-black/40" onClick={() => !busy && props.onClose()}>
+      <div onClick={(e) => e.stopPropagation()} className="w-full max-w-lg space-y-4 rounded-t-3xl bg-panel px-4 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-3">
+        <div className="mx-auto h-1.5 w-10 rounded-full bg-line" />
+        <div>
+          <h2 className="text-xl font-bold">
+            Cut {props.take.lane} take {props.take.take_no}
+          </h2>
+          <p className="text-xs text-muted">
+            {fmtTime(from)} – {fmtTime(to)} · {Math.round((to - from) * 10) / 10} s of {Math.round(d * 10) / 10} s. The rest stays in the recording.
+          </p>
+        </div>
+        <div className="relative h-16 overflow-hidden rounded-xl bg-panel-2">
+          <svg viewBox={`0 0 ${bars.length * 3} 20`} preserveAspectRatio="none" className="absolute inset-0 h-full w-full text-accent" aria-hidden>
+            {bars.map((v, i) => (
+              <rect key={i} x={i * 3} y={10 - Math.max(0.5, v * 9)} width={2} height={Math.max(1, v * 18)} fill="currentColor" />
+            ))}
+          </svg>
+          <div className="absolute inset-y-0 left-0 bg-bg/70" style={{ width: pct(from) }} />
+          <div className="absolute inset-y-0 right-0 bg-bg/70" style={{ width: `calc(100% - ${pct(to)})` }} />
+          <div className="absolute inset-y-0 w-0.5 bg-fg" style={{ left: pct(from) }} />
+          <div className="absolute inset-y-0 w-0.5 bg-fg" style={{ left: `calc(${pct(to)} - 2px)` }} />
+        </div>
+        <label className="block space-y-1 text-sm">
+          <span className="flex justify-between">
+            <span className="font-semibold">Start</span>
+            <span className="font-mono text-xs text-muted">{from.toFixed(2)} s</span>
+          </span>
+          <input type="range" className="w-full accent-[var(--accent)]" min={0} max={d} step={0.01} value={from} onChange={(e) => setFrom(Math.min(Number(e.target.value), to - 0.2))} aria-label="Start of the cut" />
+        </label>
+        <label className="block space-y-1 text-sm">
+          <span className="flex justify-between">
+            <span className="font-semibold">End</span>
+            <span className="font-mono text-xs text-muted">{to.toFixed(2)} s</span>
+          </span>
+          <input type="range" className="w-full accent-[var(--accent)]" min={0} max={d} step={0.01} value={to} onChange={(e) => setTo(Math.max(Number(e.target.value), from + 0.2))} aria-label="End of the cut" />
+        </label>
+        <div className="flex gap-2">
+          <button
+            className="btn flex-1 justify-center rounded-2xl border-0 bg-panel-2 py-3 text-sm disabled:opacity-50"
+            disabled={busy}
+            onClick={async () => {
+              if (props.playing) return props.onStop();
+              // what you hear is what is saved
+              if (changed) await save(from, to);
+              props.onPlay();
+            }}
+          >
+            {props.playing ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />} {props.playing ? "Stop" : "Play the cut"}
+          </button>
+          <button className="btn-primary flex-1 justify-center rounded-2xl py-3 text-sm disabled:opacity-50" disabled={busy} onClick={async () => {
+            if (changed) await save(from, to);
+            props.onClose();
+          }}>
+            <Check className="h-4 w-4" /> Done
+          </button>
+        </div>
+        {(props.take.trim_in > 0 || props.take.trim_out !== null) && (
+          <button
+            className="w-full text-center text-xs text-muted underline"
+            disabled={busy}
+            onClick={async () => {
+              setFrom(0);
+              setTo(d);
+              await save(0, d);
+            }}
+          >
+            The whole take again
+          </button>
+        )}
+      </div>
+    </div>
   );
 }

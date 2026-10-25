@@ -32,7 +32,7 @@ import type { Extension } from "@/lib/audio/arrange";
 
 const r3 = (t: number) => Math.round(t * 1000) / 1000;
 
-const TAKE_COLS = "id, section_id, lane, take_no, start_at, duration, sample_rate, peaks, chosen, created_at";
+const TAKE_COLS = "id, section_id, lane, take_no, start_at, duration, sample_rate, peaks, chosen, trim_in, trim_out, created_at";
 const LINE_COLS = "id, project_id, section_id, position, text, status, kind, note, audio_at, flow, marks, updated_at";
 const SNAPSHOT_FIELDS = ["text", "status", "kind", "note", "deleted", "flow", "marks"] as const;
 
@@ -1456,6 +1456,17 @@ export async function chooseTake(id: string) {
 }
 
 /** a take moved on the beat (seconds, + later / − earlier): to fix its timing by ear */
+/** a take cut: only its part from `from` to `to` (seconds of the recording) plays; the recording stays whole */
+export async function trimTake(id: string, from: number, to: number | null) {
+  const t = check(await db().from("takes").select("project_id, duration").eq("id", id).maybeSingle()) as { project_id: string; duration: number } | null;
+  if (!t) throw new NotFound("Take not found");
+  const a = Math.max(0, Math.min(from, t.duration - 0.2));
+  const b = to === null || to >= t.duration - 0.01 ? null : Math.max(a + 0.2, Math.min(to, t.duration));
+  check(await db().from("takes").update({ trim_in: Math.round(a * 1000) / 1000, trim_out: b === null ? null : Math.round(b * 1000) / 1000 }).eq("id", id));
+  await touch(t.project_id);
+  return t.project_id;
+}
+
 export async function shiftTake(id: string, by: number) {
   const t = await getTake(id);
   const row = check(await db().from("takes").select("start_at").eq("id", id).single()) as { start_at: number };

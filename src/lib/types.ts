@@ -190,6 +190,9 @@ export interface Take {
   duration: number;
   sample_rate: number;
   peaks: number[] | null;
+  /** cut: the part of the recording that plays (seconds from its start; trim_out null = to its end) */
+  trim_in: number;
+  trim_out: number | null;
   /** the take used for playback and exports (one per section + layer) */
   chosen: boolean;
   created_at: string;

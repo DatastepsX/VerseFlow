@@ -306,7 +306,7 @@ export function useLocalRecorder(o: {
     for (const t of takes) {
       const p = trying?.lane === t.lane ? presetById(trying.preset) : layerPreset(sounds, t.lane);
       const buffer = await voiced(t, p);
-      if (buffer) out.push({ buffer, at: t.start_at, fx: p.id === "raw" ? undefined : (ctx) => buildChain(ctx, p, bpm) });
+      if (buffer) out.push({ buffer, at: t.start_at, fx: p.id === "raw" ? undefined : (ctx) => buildChain(ctx, p, bpm), clip: t.trim_in > 0 || t.trim_out !== null ? { from: t.trim_in ?? 0, to: t.trim_out } : undefined });
     }
     return out;
   };

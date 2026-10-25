@@ -19,6 +19,8 @@ export interface PlayLayer {
   gain?: number;
   /** its sound: an effect chain built for this playback (see lib/fx) */
   fx?: (ctx: BaseAudioContext) => { input: AudioNode; output: AudioNode };
+  /** a cut take: only this part of the buffer plays (seconds of the buffer; `at` stays where the buffer starts) */
+  clip?: { from: number; to: number | null };
 }
 
 export interface Recording {
@@ -146,9 +148,12 @@ export class StudioEngine {
     this.stop();
     const start = this.ctx.currentTime + 0.12;
     this.base = start - from;
-    const schedule = (buffer: AudioBuffer, at: number, gainValue: number, fx?: PlayLayer["fx"]) => {
-      const offset = Math.max(0, from - at);
-      if (offset >= buffer.duration) return;
+    const schedule = (buffer: AudioBuffer, at: number, gainValue: number, fx?: PlayLayer["fx"], clip?: PlayLayer["clip"]) => {
+      // a cut take: only [c0, c1] of the buffer, at its place in the song
+      const c0 = Math.max(0, clip?.from ?? 0);
+      const c1 = Math.min(buffer.duration, clip?.to ?? buffer.duration);
+      const offset = c0 + Math.max(0, from - (at + c0));
+      if (offset >= c1) return;
       const src = this.ctx.createBufferSource();
       src.buffer = buffer;
       const g = this.ctx.createGain();
@@ -160,11 +165,20 @@ export class StudioEngine {
         chain.output.connect(this.ctx.destination);
         this.chains.push(chain.output);
       } else g.connect(this.ctx.destination);
-      src.start(this.base + Math.max(at, from), offset);
+      // a short fade at a cut's edges: no click
+      if (clip && (c0 > 0 || c1 < buffer.duration)) {
+        const t0 = this.base + Math.max(at + c0, from);
+        const t1 = t0 + (c1 - offset);
+        g.gain.setValueAtTime(0, t0);
+        g.gain.linearRampToValueAtTime(gainValue, t0 + 0.008);
+        g.gain.setValueAtTime(gainValue, Math.max(t0 + 0.008, t1 - 0.012));
+        g.gain.linearRampToValueAtTime(0, t1);
+      }
+      src.start(this.base + Math.max(at + c0, from), offset, c1 - offset);
       this.playing.push(src);
     };
     if (opts.beat) schedule(opts.beat, 0, opts.beatGain ?? 1);
-    for (const l of opts.layers ?? []) schedule(l.buffer, l.at, l.gain ?? 1, l.fx);
+    for (const l of opts.layers ?? []) schedule(l.buffer, l.at, l.gain ?? 1, l.fx, l.clip);
     for (const c of opts.clicks ?? []) if (c.at >= from) this.click(this.base + c.at, c.accent);
     return this.base;
   }

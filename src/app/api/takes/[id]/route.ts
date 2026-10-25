@@ -1,4 +1,4 @@
-import { chooseTake, deleteTake, getTree, setLineTimes, shiftTake, takeProject, updateLine } from "@/lib/server/repo";
+import { chooseTake, deleteTake, getTree, setLineTimes, shiftTake, takeProject, trimTake, updateLine } from "@/lib/server/repo";
 import { alignTake } from "@/lib/server/transcribe";
 import { alignmentText, alignTakeLines } from "@/lib/flow/align";
 import { body, handle, treeResponse } from "@/lib/server/http";
@@ -10,8 +10,11 @@ export const maxDuration = 120;
 export async function PATCH(req: Request, ctx: RouteContext<"/api/takes/[id]">) {
   return handle(async () => {
     const { id } = await ctx.params;
-    const b = await body<{ shift?: unknown }>(req);
+    const b = await body<{ shift?: unknown; trim?: { from?: unknown; to?: unknown } }>(req);
     if (typeof b.shift === "number" && Number.isFinite(b.shift)) return treeResponse(await shiftTake(id, Math.max(-0.5, Math.min(0.5, b.shift))));
+    // cut: {trim: {from, to}} (to null: to the end; {from: 0, to: null}: the whole take again)
+    if (b.trim && typeof b.trim.from === "number" && Number.isFinite(b.trim.from))
+      return treeResponse(await trimTake(id, b.trim.from, typeof b.trim.to === "number" && Number.isFinite(b.trim.to) ? b.trim.to : null));
     return treeResponse(await chooseTake(id));
   });
 }

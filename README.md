@@ -141,6 +141,15 @@ or use only their rhythm, and give the part a **brief** — mood, perspective (m
 to use (`src/lib/brief.ts`). The brief is kept per part (`settings.briefs`) and every AI writing for the part follows
 it (`partBrief` / `flowSuggest` in `ai.ts`). "Flow only, write later" applies the flow without a call.
 
+**Several devices:** a song open on more than one device follows the changes made on any of them within ~3 s
+(`project_version` in the database, `/api/projects/[id]/version`). **Main device** (Settings, or This phone / My Mac
+in Record — `vf.studio.main`, kept with the profile): with the Mac as the main device the phone is its remote for the
+whole song — the tab and part opened on the phone open on the Mac, play / stop / Hear play there (remote commands
+`nav`, `songPlay`, `songStop`).
+
+**Cutting a take** (Record → a take → ✂ Cut): its start and end (`takes.trim_in` / `trim_out`); the recording stays
+whole, only the cut plays (`PlayLayer.clip`), and "The whole take again" undoes it.
+
 **Your settings** (`/settings`: the slider button on Home, More → Your settings, Record → Settings): recording
 (count-in, click, lyrics size, headphones), timing, your voice, the ElevenLabs account, appearance — the same in every
 song and on every device. Kept with the profile (table `user_settings`, one row; `/api/profile`), with a copy in the

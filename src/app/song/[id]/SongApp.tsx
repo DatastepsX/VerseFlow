@@ -297,7 +297,7 @@ export function SongApp({
     return takes.flatMap((t) => {
       const buffer = flowBufs.current.get(t.id);
       const p = layerPreset(tree.project.settings?.fx, t.lane);
-      return buffer ? [{ buffer, at: t.start_at, fx: p.id === "raw" ? undefined : (ctx: BaseAudioContext) => buildChain(ctx, p, bpm) }] : [];
+      return buffer ? [{ buffer, at: t.start_at, fx: p.id === "raw" ? undefined : (ctx: BaseAudioContext) => buildChain(ctx, p, bpm), clip: t.trim_in > 0 || t.trim_out !== null ? { from: t.trim_in ?? 0, to: t.trim_out } : undefined }] : [];
     });
   };
   const [now, setNow] = useState(0);
@@ -409,7 +409,7 @@ export function SongApp({
     // your voice replaces your flow (two voices at once are hard to follow)
     const flowOn = (opts.flow ?? withFlow) && !guideL.length;
     if (flowOn) await loadFlow().catch(() => {});
-    const flows = flowOn ? flowTakes.flatMap((t) => (flowBufs.current.has(t.id) ? [{ buffer: flowBufs.current.get(t.id)!, at: t.start_at, gain: 0.9 }] : [])) : [];
+    const flows = flowOn ? flowTakes.flatMap((t) => (flowBufs.current.has(t.id) ? [{ buffer: flowBufs.current.get(t.id)!, at: t.start_at, gain: 0.9, clip: t.trim_in > 0 || t.trim_out !== null ? { from: t.trim_in ?? 0, to: t.trim_out } : undefined }] : [])) : [];
     // your recorded takes (Record), unless muted; not with clicks (tapping / singing a flow)
     const takes = opts.clicks || opts.guide ? [] : await takeLayers().catch(() => []);
     const layers = [...flows, ...guideL, ...takes];
