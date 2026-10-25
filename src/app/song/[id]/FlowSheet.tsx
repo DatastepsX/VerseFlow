@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { barsPerLine, chipsOf, lineFromText, linesFromBreaks, linesFromOnsets, ownWords, relayout } from "@/lib/flow/pattern";
+import { barsPerLine, chipsOf, lineFromText, linesFromBreaks, linesFromOnsets, ownWords, relayout, type Onset } from "@/lib/flow/pattern";
 import { quantizeTaps } from "@/lib/flow/grid";
 import type { FlowPattern, PatternLine, SongFlow } from "@/lib/types";
 import { Check, Hand, LineBreak, Mic, Pencil, Play, Restart, Sparkles } from "@/components/icons";
@@ -18,8 +18,8 @@ export interface SheetAudio {
   songTime: () => number;
   armMic: () => Promise<void>;
   startRec: () => void;
-  /** stops recording → where the sung syllables start (song time) and how loud they were */
-  stopRec: (keepFrom: number) => Promise<{ t: number; strength: number }[]>;
+  /** stops recording → where the sung syllables start (song time), how loud they were and how long held */
+  stopRec: (keepFrom: number) => Promise<{ t: number; strength: number; dur?: number }[]>;
 }
 
 const emptyLine = (): PatternLine => ({ text: "", written: true, syllables: 0, stress: [], long: [], pauses: [], offsets: [] });
@@ -162,7 +162,7 @@ export function FlowSheet({
       setPhase("idle");
       const voice = mode !== "tap" ? await audio.stopRec(Math.max(0, barStart - 0.4)) : [];
       audio.stop();
-      let onsets: { t: number; strength?: number | null }[];
+      let onsets: Onset[];
       if (mode === "sing") onsets = voice;
       else {
         // taps count the syllables; with the voice, each moves onto the syllable sung there
@@ -173,13 +173,13 @@ export function FlowSheet({
             if (!used.has(k) && Math.abs(v.t - t) <= 0.12 && (best < 0 || Math.abs(v.t - t) < Math.abs(voice[best].t - t))) best = k;
           });
           if (best >= 0) used.add(best);
-          return best >= 0 ? { t: voice[best].t, strength: voice[best].strength } : { t, strength: null };
+          return best >= 0 ? { t: voice[best].t, strength: voice[best].strength, dur: voice[best].dur } : { t, strength: null, dur: null };
         });
         const q = quantizeTaps(
           refined.map((x) => x.t),
           { bpm: 240 / bar, beat_offset: barStart, beats_per_bar: 4 },
         );
-        onsets = q.map((x, i) => ({ t: x.t, strength: refined[i]?.strength ?? null }));
+        onsets = q.map((x, i) => ({ t: x.t, strength: refined[i]?.strength ?? null, dur: refined[i]?.dur ?? null }));
       }
       // "Next line" splits the lines (else the bar lines do): where the next line's first syllable is
       const br = breaksRef.current;

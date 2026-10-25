@@ -372,3 +372,43 @@ test("Next line: lines split where it was tapped, not at the bar lines", () => {
     [14, 0],
   );
 });
+
+test("sung phrasing: connected words stay one group, the breaks between groups become pauses and commas", () => {
+  // "Mentre ti guardo ‖ questa notte ‖ io mi sveglio con te": 5 + 4 + 6 syllables, connected inside a group
+  // (a syllable every 0.17 s, only a consonant between), a short break (~0.3 s) between the groups
+  const groups = [5, 4, 6];
+  const events: { t: number; dur: number; amp: number }[] = [];
+  let t = 0.5;
+  for (const n of groups) {
+    for (let k = 0; k < n; k++) {
+      events.push({ t, dur: 0.12, amp: k === 1 ? 0.5 : 0.35 }); // a consonant between: a short dip
+      t += 0.17;
+    }
+    t += 0.3;
+  }
+  const syl = detectSyllables(voice(events, t + 1), SR);
+  assert.equal(syl.length, 15);
+  const bar = 4 * (60 / 85);
+  // one line ("Next line" after it): it may run past its bar
+  const [line] = linesFromBreaks(syl.map((s) => ({ ...s, t: s.t + 10 })), [], 10, bar, 1, "it");
+  assert.equal(line.syllables, 15);
+  assert.deepEqual(line.pauses, [5, 9]);
+  // the example words come in the same groups: 5, 4 and 6 syllables, a comma at each break
+  const parts = line.text.split(", ");
+  assert.deepEqual(
+    parts.map((p) => prosody(p, "it").syllables),
+    [5, 4, 6],
+    line.text,
+  );
+  // no long notes inside connected groups
+  assert.deepEqual(line.long.filter((k) => k < 15), []);
+});
+
+test("taps: a clearly longer gap is a break between word groups, not a long note", () => {
+  const bar = 2; // 120 bpm, beat 0.5
+  const taps = [10, 10.15, 10.3, 10.45, /* break */ 10.95, 11.1, 11.25, /* break */ 11.75, 11.9, 12.05].map((t) => ({ t }));
+  const [l] = linesFromBreaks(taps, [], 10, bar, 1, "it");
+  assert.deepEqual(l.pauses, [4, 7]);
+  assert.deepEqual(l.long, [10]);
+  assert.equal(l.text.split(", ").length, 3, l.text);
+});

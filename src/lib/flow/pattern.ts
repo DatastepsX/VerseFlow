@@ -104,7 +104,7 @@ export function relayout(line: PatternLine, bar: number): PatternLine {
  * length until the writer types their own.
  */
 export function linesFromOnsets(
-  onsets: { t: number; strength?: number | null }[],
+  onsets: Onset[],
   from: number,
   bar: number,
   bars: number,
@@ -126,7 +126,7 @@ export function linesFromOnsets(
  * timed from the bar line it starts in (a little early still counts as on it).
  */
 export function linesFromBreaks(
-  onsets: { t: number; strength?: number | null }[],
+  onsets: Onset[],
   firsts: number[],
   from: number,
   bar: number,
@@ -149,8 +149,49 @@ export function linesFromBreaks(
   });
 }
 
+/** a sung syllable (or a tap): where it starts, how loud, how long the voice holds it (sung only) */
+export interface Onset {
+  t: number;
+  strength?: number | null;
+  dur?: number | null;
+}
+
+/**
+ * Where the singing breaks between groups of words ("Mentre ti guardo · questa notte · io mi sveglio con
+ * te"): after syllable i (1-based) when the next one comes clearly later than the line's usual pace AND the
+ * voice stopped in between (sung). Tapped: a clearly longer gap. Connected syllables stay one group.
+ */
+export function phraseBreaks(on: Onset[], beat: number): number[] {
+  if (on.length < 3) return [];
+  const ioi = on.slice(1).map((o, i) => o.t - on[i].t);
+  const typical = [...ioi].sort((a, b) => a - b)[Math.floor(ioi.length / 2)];
+  const out: number[] = [];
+  ioi.forEach((d, i) => {
+    const dur = on[i].dur;
+    const silence = dur !== null && dur !== undefined ? d - dur : null;
+    const later = d >= Math.max(1.45 * typical, typical + 0.1);
+    const stopped = silence === null ? d >= Math.max(1.75 * typical, 0.5 * beat) : silence >= Math.max(0.1, 0.12 * beat);
+    if (later && stopped) out.push(i + 1);
+  });
+  return out;
+}
+
+/** example words group by group, a comma at each break: the words are as long as the singing's phrases */
+export function exampleLine(n: number, stress: number[], breaks: number[], lang: string, seed: number): string {
+  const cuts = [0, ...breaks.filter((b) => b > 0 && b < n), n];
+  const used = new Set<string>();
+  return cuts
+    .slice(1)
+    .map((end, g) => {
+      const from = cuts[g];
+      const words = exampleWords(end - from, stress.filter((s) => s > from && s <= end).map((s) => s - from), lang, seed * 7 + g, used);
+      return g > 0 && lang !== "de" ? words.charAt(0).toLowerCase() + words.slice(1) : words;
+    })
+    .join(", ");
+}
+
 /** one sung / tapped line: its onsets timed from the bar line `start` */
-function sungLine(on: { t: number; strength?: number | null }[], start: number, bar: number, lang: string, seed: number, until = bar): PatternLine {
+function sungLine(on: Onset[], start: number, bar: number, lang: string, seed: number, until = bar): PatternLine {
   const beat = bar / 4;
   const offsets = on.map((o) => round(Math.max(0, o.t - start)));
   const top = Math.max(0, ...on.map((o) => o.strength ?? 0));
@@ -165,16 +206,24 @@ function sungLine(on: { t: number; strength?: number | null }[], start: number, 
   // two stresses in a row only when both fall on beats
   for (let i = 1; i < marked.length; i++) if (marked[i] && marked[i - 1] && !onBeat[i]) marked[i] = false;
   const stress = marked.map((m, i) => (m ? i + 1 : 0)).filter(Boolean);
-  const long = offsets.map((t, i) => ((offsets[i + 1] ?? until) - t >= beat * 0.95 ? i + 1 : 0)).filter(Boolean);
+  const pauses = phraseBreaks(on, beat);
+  // long: held a quarter or more (sung: as long as the voice holds it; tapped: until the next tap — a break isn't a long note)
+  const long = offsets
+    .map((t, i) => {
+      const dur = on[i].dur;
+      const held = dur !== null && dur !== undefined ? dur : pauses.includes(i + 1) ? 0 : (offsets[i + 1] ?? until) - t;
+      return held >= beat * 0.95 ? i + 1 : 0;
+    })
+    .filter(Boolean);
   const n = on.length;
   return {
-    text: n ? exampleWords(n, stress, lang, seed) : "",
+    text: n ? exampleLine(n, stress, pauses, lang, seed) : "",
     written: false,
     sung: true,
     syllables: n,
     stress,
     long,
-    pauses: [],
+    pauses,
     offsets,
   };
 }
@@ -218,6 +267,7 @@ export function lineFlowFrom(pattern: FlowPattern, i: number, barStart: number, 
     times,
     end: round(last + (held ? bar / 4 : bar / 8) * 1),
     pair,
+    ...(pl.pauses?.length ? { pauses: pl.pauses } : {}),
     flowId,
     patternLine: k,
     scheme: pattern.scheme,

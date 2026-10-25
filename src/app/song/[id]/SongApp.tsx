@@ -797,7 +797,7 @@ export function SongApp({
       const r = await e.stopRecording(e.reportedLatency, 0, keepFrom);
       e.disarm();
       if (!r) return [];
-      return detectSyllables(r.samples, r.sampleRate).map((x) => ({ t: x.t + r.startAt, strength: x.strength }));
+      return detectSyllables(r.samples, r.sampleRate).map((x) => ({ t: x.t + r.startAt, strength: x.strength, dur: x.dur }));
     },
   };
   const useFlow = async (use: { flowId: string } | { pattern: import("@/lib/types").FlowPattern }) => {

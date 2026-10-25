@@ -41,7 +41,7 @@ function bank(lang: string) {
  * n syllables, stresses at the given positions (1-based). seed varies the
  * words (the same flow can show other examples).
  */
-export function exampleWords(n: number, stress: number[], lang: string, seed = 0): string {
+export function exampleWords(n: number, stress: number[], lang: string, seed = 0, avoid?: Set<string>): string {
   if (n < 1) return "";
   const { key, list } = bank(lang);
   const want = new Set(stress.map((s) => s - 1));
@@ -70,7 +70,8 @@ export function exampleWords(n: number, stress: number[], lang: string, seed = 0
   const out: string[] = [];
   for (let i = n; i > 0 && dp[i].prev >= 0; i = dp[i].prev) out.unshift(dp[i].w);
   // no word twice: a repeat becomes another word of the same shape (syllables + stress)
-  const used = new Set<string>();
+  // words already used (the line's earlier word groups) aren't used again
+  const used = avoid ?? new Set<string>();
   const varied = out.map((w, i) => {
     if (!used.has(w)) return used.add(w), w;
     const shape = list.find((x) => x.w === w)!;

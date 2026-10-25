@@ -632,7 +632,7 @@ ${sang}
 
 From these words, work out the song's topic, mood and imagery (e.g. love, longing, the night…) — the lyrics must be about that. Words or phrases the writer sang are their raw material: keep them where they fit.
 
-THE SONG (rhythm per line: DUM = stressed syllable, ~ = the last note is held)
+THE SONG (rhythm per line: DUM = stressed syllable, ~ = the last note is held, | = a short break in the singing)
 ${listing}
 
 ${rhymes.length ? `RHYMES\n${rhymes.join("\n")}\n` : ""}
@@ -640,6 +640,7 @@ TASK
 For every [WRITE] line write 3 options. Each option must:
 - have exactly the line's number of syllables (sung syllables, ±1) with the stressed syllables on the DUM positions — it must fit the rhythm the writer sang;
 - end on an open, singable vowel when the last note is held (~);
+- follow the breaks (|): a word, and a phrase, ends at every break, and the words between two breaks are one connected group sung together (e.g. "da-DUM-da-da-DUM | DUM-da-DUM-da | da-da-DUM-da-da-DUM" → "Voglio il silenzio, ogni giorno, sento l'amore con te");
 - respect its rhyme rule and continue the lines around it, so the song reads as one coherent text about the writer's topic.
 Lines with an "earlier version" got a new rhythm: rewrite that version to it — keep its meaning and its key words, shorten or lengthen it to the new syllable count (e.g. "Ti scrivo piano senza chiedere perché" → 6 syllables: "Ti scrivo dentro me"); the FIRST option stays closest to the earlier version. Neighbouring earlier versions may be merged or split.
 The rhyme matters most: the last words of a couplet must truly rhyme — the same ending from the stressed vowel on (cuore / amore, notte / forte), not just one shared vowel — and in a couplet that is written together, option 1 rhymes with option 1, option 2 with option 2, option 3 with option 3.
@@ -709,9 +710,11 @@ Return one entry per [WRITE] line, "line" = its number.`;
   }));
 }
 
-function patternOf(f: { syllables: number; stress: number[]; held: boolean }) {
+function patternOf(f: { syllables: number; stress: number[]; held: boolean; pauses?: number[] }) {
   const s = new Set(f.stress);
+  const breaks = new Set(f.pauses ?? []);
   const parts = Array.from({ length: f.syllables }, (_, i) => (s.has(i + 1) ? "DUM" : "da"));
   if (f.held && parts.length) parts[parts.length - 1] += "~";
-  return parts.join("-");
+  // a break: the word group ends there
+  return parts.map((p, i) => (i > 0 && breaks.has(i) ? ` | ${p}` : i > 0 ? `-${p}` : p)).join("");
 }

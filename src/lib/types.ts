@@ -227,6 +227,8 @@ export interface LineFlow {
   end?: number;
   /** 1 / 2 = first / second line of a rhyming couplet (the line ends on the rhyme), 0 = on its own */
   pair?: 0 | 1 | 2;
+  /** short breaks in the singing: after these syllables (1-based) a word group ends ("Mentre ti guardo, | questa notte…") */
+  pauses?: number[];
   /** the line's text before a new flow was set for its part: rewritten to the new rhythm (meaning and key words kept) */
   draft?: string;
   /** the song flow this line follows (flows table), which of its pattern lines, and its rhyme scheme */
