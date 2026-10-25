@@ -2214,7 +2214,12 @@ function rhymeGroups<T extends Line>(lines: T[]): { lines: T[]; pairs: [T, T][] 
 
 /** from this score on two line endings count as a rhyme (assonance or better) */
 const RHYMES = 0.55;
-const rhymeScore = (x: string, y: string, lang: string) => (x.trim() && y.trim() ? compareLines(analyzeLine(x, lang), analyzeLine(y, lang)).score : 0);
+// the same word twice (sei / sei) is no rhyme: options ending on it don't count as rhyming
+const rhymeScore = (x: string, y: string, lang: string) => {
+  if (!x.trim() || !y.trim()) return 0;
+  const c = compareLines(analyzeLine(x, lang), analyzeLine(y, lang));
+  return c.quality === "identical" ? Math.min(c.score, 0.3) : c.score;
+};
 const isKept = (l: Line) => l.status === "APPROVED" || l.status === "APPROVED_EDITED";
 type Option = LyricLine["alternatives"][number];
 type RhymeMove = { alt: Option; partnerAlt?: Option };
