@@ -6,7 +6,7 @@ import { dropSounds, isSound } from "./fillers";
 import { cycle, flowFromGrid, gridFor, quantizeTaps } from "./grid";
 import { exampleWords, isExampleText } from "./example";
 import { coupletsOf } from "./couplets";
-import { barsPerLine, chipsOf, lineCuts, lineFlowFrom, linesFromWords, lineFromText, linesFromBreaks, linesFromOnsets, nextFlowName, ownWords, relayout } from "./pattern";
+import { barsPerLine, chipsOf, lineCuts, lineFlowFrom, lineStarts, linesFromWords, linesIn, patternBars, lineFromText, linesFromBreaks, linesFromOnsets, nextFlowName, ownWords, relayout } from "./pattern";
 import { prosody } from "@/lib/rhyme/prosody";
 import { emptyParts, vocalLines } from "./vocals";
 
@@ -462,4 +462,31 @@ test("recognised words: the sung words are the text, their syllables and the bre
   assert.deepEqual(chipsOf(l.text, "it", true).slice(7, 10), ["not", "te,", "i"]);
   assert.equal(l.offsets[0], 0.3);
   assert.equal(ownWords(l, "it", "sing"), true, "your own words: kept as lyrics unless you change them");
+});
+
+test("a sung pattern repeats at the spacing it was sung with, not a line every two bars", () => {
+  const bar = 4 * (60 / 90); // 2.667 s
+  // 4 lines sung every ~1⅓ bars (3.55 s), each a bit longer than a bar
+  const words: { text: string; start: number; end: number }[] = [];
+  for (let k = 0; k < 4; k++) {
+    let t = 10.8 + k * 3.55;
+    for (const w of ["Mentre", "ti", "guardo", "questa", "notte", "io", "ti", "voglio", "con", "me"]) {
+      words.push({ text: w, start: t, end: t + 0.25 });
+      t += 0.29;
+    }
+  }
+  const firsts = [10, 20, 30];
+  const lines = linesFromWords(words, firsts, 10, bar, 4, "it");
+  const pattern = { lines, scheme: "AABB" as const, bar, source: "sing" as const };
+  // the old layout: a line every barsPerLine bars
+  assert.equal(barsPerLine(pattern), 2);
+  // now: line k starts where it was sung (± the bar grid), and the pattern comes round after ~5⅓ bars → 5
+  const starts = lineStarts(pattern, bar, 8).map((s, i) => Math.round((10 + s + lines[i % 4].offsets[0] - 10.8) * 100) / 100);
+  // (a line sung a little before a bar line is timed from it: up to ~0.1 s later)
+  [0, 3.55, 7.1, 10.65].forEach((want, i) => assert.ok(Math.abs(starts[i] - want) <= 0.12, `${starts}`));
+  // the pattern again after 21 beats (5¼ bars): line 5 ~3.55 s after line 4, as sung
+  assert.equal(patternBars(pattern, bar), 5.25);
+  assert.ok(Math.abs(starts[4] - starts[3] - 3.55) < 0.35, `${starts}`);
+  // a 30 s part takes 8 lines, not 5
+  assert.equal(linesIn(pattern, bar, 30), 8);
 });

@@ -50,6 +50,10 @@ function cleanPattern(v: unknown): FlowPattern | null {
       long: ints(l.long),
       pauses: ints(l.pauses),
       offsets: (Array.isArray(l.offsets) ? l.offsets.filter(num) : []).slice(0, 64) as number[],
+      ...(l.sung ? { sung: true } : {}),
+      ...(l.commaPauses ? { commaPauses: true } : {}),
+      // sung with its own spacing: the bar it is timed from
+      ...(num(l.at) && (l.at as number) >= 0 && (l.at as number) < 64 ? { at: Math.round(l.at as number) } : {}),
     };
   });
   if (lines.some((l) => !l) || (lines.length !== 2 && lines.length !== 4) || !num(p.bar) || (p.bar as number) <= 0) return null;

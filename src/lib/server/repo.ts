@@ -23,7 +23,7 @@ import type {
   SongFlow,
   Take,
 } from "@/lib/types";
-import { barsPerLine, lineFlowFrom, nextFlowName, ownWords } from "@/lib/flow/pattern";
+import { lineFlowFrom, lineStarts, linesIn, nextFlowName, ownWords } from "@/lib/flow/pattern";
 import { isExampleText } from "@/lib/flow/example";
 import { fixPairs } from "@/lib/flow/rhymelines";
 import { songSections, type SungLine } from "@/lib/audio/song-lines";
@@ -1809,8 +1809,9 @@ export async function applyFlow(projectId: string, flowId: string, sectionId: st
   const start = barLine(fromLineId ? (lyric[from].audio_at ?? partStart) : partStart);
   const end = to < lyric.length ? barLine(lyric[to].audio_at ?? partEnd) : partEnd;
   const old = lyric.slice(from, to);
-  const per = barsPerLine(flow.pattern) * bar;
-  const n = Math.max(1, Math.floor((end - start) / per + 0.3));
+  // where each line starts: as far apart as the pattern's lines (sung: as sung), the pattern repeating
+  const n = linesIn(flow.pattern, bar, end - start);
+  const starts = lineStarts(flow.pattern, bar, n);
   if (old.some((l) => l.text.trim())) await saveVersion(projectId, `Before ${flow.name} in ${section.name}`);
   for (const l of old) await deleteLine(l.id);
   // where the flow is used for the first time, the written words are the lyrics
@@ -1820,7 +1821,7 @@ export async function applyFlow(projectId: string, flowId: string, sectionId: st
   const written = old.filter((l) => l.text.trim() && !isExampleText(l.text, lang));
   const rows = Array.from({ length: n }, (_, i) => {
     const pl = flow.pattern.lines[i % flow.pattern.lines.length];
-    const lf = lineFlowFrom(flow.pattern, i, start + i * per, bar, flowId);
+    const lf = lineFlowFrom(flow.pattern, i, start + starts[i], bar, flowId);
     // the writer's own words only — example words (or "pa pam") just set the rhythm: those lines get written
     const own = firstUse && i < flow.pattern.lines.length && ownWords(pl, lang, flow.pattern.source);
     // the earlier lyrics, in order, to rewrite to the new flow
@@ -1832,7 +1833,7 @@ export async function applyFlow(projectId: string, flowId: string, sectionId: st
       text: own ? pl.text.trim() : "",
       status: (own ? "APPROVED" : "OPEN") as LineStatus,
       kind: "lyric",
-      audio_at: lf.times?.[0] ?? start + i * per,
+      audio_at: lf.times?.[0] ?? start + starts[i],
       flow: { ...lf, ...(!own && draft ? { draft } : {}) },
     };
   });

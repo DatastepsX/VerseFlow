@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { barsPerLine, chipsOf, dropStrays, lineCuts, lineFromText, linesFromWords, linesFromBreaks, linesFromOnsets, ownWords, relayout, type Onset } from "@/lib/flow/pattern";
+import { chipsOf, dropStrays, lineCuts, lineFromText, lineStarts, linesFromWords, linesFromBreaks, linesFromOnsets, ownWords, relayout, type Onset } from "@/lib/flow/pattern";
 import { quantizeTaps } from "@/lib/flow/grid";
 import type { FlowPattern, PatternLine, SongFlow } from "@/lib/types";
 import { Check, Hand, Headphones, LineBreak, Mic, Pencil, Play, Restart, Sparkles } from "@/components/icons";
@@ -291,12 +291,14 @@ export function FlowSheet({
       return;
     }
     // a line per bar — or per two, when a line is longer than a bar
-    const per = barsPerLine({ lines, scheme, bar, source: mode }) * bar;
+    // each line where it will go in the part (sung: as far apart as sung)
+    const at = lineStarts({ lines, scheme, bar, source: mode }, bar, lines.length);
     const clicks = [
       ...[0, 1, 2, 3].map((k) => ({ at: from + (k * bar) / 4, accent: false })),
-      ...lines.flatMap((l, i) => l.offsets.map((o, k) => ({ at: barStart + i * per + o, accent: l.stress.includes(k + 1) }))),
+      ...lines.flatMap((l, i) => l.offsets.map((o, k) => ({ at: barStart + at[i] + o, accent: l.stress.includes(k + 1) }))),
     ].filter((c) => c.at >= 0);
-    audio.play(Math.max(0, from), barStart + p * per + 0.4, clicks);
+    const last = lines[lines.length - 1];
+    audio.play(Math.max(0, from), barStart + at[at.length - 1] + Math.max(bar, (last?.offsets[last.offsets.length - 1] ?? 0) + bar / 2) + 0.4, clicks);
   };
 
   const ready = lines.every((l) => l.syllables > 0);

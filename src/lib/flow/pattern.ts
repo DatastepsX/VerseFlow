@@ -35,6 +35,7 @@ export function lineFromText(text: string, lang: string, bar: number, keep?: Pat
     written: true,
     ...(keep?.sung ? { sung: true } : {}),
     ...(cp ? { commaPauses: true } : {}),
+    ...(keep?.at !== undefined ? { at: keep.at } : {}),
     syllables: n,
     // the same number of syllables: what was set (stresses, long notes, pauses, timing) stays
     stress: sameCount ? keep.stress : natural,
@@ -148,7 +149,7 @@ export function linesFromBreaks(
     const last = g[g.length - 1].t - ref;
     // how long the last syllable can last: to the next line, or to the end of the bar it ends in
     const until = next !== undefined ? next - ref : Math.max(1, Math.ceil((last + 0.05) / bar)) * bar;
-    return sungLine(g, ref, bar, lang, seed + k, until);
+    return { ...sungLine(g, ref, bar, lang, seed + k, until), at: Math.round((ref - from) / bar) };
   });
 }
 
@@ -293,6 +294,58 @@ function sungLine(on: Onset[], start: number, bar: number, lang: string, seed: n
 }
 
 /**
+ * Where each line of a stretch starts (its bar line, seconds from the stretch's start) when the pattern
+ * repeats through it. Lines sung with their own spacing (`at`) keep it — line 2 a bar after line 1, line 3
+ * two after… — and the pattern comes round again after `patternBars` bars; others take barsPerLine each.
+ */
+export function lineStarts(pattern: FlowPattern, bar: number, count: number): number[] {
+  const ls = pattern.lines;
+  const p = ls.length;
+  if (!p) return [];
+  if (ls.every((l) => l.at !== undefined)) {
+    const span = patternBars(pattern, bar);
+    return Array.from({ length: count }, (_, i) => (Math.floor(i / p) * span + ls[i % p].at!) * bar);
+  }
+  const per = barsPerLine(pattern) * bar;
+  return Array.from({ length: count }, (_, i) => i * per);
+}
+
+/** how many lines of the pattern fit into a stretch `length` seconds long (sung: a line is sung before its end) */
+export function linesIn(pattern: FlowPattern, bar: number, length: number): number {
+  const ls = pattern.lines;
+  if (ls.every((l) => l.at !== undefined) && ls.length) {
+    let n = 0;
+    for (const s of lineStarts(pattern, bar, 400)) {
+      const l = ls[n % ls.length];
+      const lastSyllable = (l.offsets[l.offsets.length - 1] ?? 0) * (bar / pattern.bar);
+      if (s + lastSyllable > length) break;
+      n++;
+    }
+    return Math.max(1, n);
+  }
+  return Math.max(1, Math.floor(length / (barsPerLine(pattern) * bar) + 0.3));
+}
+
+/**
+ * Bars before a sung pattern comes round again: its lines as far apart as sung, to the beat (4 lines every
+ * 1⅓ bars: 5¼ bars), never so few that its last line runs into the first one again.
+ */
+export function patternBars(pattern: FlowPattern, bar: number): number {
+  const ls = pattern.lines;
+  const scale = bar / pattern.bar;
+  const start = (l: PatternLine) => (l.at ?? 0) * bar + (l.offsets[0] ?? 0) * scale;
+  const p = ls.length;
+  const avg = p > 1 ? (start(ls[p - 1]) - start(ls[0])) / (p - 1) : bar;
+  const beat = bar / 4;
+  let beats = Math.max(4, Math.round((p * avg) / beat));
+  const last = ls[p - 1];
+  const lastEnd = (last.at ?? 0) * bar + (last.offsets[last.offsets.length - 1] ?? 0) * scale + 0.1;
+  // the first line again only after the last one is sung
+  while (beats * beat + start(ls[0]) < lastEnd) beats++;
+  return beats / 4;
+}
+
+/**
  * How many bars one pattern line takes (most lines: one). A line may start
  * late in its bar or run on into the next one — as tapped — as long as it
  * ends before the next line starts; only when lines would overlap does each
@@ -378,6 +431,7 @@ export function linesFromWords(
     const [a] = alignTakeLines([{ id: "l", text }], { words: g.map((w, i) => ({ ...w, text: ws[i] })) }, 0, lang, beat, true);
     if (!a || !a.times.length) return sungLine([], from + k * bar, bar, lang, k);
     const ref = from + bar * Math.max(0, Math.floor((g[0].start - from) / bar + 0.125));
+    const at = Math.round((ref - from) / bar);
     const pauses = breakAfter
       .map((b, i) => (b ? prosody(ws.slice(0, i + 1).join(" "), lang, true).syllables : 0))
       .filter((n) => n > 0 && n < a.times.length);
@@ -393,6 +447,7 @@ export function linesFromWords(
       written: true,
       sung: true,
       commaPauses: true,
+      at,
       syllables: n,
       stress: a.stress,
       long: a.held && !long.includes(n) ? [...long, n] : long,

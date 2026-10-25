@@ -256,6 +256,9 @@ export interface PatternLine {
   pauses: number[];
   /** where each syllable starts, seconds from the bar line */
   offsets: number[];
+  /** sung / tapped with "Next line" or the singer's pauses: the bar its timing is from, counted from the
+   * pattern's first bar (lines a bar and a third apart stay that far apart); none: a line per barsPerLine */
+  at?: number;
 }
 
 /** a flow: 2 or 4 pattern lines that repeat through a part (or a stretch of it) */
