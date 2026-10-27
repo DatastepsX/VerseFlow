@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { channelOf, mixVolumes, panLabel, withChannel } from "./mix";
+import { channelOf, louderGain, mixVolumes, panLabel, withChannel } from "./mix";
 
 test("older songs: the volumes and the layers off carry over", () => {
   const s = { mix: { beat: 0.5, "lane:Lead": 1.2 }, mixOff: ["Double"] };
@@ -23,4 +23,10 @@ test("solo: only the soloed channels play; mute wins", () => {
   assert.equal(v.flow, 0);
   assert.equal(panLabel(-0.4), "L 40");
   assert.equal(panLabel(0.01), "C");
+});
+
+test("a quiet take made as loud as it can be, never past the limit", () => {
+  assert.equal(louderGain([0.1, 0.2, 0.05]), 4.45 > 4 ? 4 : 4.45);
+  assert.equal(louderGain([0.445]), 2);
+  assert.equal(louderGain([0, 0.001]), null);
 });

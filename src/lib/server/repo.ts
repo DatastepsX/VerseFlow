@@ -1455,11 +1455,11 @@ export async function chooseTake(id: string) {
   return t.project_id;
 }
 
-/** a take in the mix: its volume (1: as recorded; 0–2) and its pan (−1 left … 1 right) */
+/** a take in the mix: its volume (1: as recorded; 0–4: a quiet take made louder) and its pan (−1 left … 1 right) */
 export async function setTakeMix(id: string, mix: { gain?: number; pan?: number }) {
   const t = await getTake(id);
   const patch: { gain?: number; pan?: number } = {};
-  if (mix.gain !== undefined) patch.gain = Math.round(Math.max(0, Math.min(2, mix.gain)) * 100) / 100;
+  if (mix.gain !== undefined) patch.gain = Math.round(Math.max(0, Math.min(4, mix.gain)) * 100) / 100;
   if (mix.pan !== undefined) patch.pan = Math.round(Math.max(-1, Math.min(1, mix.pan)) * 100) / 100;
   check(await db().from("takes").update(patch).eq("id", id));
   await touch(t.project_id);

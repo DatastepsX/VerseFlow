@@ -52,6 +52,8 @@ export interface Recorder {
   /** the song position being heard now (on this device; the remote has none) — the lyrics follow it syllable by syllable */
   clock: (() => number) | null;
   level: number;
+  /** the meter: the loudest of the last moment, and a clip just now (this device) */
+  meter: { hold: number; clip: boolean };
   lanes: string[];
   /** takes of the part, of the layers */
   takes: RecTake[];
@@ -113,7 +115,22 @@ export interface LocalSettings {
   calibrate: (how?: "clicks" | "claps") => void;
   /** the delay set for the other setting (with / without headphones), null: estimated */
   otherLatencyMs: number | null;
+  /** the microphone's gain in dB (kept for each microphone on this device) */
+  gainDb: number;
+  setGainDb: (db: number) => void;
+  /** hear yourself in the headphones */
+  monitor: boolean;
+  setMonitor: (on: boolean) => void;
+  /** sing for a few seconds: the gain (and the input the microphone is on) set by itself */
+  autoLevel: () => void;
+  /** seconds left while it listens; null: not listening */
+  leveling: number | null;
+  /** what the last auto level found */
+  levelNote: string | null;
 }
+
+export const GAIN_MIN = -12;
+export const GAIN_MAX = 36;
 
 export { usePref };
 
@@ -186,6 +203,9 @@ export function useLocalRecorder(o: {
   const [countIn, setCountIn] = usePref("vf.studio.countin", 1);
   const [metronome, setMetronome] = usePref("vf.studio.metronome", true);
   const [headphones, setHeadphones] = usePref("vf.studio.headphones", true);
+  // the microphone's gain: each microphone of this device its own (a USB microphone often comes in quiet)
+  const [gains, setGains] = usePref<Record<string, number>>("vf.studio.ingains", {});
+  const [monitor, setMonitor] = usePref("vf.studio.monitor", false);
   // the delay differs with echo cancellation (no headphones): one setting each
   // kept with your profile, one per kind of device (iPhone, Mac…): each has its own delay
   const kind = deviceKind();
@@ -199,10 +219,24 @@ export function useLocalRecorder(o: {
   const buffers = useRef(new Map<string, AudioBuffer>());
   const [armed, setArmed] = useState(false);
   const [mic, setMic] = useState<string | null>(null);
+  const gainDb = gains[mic ?? ""] ?? 0;
+  const setGainDb = (db: number) => setGains({ ...gains, [mic ?? ""]: Math.round(Math.max(GAIN_MIN, Math.min(GAIN_MAX, db)) * 2) / 2 });
+  useEffect(() => {
+    engine.current?.setInputGain(10 ** (gainDb / 20));
+  }, [engine, gainDb, armed]);
+  // hearing yourself: in headphones only (from a speaker it would feed back)
+  useEffect(() => {
+    engine.current?.setMonitor(monitor && headphones && armed);
+  }, [engine, monitor, headphones, armed]);
+  const [leveling, setLeveling] = useState<number | null>(null);
+  const [levelNote, setLevelNote] = useState<string | null>(null);
   const [inputs, setInputs] = useState<{ id: string; label: string }[]>([]);
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const [error, setError] = useState<string | null>(null);
   const [level, setLevel] = useState(0);
+  const [meter, setMeter] = useState({ hold: 0, clip: false });
+  const holdRef = useRef({ v: 0, at: 0 });
+  const clipAt = useRef(-1e9);
   const [lineIndex, setLineIndex] = useState<number | null>(null);
   const [beatsLeft, setBeatsLeft] = useState<number | null>(null);
   /** the microphone is being switched on for the first take */
@@ -446,7 +480,7 @@ export function useLocalRecorder(o: {
         e.disarm();
         setArmed(false);
         throw new Error(
-          `The ${deviceName()}'s microphone sent no sound, so the take wasn't kept. It is being switched on again — record once more.${o.host ? " Keep the VerseFlow tab open (not in the background) on it." : ""}`,
+          `The ${deviceName()}'s microphone sent no sound, so the take wasn't kept. It is being switched on again — record once more.${o.host ? " Keep the VerseFlow tab open (not in the background) on it." : ""}${!headphones ? " With a USB microphone, turn “I wear headphones” on: the phone's voice processing can silence it." : ""}`,
         );
       }
       const wav = encodeWav([rec.samples], rec.sampleRate, 24);
@@ -563,11 +597,54 @@ export function useLocalRecorder(o: {
       }
       if (e.armed) {
         const lv = e.level();
-        setLevel(Math.round(lv * 50) / 50);
+        setLevel(Math.round(lv * 1000) / 1000);
+        // the meter: the loudest of the last moment stays a while; a clip lights up for 2 s
+        const t = performance.now();
+        const h = holdRef.current;
+        if (lv >= h.v || t - h.at > 1500) holdRef.current = { v: lv, at: t };
+        if (lv >= 0.99) clipAt.current = t;
+        setMeter((m) => {
+          const next = { hold: Math.round(holdRef.current.v * 1000) / 1000, clip: t - clipAt.current < 2000 };
+          return m.hold === next.hold && m.clip === next.clip ? m : next;
+        });
         if (status.kind === "recording" || status.kind === "countin") maxLevel.current = Math.max(maxLevel.current, lv);
       }
     };
   });
+
+  /**
+   * Auto level: you sing (or rap) your loudest part for 5 seconds; the gain is set so its peaks land at about
+   * −6 dB — loud, with room before it clips — and the input the microphone is on is chosen.
+   */
+  const autoLevel = async () => {
+    const e = engine.current;
+    if (!e || busy || leveling !== null) return;
+    if (!e.inputAlive && !(await arm())) return;
+    setLevelNote(null);
+    const secs = 5;
+    setLeveling(secs);
+    const tick = setInterval(() => setLeveling((x) => (x && x > 1 ? x - 1 : x)), 1000);
+    try {
+      const m = await e.measureInput(secs);
+      if (!m) return setLevelNote("Nothing was heard — tap the page once, then try again.");
+      const k = m.peaks.length > 1 && m.peaks[1] > 4 * m.peaks[0] ? 1 : 0;
+      const peak = m.peaks[k];
+      if (peak < 0.002) return setLevelNote(`Almost nothing reached “${mic ?? "the microphone"}”. Is it the one you sing into, and is it switched on?`);
+      // the gain it was measured with, taken out: what the microphone gives as it comes
+      const raw = peak / 10 ** (gainDb / 20);
+      const db = Math.round(Math.max(GAIN_MIN, Math.min(GAIN_MAX, 20 * Math.log10(0.5 / raw))) * 2) / 2;
+      setGainDb(db);
+      if (m.peaks.length > 1 && k !== channel && channel >= 0 && m.peaks[channel] < m.peaks[k] / 4) setChannel(k);
+      setLevelNote(
+        db >= GAIN_MAX
+          ? `Gain set to +${db} dB, the most there is — the microphone is very quiet: sing closer to it, or turn it up on the microphone itself.`
+          : `Gain set to ${db > 0 ? "+" : ""}${db} dB: your loudest is at about −6 dB.${k !== channel && channel >= 0 ? ` The microphone is on input ${k + 1}: chosen.` : ""}`,
+      );
+    } finally {
+      clearInterval(tick);
+      setLeveling(null);
+    }
+  };
 
   // one function for the page's life: the lyrics' animation keeps running with it
   const [clock] = useState(() => clockOf(engine));
@@ -732,6 +809,7 @@ export function useLocalRecorder(o: {
     lineIndex,
     clock: status.kind === "playing" || status.kind === "recording" || status.kind === "countin" ? clock : null,
     level,
+    meter,
     lanes,
     takes: sectionTakes.map((t) => ({ ...t, peaks: t.peaks ?? [] })),
     takeCount: (id) => tree.takes.filter((t) => t.section_id === id && lanes.includes(t.lane)).length,
@@ -780,6 +858,13 @@ export function useLocalRecorder(o: {
       setLatencyMs,
       calibrate: (how) => void calibrate(how),
       otherLatencyMs: headphones ? latencyVp : latencyRaw,
+      gainDb,
+      setGainDb,
+      monitor,
+      setMonitor,
+      autoLevel: () => void autoLevel(),
+      leveling,
+      levelNote,
     },
   };
 }
@@ -853,6 +938,7 @@ export function useRemoteRecorder(o: { tree: ProjectTree; section: [string | nul
     lineIndex: here ? state.lineIndex : null,
     clock: null,
     level: 0,
+    meter: { hold: 0, clip: false },
     lanes,
     takes: here ? state.takes.map((t) => ({ ...t, peaks: t.peaks ?? [] })) : [],
     takeCount: (id) => (connected ? (state.sections.find((s) => s.id === id)?.takes ?? 0) : 0),

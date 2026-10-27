@@ -64,5 +64,15 @@ export function withChannel(s: ProjectSettings | undefined, key: string, patch: 
 export const clipOf = (t: { trim_in: number; trim_out: number | null }) => (t.trim_in > 0 || t.trim_out !== null ? { from: t.trim_in ?? 0, to: t.trim_out } : undefined);
 
 export const pct = (v: number) => `${Math.round(v * 100)}%`;
+
+/** a take's volume up to this (a quiet take made louder) */
+export const TAKE_MAX = 4;
+
+/** the volume that brings a take's loudest moment to about −1 dB (its waveform: 0…1 peaks); null: no sound */
+export function louderGain(peaks: number[]): number | null {
+  const top = Math.max(0, ...peaks);
+  if (top < 0.005) return null;
+  return Math.round(Math.min(TAKE_MAX, 0.89 / top) * 100) / 100;
+}
 /** a pan as read: L 40 · C · R 40 */
 export const panLabel = (p: number) => (Math.abs(p) < 0.02 ? "C" : `${p < 0 ? "L" : "R"} ${Math.round(Math.abs(p) * 100)}`);

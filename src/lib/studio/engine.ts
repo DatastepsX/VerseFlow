@@ -140,21 +140,34 @@ export class StudioEngine {
   }
 
   private mute: GainNode | null = null;
-  /** the microphone into the recorder and the level meter */
+  /** the input gain (a quiet microphone made louder before it is recorded), and hearing yourself */
+  private inGain: GainNode | null = null;
+  private monitor: GainNode | null = null;
+  private inGainValue = 1;
+  private monitorOn = false;
+  /** the microphone → its gain → the recorder, the level meter and (when on) your headphones */
   private wire() {
     if (!this.stream) return;
     this.source?.disconnect();
+    this.inGain?.disconnect();
     this.recorder?.disconnect();
     this.mute?.disconnect();
+    this.monitor?.disconnect();
     this.source = this.ctx.createMediaStreamSource(this.stream);
+    this.inGain = this.ctx.createGain();
+    this.inGain.gain.value = this.inGainValue;
     this.recorder = new AudioWorkletNode(this.ctx, "vf-recorder", { numberOfInputs: 1, numberOfOutputs: 1, channelCountMode: "explicit", channelCount: 2 });
     this.analyser = this.ctx.createAnalyser();
     this.analyser.fftSize = 1024;
     // the recorder must be pulled by the graph to run: route it to a silent output
     this.mute = this.ctx.createGain();
     this.mute.gain.value = 0;
-    this.source.connect(this.recorder).connect(this.mute).connect(this.ctx.destination);
-    this.source.connect(this.analyser);
+    this.monitor = this.ctx.createGain();
+    this.monitor.gain.value = this.monitorOn ? 1 : 0;
+    this.source.connect(this.inGain);
+    this.inGain.connect(this.recorder).connect(this.mute).connect(this.ctx.destination);
+    this.inGain.connect(this.analyser);
+    this.inGain.connect(this.monitor).connect(this.ctx.destination);
     this.recorder.port.onmessage = (e) => {
       if (e.data?.done) this.onDone?.();
       else if (e.data?.channels) this.chunks.push(e.data);
@@ -170,6 +183,48 @@ export class StudioEngine {
     if (this.ctx.state !== "running") return false;
     this.wire();
     return true;
+  }
+
+  /** the microphone's gain (linear, 1: as it comes), live — what is recorded and what the meter shows */
+  setInputGain(v: number) {
+    this.inGainValue = v;
+    this.inGain?.gain.setTargetAtTime(v, this.ctx.currentTime, 0.02);
+  }
+
+  /** hear yourself (in headphones: from a speaker it would feed back) */
+  setMonitor(on: boolean) {
+    this.monitorOn = on;
+    this.monitor?.gain.setTargetAtTime(on ? 1 : 0, this.ctx.currentTime, 0.02);
+  }
+
+  /**
+   * Listens for a few seconds (nothing plays): each input's loudest sample and its loudness (RMS), after the
+   * gain — to set the gain and find the input the microphone is on.
+   */
+  async measureInput(seconds: number): Promise<{ peaks: number[]; rms: number[] } | null> {
+    if (!this.recorder || !(await this.readyToRecord())) return null;
+    this.startRecording();
+    await new Promise((r) => setTimeout(r, seconds * 1000));
+    if (!this.recorder) return null;
+    const done = new Promise<void>((r) => (this.onDone = r));
+    this.recorder.port.postMessage("stop");
+    await Promise.race([done, new Promise((r) => setTimeout(r, 1500))]);
+    const chunks = this.chunks;
+    this.chunks = [];
+    if (!chunks.length) return null;
+    const n = chunks[0].channels.length;
+    const peaks = new Array<number>(n).fill(0);
+    const sums = new Array<number>(n).fill(0);
+    let count = 0;
+    for (const c of chunks) {
+      for (let k = 0; k < n; k++)
+        for (const v of c.channels[k]) {
+          peaks[k] = Math.max(peaks[k], Math.abs(v));
+          sums[k] += v * v;
+        }
+      count += c.channels[0].length;
+    }
+    return { peaks, rms: sums.map((x) => Math.sqrt(x / Math.max(1, count))) };
   }
 
   /** what the microphone and the sound are doing (for the diagnostics of a failed take) */
@@ -192,6 +247,8 @@ export class StudioEngine {
     this.source?.disconnect();
     this.recorder?.disconnect();
     this.mute?.disconnect();
+    this.inGain?.disconnect();
+    this.monitor?.disconnect();
     this.stream = null;
     this.source = null;
     this.recorder = null;
@@ -373,10 +430,11 @@ export class StudioEngine {
     const sr = this.ctx.sampleRate;
     const total = chunks.reduce((n, c) => n + c.channels[0].length, 0);
     // the input chosen is silent but the other one isn't (a microphone on input 1 with input 2 chosen): the other
-    const silentIn = (k: number) => chunks.every((c) => !c.channels[k] || c.channels[k].every((v) => v === 0));
-    if (channel >= 0 && chunks[0].channels.length > 1 && silentIn(Math.min(channel, chunks[0].channels.length - 1))) {
+    // the input chosen is (nearly) silent but the other one isn't (a microphone on input 1 with input 2 chosen): the other
+    const peakIn = (k: number) => chunks.reduce((m, c) => (c.channels[k] ? c.channels[k].reduce((a, v) => Math.max(a, Math.abs(v)), m) : m), 0);
+    if (channel >= 0 && chunks[0].channels.length > 1) {
       const other = channel === 0 ? 1 : 0;
-      if (!silentIn(other)) channel = other;
+      if (peakIn(Math.min(channel, 1)) < 0.005 && peakIn(other) > 0.02) channel = other;
     }
     const mono = new Float32Array(total);
     let o = 0;

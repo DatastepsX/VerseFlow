@@ -11,13 +11,13 @@ import { FX_CATEGORIES, FX_PRESETS, layerPreset } from "@/lib/fx/presets";
 import { keyName, NOTE_NAMES } from "@/lib/fx/tune";
 import { followTo } from "@/components/writer/follow";
 import { fmtTime } from "@/lib/audio/song-map";
-import { pct } from "@/lib/studio/mix";
+import { louderGain, pct, TAKE_MAX } from "@/lib/studio/mix";
 import { VolumeSlider } from "@/components/VolumeSlider";
 import { undoHeaders, undoStep } from "@/lib/undo-group";
 import type { Timeline } from "@/lib/audio/timeline";
 import type { StudioEngine } from "@/lib/studio/engine";
 import type { Line, ProjectTree } from "@/lib/types";
-import { useIsPhone, useLocalRecorder, usePref, useRemoteRecorder, type Recorder } from "./recorder";
+import { GAIN_MAX, GAIN_MIN, useIsPhone, useLocalRecorder, usePref, useRemoteRecorder, type Recorder } from "./recorder";
 
 type On = "here" | "mac";
 
@@ -108,6 +108,7 @@ function RemoteRecord(props: Props & { section: [string | null, (id: string) => 
 function RecordScreen({ r, tree, setTree, rangeOf, bar, timeline, onBusy, host, muted, onMix }: Props & { r: Recorder; host?: boolean }) {
   const [size, setSize] = usePref<keyof typeof SIZES>("vf.rec.size", "M");
   const [sheet, setSheet] = useState(false);
+  const [micSheet, setMicSheet] = useState(false);
   /** the sound library, open for this layer */
   const [soundFor, setSoundFor] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
@@ -504,7 +505,7 @@ function RecordScreen({ r, tree, setTree, rangeOf, bar, timeline, onBusy, host, 
           )}
         </div>
       )}
-      <div className="h-24" />
+      <div className="h-36" />
 
       {/* transport, above the tabs */}
       <div className="fixed inset-x-0 bottom-0 z-20 mx-auto max-w-lg border-t border-line/70 bg-bg/95 pb-[calc(env(safe-area-inset-bottom)+4.3rem)] backdrop-blur-xl">
@@ -525,17 +526,26 @@ function RecordScreen({ r, tree, setTree, rangeOf, bar, timeline, onBusy, host, 
         </div>
         <div className="flex h-7 items-center justify-center gap-2 px-6 text-xs font-semibold text-muted">
           <span className={`truncate ${recording ? "text-[#dc2626]" : ""}`}>{statusText}</span>
-          {recording && !r.remote && (
-            <span className="h-1.5 w-16 shrink-0 overflow-hidden rounded-full bg-panel-2" title="Input level">
-              <span className="block h-full rounded-full" style={{ width: `${Math.min(100, r.level * 100)}%`, background: r.level > 0.9 ? "var(--bad)" : "var(--ok)" }} />
-            </span>
-          )}
         </div>
+        {/* the microphone: its level live, before and while recording — tap for its gain, hearing yourself… */}
+        {r.settings && <MicStrip r={r} onOpen={() => setMicSheet(true)} />}
       </div>
 
       {r.note && <div className="fixed left-1/2 top-20 z-30 -translate-x-1/2 rounded-full bg-fg px-3.5 py-1.5 text-xs font-semibold text-bg shadow-lg">{r.note}</div>}
 
-      {sheet && <RecordSettings r={r} size={size} setSize={setSize} onClose={() => setSheet(false)} />}
+      {sheet && (
+        <RecordSettings
+          r={r}
+          size={size}
+          setSize={setSize}
+          onClose={() => setSheet(false)}
+          onMic={() => {
+            setSheet(false);
+            setMicSheet(true);
+          }}
+        />
+      )}
+      {micSheet && <MicSheet r={r} onClose={() => setMicSheet(false)} />}
       {cutting &&
         (() => {
           const full = tree.takes.find((x) => x.id === cutting);
@@ -749,7 +759,7 @@ function SoundLibrary({ r, lane, hasTake, onClose }: { r: Recorder; lane: string
   );
 }
 
-function RecordSettings({ r, size, setSize, onClose }: { r: Recorder; size: keyof typeof SIZES; setSize: (s: keyof typeof SIZES) => void; onClose: () => void }) {
+function RecordSettings({ r, size, setSize, onClose, onMic }: { r: Recorder; size: keyof typeof SIZES; setSize: (s: keyof typeof SIZES) => void; onClose: () => void; onMic: () => void }) {
   const s = r.settings;
   const seg = (on: boolean) => `flex-1 rounded-full py-2 text-sm font-semibold transition-colors ${on ? "bg-panel text-fg shadow-sm" : "text-muted"}`;
   return (
@@ -793,6 +803,11 @@ function RecordSettings({ r, size, setSize, onClose }: { r: Recorder; size: keyo
           <>
             <div className="space-y-2">
               <p className="label">Microphone</p>
+              <button className="flex w-full items-center gap-3 rounded-2xl bg-accent-soft px-4 py-3 text-left text-sm font-semibold text-accent" onClick={onMic}>
+                <Mic className="h-4 w-4" />
+                <span className="flex-1">Level, gain, hear yourself</span>
+                <ChevronRight className="h-4 w-4" />
+              </button>
               <select className="input text-base" value={s.deviceId} onChange={(e) => s.setDeviceId(e.target.value)}>
                 <option value="">{r.armed ? "Default microphone" : "Default microphone (allow it first)"}</option>
                 {s.inputs.map((d) => (
@@ -1022,12 +1037,26 @@ function TakeCut(props: {
           <p className="text-sm font-semibold">Volume of this take</p>
           <VolumeSlider
             value={gain}
+            max={TAKE_MAX}
             label={`Take ${props.take.take_no}`}
             onValue={(v) => {
               setGain(v);
               props.onGain(v);
             }}
           />
+          {/* a quiet take: as loud as it can be without clipping */}
+          {louderGain(props.peaks) !== null && Math.abs((louderGain(props.peaks) ?? 1) - gain) > 0.05 && (
+            <button
+              className="mt-1 flex items-center gap-1 rounded-full bg-accent-soft px-3 py-1.5 text-xs font-semibold text-accent"
+              onClick={() => {
+                const g = louderGain(props.peaks)!;
+                setGain(g);
+                props.onGain(g);
+              }}
+            >
+              <Wand className="h-3.5 w-3.5" /> {louderGain(props.peaks)! > gain ? "Louder" : "Softer"} · as loud as it can be ({pct(louderGain(props.peaks)!)})
+            </button>
+          )}
           <p className="text-[11px] text-muted">The whole {props.take.lane} layer: the Mixer.</p>
         </div>
         <button className="btn-primary w-full justify-center rounded-2xl py-3 text-sm disabled:opacity-50" disabled={busy} onClick={() => void finish()}>
@@ -1046,6 +1075,136 @@ function TakeCut(props: {
             The whole take again
           </button>
         )}
+      </div>
+    </div>
+  );
+}
+
+/** a level in dB (−60 … 0) */
+const dbOf = (v: number) => (v > 0 ? 20 * Math.log10(v) : -Infinity);
+const meterAt = (v: number) => Math.max(0, Math.min(1, (dbOf(v) + 60) / 60));
+
+/**
+ * The input level as a studio meter: in dB, green up to −12, yellow to −3, red above; the loudest of the last
+ * moment stays a while (peak hold), and a clip lights up red.
+ */
+function Meter({ level, hold, clipped, big }: { level: number; hold: number; clipped: boolean; big?: boolean }) {
+  const w = meterAt(level) * 100;
+  return (
+    <div className="flex min-w-0 flex-1 items-center gap-2">
+      <div className={`relative flex-1 overflow-hidden rounded-full bg-panel-2 ${big ? "h-3.5" : "h-2"}`}>
+        <div
+          className="absolute inset-y-0 left-0 rounded-full"
+          style={{ width: `${w}%`, background: "linear-gradient(to right, var(--ok) 0%, var(--ok) 79%, #eab308 80%, #eab308 94%, var(--bad) 95%)", backgroundSize: `${(100 / Math.max(1, w)) * 100}% 100%` }}
+        />
+        <div className="absolute inset-y-0 w-0.5 bg-fg/80" style={{ left: `${meterAt(hold) * 100}%` }} />
+        {/* −12 and −6 dB */}
+        <div className="absolute inset-y-0 w-px bg-fg/20" style={{ left: "80%" }} />
+        <div className="absolute inset-y-0 w-px bg-fg/20" style={{ left: "90%" }} />
+      </div>
+      <span className={`shrink-0 whitespace-nowrap text-right font-mono tabular-nums ${big ? "w-16 text-sm" : "w-12 text-[10px]"} ${clipped ? "font-bold text-bad" : "text-muted"}`}>
+        {clipped ? "CLIP" : Number.isFinite(dbOf(hold)) ? `${Math.round(dbOf(hold))} dB` : "–∞"}
+      </span>
+    </div>
+  );
+}
+
+function MicStrip({ r, onOpen }: { r: Recorder; onOpen: () => void }) {
+  const s = r.settings!;
+  if (!r.armed)
+    return (
+      <div className="flex justify-center px-6 pb-1">
+        <button className="flex items-center gap-1.5 rounded-full bg-panel-2 px-3 py-1.5 text-xs font-semibold text-fg/80" onClick={r.arm}>
+          <Mic className="h-3.5 w-3.5 text-accent" /> Check the microphone
+        </button>
+      </div>
+    );
+  return (
+    <button className="flex w-full items-center gap-2 px-6 pb-1.5 text-left" onClick={onOpen} aria-label="Microphone: level, gain, hear yourself">
+      <Mic className="h-3.5 w-3.5 shrink-0 text-accent" />
+      <Meter level={r.level} hold={r.meter.hold} clipped={r.meter.clip} />
+      <span className="shrink-0 rounded-full bg-panel-2 px-2 py-0.5 font-mono text-[10px] font-semibold text-fg/80">
+        {s.gainDb > 0 ? "+" : ""}
+        {s.gainDb} dB
+      </span>
+      {s.monitor && s.headphones && <Headphones className="h-3.5 w-3.5 shrink-0 text-accent" />}
+    </button>
+  );
+}
+
+/** the microphone: which one, its level, its gain (auto: sing 5 s), hearing yourself */
+function MicSheet({ r, onClose }: { r: Recorder; onClose: () => void }) {
+  const s = r.settings!;
+  return (
+    <div className="fixed inset-0 z-40 flex items-end justify-center bg-black/40" onClick={onClose}>
+      <div onClick={(e) => e.stopPropagation()} className="max-h-[92dvh] w-full max-w-lg space-y-4 overflow-auto rounded-t-3xl bg-panel px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-3">
+        <div className="mx-auto h-1.5 w-10 rounded-full bg-line" />
+        <div>
+          <h2 className="text-xl font-bold">Microphone</h2>
+          <p className="truncate text-xs text-muted">{r.mic ?? "not on yet"}</p>
+        </div>
+        {!r.armed ? (
+          <button className="btn-primary w-full justify-center rounded-2xl py-3" onClick={r.arm}>
+            <Mic className="h-4 w-4" /> Switch the microphone on
+          </button>
+        ) : (
+          <>
+            <div className="space-y-1.5">
+              <p className="label">Level</p>
+              <Meter level={r.level} hold={r.meter.hold} clipped={r.meter.clip} big />
+              <p className="text-[11px] text-muted">Sing your loudest: the bar should reach the yellow (about −6 dB), never the red.</p>
+            </div>
+            <div className="space-y-1.5">
+              <div className="flex items-baseline justify-between">
+                <p className="label">Gain</p>
+                <button className="font-mono text-sm font-semibold text-accent" onClick={() => s.setGainDb(0)} aria-label="Gain back to 0 dB">
+                  {s.gainDb > 0 ? "+" : ""}
+                  {s.gainDb} dB
+                </button>
+              </div>
+              <input
+                type="range"
+                min={GAIN_MIN}
+                max={GAIN_MAX}
+                step={0.5}
+                value={s.gainDb}
+                onChange={(e) => s.setGainDb(Number(e.target.value))}
+                className="vf-volume w-full"
+                aria-label="Microphone gain"
+                style={{ ["--fill" as string]: `${((s.gainDb - GAIN_MIN) / (GAIN_MAX - GAIN_MIN)) * 100}%` }}
+              />
+              <button className="btn w-full justify-center rounded-2xl border-0 bg-panel-2 py-3 text-sm disabled:opacity-60" disabled={s.leveling !== null || r.status !== "idle"} onClick={s.autoLevel}>
+                <Wand className="h-4 w-4" />
+                {s.leveling !== null ? `Listening… sing your loudest · ${s.leveling}` : "Auto level · sing your loudest for 5 s"}
+              </button>
+              {s.levelNote && <p className="rounded-xl bg-panel-2 px-3 py-2 text-sm">{s.levelNote}</p>}
+              <p className="text-[11px] text-muted">Kept for this microphone on this device. A browser can&apos;t turn the microphone itself up — this makes its sound louder before it is recorded.</p>
+            </div>
+          </>
+        )}
+        <div className="space-y-2.5">
+          <label className="flex items-center justify-between gap-3 text-sm">
+            <span>
+              I wear headphones
+              <span className="block text-xs text-muted">{s.headphones ? "Clean takes, no processing." : "The beat from the speaker is filtered out of the take (with a USB microphone, this can silence it)."}</span>
+            </span>
+            <Toggle on={s.headphones} onChange={s.setHeadphones} />
+          </label>
+          <label className={`flex items-center justify-between gap-3 text-sm ${s.headphones ? "" : "opacity-50"}`}>
+            <span>
+              Hear myself
+              <span className="block text-xs text-muted">
+                {s.headphones
+                  ? "Your voice in the headphones while you sing — with a slight delay from the browser. Your microphone's own headphone output (if it has one) has none."
+                  : "Only with headphones (from a speaker it would feed back)."}
+              </span>
+            </span>
+            <Toggle on={s.monitor && s.headphones} onChange={(on) => s.headphones && s.setMonitor(on)} />
+          </label>
+        </div>
+        <button className="btn-primary w-full justify-center rounded-2xl py-3" onClick={onClose}>
+          Done
+        </button>
       </div>
     </div>
   );
