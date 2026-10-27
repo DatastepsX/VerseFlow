@@ -8,7 +8,7 @@
  * text changes, its marks no longer fit and stop showing.
  */
 
-export type MarkKind = "pause" | "breath" | "double" | "stretch" | "accent" | "up" | "down" | "echo";
+export type MarkKind = "pause" | "rest" | "breath" | "double" | "stretch" | "accent" | "up" | "down" | "echo";
 
 export interface Mark {
   kind: MarkKind;
@@ -26,6 +26,7 @@ export interface LineMarks {
 
 export const MARK_KINDS: { kind: MarkKind; symbol: string; label: string; about: string; range?: boolean; after?: boolean }[] = [
   { kind: "pause", symbol: "‖", label: "Pause", about: "a short stop after this word", after: true },
+  { kind: "rest", symbol: "‖‖", label: "Long break", about: "a long stop after this word", after: true },
   { kind: "breath", symbol: "ˇ", label: "Breath", about: "breathe after this word", after: true },
   { kind: "double", symbol: "2×", label: "Double-time", about: "these words twice as fast — tap the first, then the last", range: true },
   { kind: "stretch", symbol: "~", label: "Stretch", about: "hold this word long" },

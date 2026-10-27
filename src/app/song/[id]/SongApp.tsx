@@ -26,9 +26,10 @@ import { VoiceSheet, type VoiceInfo } from "./VoiceSheet";
 import { RecordView } from "./Record";
 import { MarkedText, MarksEditor } from "@/components/Marks";
 import { marksFor, type Mark } from "@/lib/marks";
+import { NOTATION_KEYS, parseNotation, toNotation, untyped } from "@/lib/flow/notation";
 import { lanesOf, usePref } from "./recorder";
 import { buildChain } from "@/lib/fx/chain";
-import { layerPreset } from "@/lib/fx/presets";
+import { FX_CATEGORIES, FX_PRESETS, layerPreset } from "@/lib/fx/presets";
 import { clipOf, laneBus, mixVolumes } from "@/lib/studio/mix";
 import { VolumeSlider } from "@/components/VolumeSlider";
 import { undoHeaders, undoStep } from "@/lib/undo-group";
@@ -1812,12 +1813,22 @@ export function SongApp({
                             onNew={() => void lineAction(l.id, () => call(`/api/projects/${pid}/flow`, { action: "suggest", lineIds: [l.id] }), "New options")}
                             onEdit={() => {
                               setEditing(l.id);
-                              setDraft(l.text);
+                              // the line with its symbols (double-time, breaks, holds) to edit them along
+                              setDraft(toNotation(l.text.trim(), marksFor(l)));
                             }}
                             onSave={() => {
                               setEditing(null);
-                              if (draft.trim() && draft.trim() !== l.text.trim())
-                                void lineAction(l.id, () => call(`/api/lines/${l.id}`, { text: draft.trim(), status: "APPROVED_EDITED", action: "edit" }, "PATCH"), "Edit");
+                              const { text, marks } = parseNotation(draft);
+                              if (!text) return;
+                              const before = marksFor(l);
+                              const changed = text !== l.text.trim();
+                              // the marks set in the editor (accent, up…) stay while the words do
+                              const items = [...marks, ...(changed ? [] : untyped(before))];
+                              const key = (m: Mark[]) => JSON.stringify([...m].sort((a, b) => a.at - b.at || a.kind.localeCompare(b.kind)));
+                              if (changed)
+                                void lineAction(l.id, () => call(`/api/lines/${l.id}`, { text, marks: { items }, status: "APPROVED_EDITED", action: "edit" }, "PATCH"), "Edit");
+                              else if (key(items) !== key(before))
+                                void lineAction(l.id, () => call(`/api/lines/${l.id}`, { marks: { items }, action: "marks" }, "PATCH"), "Marks");
                             }}
                             onCancel={() => setEditing(null)}
                             beatGrid={beatGrid}
@@ -1869,17 +1880,18 @@ export function SongApp({
                           />
                           );
                         })}
+                        {/* a couplet that doesn't rhyme: a small hint at its end, tap to fix it */}
                         {bad && (
-                          <div className="ml-2 mt-0.5 flex items-center gap-2 rounded-xl bg-warn-soft px-2.5 py-1 text-[11px] text-warn">
-                            <span className="flex-1">
-                              “{lastWordOf(bad[0].text)}” and “{lastWordOf(bad[1].text)}” don&apos;t rhyme
-                            </span>
+                          <div className="-mt-0.5 flex justify-end pr-2">
                             <button
-                              className="flex shrink-0 items-center gap-1 rounded-full bg-panel px-2.5 py-1 font-semibold text-accent disabled:opacity-50"
+                              className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold text-warn/90 active:bg-warn-soft disabled:opacity-50"
                               disabled={busyLine === bad[1].id}
                               onClick={() => void makeItRhyme(bad[0] as LyricLine, bad[1] as LyricLine)}
+                              title={`“${lastWordOf(bad[0].text)}” and “${lastWordOf(bad[1].text)}” don't rhyme — tap to make it rhyme`}
+                              aria-label={`“${lastWordOf(bad[0].text)}” and “${lastWordOf(bad[1].text)}” don't rhyme — make it rhyme`}
                             >
-                              <Sparkles className="h-3.5 w-3.5" /> Make it rhyme
+                              <Sparkles className="h-3 w-3" />
+                              {busyLine === bad[1].id ? "rhyming…" : "no rhyme · fix"}
                             </button>
                           </div>
                         )}
@@ -2006,6 +2018,12 @@ export function SongApp({
           volumes={tree.project.settings?.mix ?? {}}
           setVolumes={(mix) => saveMix({ mix })}
           preview={(k, v) => engine.current?.setVolume(k, v)}
+          sounds={tree.project.settings?.fx ?? {}}
+          setSound={async (lane, preset) => {
+            await call(`/api/projects/${pid}`, { action: "setSound", lane, preset });
+            // playing: heard with the new sound from here on
+            if (playing && !controller) void play(engine.current?.position() ?? now, stopAt.current);
+          }}
           voice={withGuide && !!voice}
           onClose={() => setMixOpen(false)}
         />
@@ -2102,16 +2120,55 @@ function LineCard(props: {
   // notes for recording on the words (pause, double-time…)
   const marks = marksFor(l);
   const [marking, setMarking] = useState(false);
+  // the symbol bar while writing: a symbol where the cursor is (double-time joins the words around it)
+  const editBox = useRef<HTMLTextAreaElement | null>(null);
+  const insertSymbol = (sym: string) => {
+    const el = editBox.current;
+    const v = props.draft;
+    let a = el?.selectionStart ?? v.length;
+    let b = el?.selectionEnd ?? v.length;
+    let out: string;
+    if (sym === "_") {
+      // words selected: all joined; else the space next to the cursor becomes the join
+      if (b > a) {
+        out = v.slice(0, a) + v.slice(a, b).trim().replace(/\s+/g, "_") + v.slice(b);
+        b = a + v.slice(a, b).trim().length;
+      } else {
+        // the gap the cursor is in (or the next one): the words around it joined, a break in it kept ("ci/_divide")
+        const gap = /[\s/|~^]/;
+        let l = a;
+        if (!gap.test(v[l - 1] ?? "") && !gap.test(v[l] ?? "")) while (l < v.length && !gap.test(v[l])) l++;
+        while (l > 0 && gap.test(v[l - 1])) l--;
+        let r = l;
+        while (r < v.length && gap.test(v[r])) r++;
+        if (l === 0 || r >= v.length) return;
+        const syms = v.slice(l, r).replace(/\s+/g, "");
+        out = v.slice(0, l) + syms + "_" + v.slice(r);
+        b = l + syms.length + 1;
+      }
+    } else {
+      // after the word the cursor is in or after
+      while (a < v.length && /\S/.test(v[a]) && !/[/|~^]/.test(v[a])) a++;
+      const ins = sym.startsWith(" ") && v[a - 1] === " " ? sym.trimStart() : sym;
+      out = v.slice(0, a) + ins + v.slice(a).replace(/^ /, ins.endsWith(" ") ? "" : " ");
+      b = a + ins.length;
+    }
+    props.setDraft(out.replace(/ {2,}/g, " "));
+    requestAnimationFrame(() => {
+      el?.focus();
+      el?.setSelectionRange(b, b);
+    });
+  };
   const target = l.flow?.syllables ?? null;
   const syl = l.text.trim() ? prosody(l.text, lang).syllables : 0;
   const fits = target !== null && syl > 0 ? Math.abs(syl - target) <= 1 : null;
   const lineText = (
     <span className={`text-[17px] leading-snug ${l.text.trim() ? "" : "italic text-muted"}`}>
       {l.text.trim() ? (
-        marks.length ? (
+        untyped(marks).length ? (
           <MarkedText text={l.text.trim()} marks={marks} />
         ) : (
-          <FlowText text={l.text.trim()} lang={lang} flow={l.flow} rhyme={!!props.pair} />
+          <FlowText text={l.text.trim()} lang={lang} flow={l.flow} rhyme={!!props.pair} marks={marks} />
         )
       ) : props.busy ? (
         "Writing…"
@@ -2149,11 +2206,31 @@ function LineCard(props: {
       {props.editing ? (
         <div className="space-y-2">
           <textarea
+            ref={editBox}
             className="input min-h-16 text-[17px]"
             autoFocus
             value={props.draft}
             onChange={(e) => props.setDraft(e.target.value.replace(/\n/g, " "))}
           />
+          {/* symbols for recording: kept with the line, out of its text (rhymes and the AI don't see them) */}
+          <div className="flex gap-1.5 overflow-x-auto pb-0.5">
+            {NOTATION_KEYS.map((k) => (
+              <button
+                key={k.kind}
+                className="flex shrink-0 items-center gap-1 rounded-full bg-panel-2 px-2.5 py-1.5 text-xs font-semibold text-fg/80 active:bg-accent-soft"
+                // the keyboard stays open
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => insertSymbol(k.insert)}
+              >
+                <span className="font-mono font-bold text-accent">{k.insert.trim()}</span>
+                {k.label}
+              </button>
+            ))}
+          </div>
+          <p className="text-[11px] text-muted">
+            <b className="font-mono text-accent">_</b> joins words in double-time · <b className="font-mono text-accent">/</b> short break · <b className="font-mono text-accent">{"//"}</b> long break ·{" "}
+            <b className="font-mono text-accent">~</b> hold · <b className="font-mono text-accent">^</b> breath — Hear and the karaoke follow them.
+          </p>
           <div className="flex gap-2">
             <button className="btn-primary flex-1 justify-center rounded-xl py-2" onClick={props.onSave}>
               Save
@@ -2745,6 +2822,9 @@ function MixSheet(props: {
   preview: (key: string, v: number) => void;
   /** the lyrics in your voice (Hear) are on */
   voice: boolean;
+  /** each layer's sound (effect preset) */
+  sounds: Record<string, string>;
+  setSound: (lane: string, preset: string) => void;
   onClose: () => void;
 }) {
   const vocalsOn = props.vocalsOff !== "all" && props.vocalsOff.length === 0;
@@ -2796,6 +2876,23 @@ function MixSheet(props: {
           const on = !props.muted.includes(l);
           return (
             <Channel key={l} label={l} sub="your recording" value={vol(laneBus(l))} onValue={(v) => setVol(laneBus(l), v)} off={!on}>
+              {/* its sound: the effect on this layer (Record → Sound of the layer has the previews) */}
+              <select
+                className="max-w-[9.5rem] shrink-0 truncate rounded-full bg-panel px-2.5 py-1.5 text-xs font-semibold text-accent ring-1 ring-line/60"
+                value={layerPreset(props.sounds, l).id}
+                onChange={(e) => props.setSound(l, e.target.value)}
+                aria-label={`${l} effect`}
+              >
+                {FX_CATEGORIES.map((c) => (
+                  <optgroup key={c} label={c}>
+                    {FX_PRESETS.filter((p) => p.category === c).map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
               <Switch on={on} onToggle={() => props.setMuted(on ? [...props.muted, l] : props.muted.filter((x) => x !== l))} label={l} />
             </Channel>
           );

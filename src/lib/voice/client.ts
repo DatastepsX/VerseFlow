@@ -3,6 +3,8 @@
 import type { PlayLayer } from "@/lib/studio/engine";
 import type { ProjectTree } from "@/lib/types";
 import { lineSlots, planLine, planSyllables, renderLine, type SpokenWord } from "./guide";
+import { slotsWithMarks } from "@/lib/flow/notation";
+import { marksFor } from "@/lib/marks";
 
 /**
  * The guide vocal in the browser: the lines spoken in the writer's voice
@@ -11,7 +13,7 @@ import { lineSlots, planLine, planSyllables, renderLine, type SpokenWord } from 
  */
 
 const rendered = new Map<string, PlayLayer>();
-const keyOf = (l: { id: string; text: string; flow: unknown; audio_at: number | null }) => `${l.id}|${l.text.trim()}|${l.audio_at}|${JSON.stringify(l.flow)}`;
+const keyOf = (l: { id: string; text: string; flow: unknown; audio_at: number | null; marks?: unknown }) => `${l.id}|${l.text.trim()}|${l.audio_at}|${JSON.stringify(l.flow)}|${JSON.stringify(l.marks ?? null)}`;
 
 async function post<T>(url: string, body: unknown): Promise<T> {
   const res = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
@@ -48,10 +50,16 @@ export async function guideLayers(pid: string, tree: ProjectTree, lineIds: strin
         if (!l) return;
         const buf = await ctx.decodeAudioData(await fetch(s.url).then((r) => r.arrayBuffer()));
         const next = all[all.indexOf(l) + 1];
-        const slots = lineSlots(l, next?.audio_at ?? null, tree.project.language);
-        if (!slots) return;
+        const flowSlots = lineSlots(l, next?.audio_at ?? null, tree.project.language);
+        if (!flowSlots) return;
+        // the writer's symbols (double-time, breaks, holds) move the syllables within the line's stretch
+        const marked = slotsWithMarks(flowSlots, l.text, tree.project.language, marksFor(l));
+        const slots = marked?.slots ?? flowSlots;
+        const flow = marked
+          ? { long: [...marked.long, ...(l.flow?.syllables === marked.slots.times.length ? (l.flow.long ?? []) : [])], held: !!l.flow?.held, pauses: [] }
+          : l.flow;
         // syllable by syllable on the flow (breaks stay silent, long notes held); else word by word
-        const plan = planSyllables(l.text, s.words, tree.project.language, slots, l.flow) ?? planLine(s.words, tree.project.language, slots);
+        const plan = planSyllables(l.text, s.words, tree.project.language, slots, flow) ?? planLine(s.words, tree.project.language, slots);
         const { samples, origin } = renderLine(buf.getChannelData(0), buf.sampleRate, plan);
         if (!samples.length) return;
         const out = ctx.createBuffer(1, samples.length, buf.sampleRate);

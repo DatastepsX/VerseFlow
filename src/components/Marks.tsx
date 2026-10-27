@@ -15,7 +15,7 @@ export function MarkedText({ text, marks, lit, onWord }: { text: string; marks: 
   return (
     <>
       {words.map((w, i) => {
-        const after = marks.filter((m) => m.at === i && ["pause", "breath", "up", "down", "echo"].includes(m.kind));
+        const after = marks.filter((m) => m.at === i && ["pause", "rest", "breath", "up", "down", "echo"].includes(m.kind));
         return (
           <span key={i}>
             {i > 0 && " "}
@@ -34,7 +34,7 @@ export function MarkedText({ text, marks, lit, onWord }: { text: string; marks: 
             {after.map((m) => (
               <span
                 key={m.kind}
-                className={`font-bold text-accent ${m.kind === "pause" || m.kind === "breath" ? "mx-0.5" : "ml-0.5 align-super text-[0.65em]"}`}
+                className={`font-bold text-accent ${m.kind === "pause" || m.kind === "rest" || m.kind === "breath" ? "mx-0.5" : "ml-0.5 align-super text-[0.65em]"}`}
                 title={markInfo(m.kind).label}
               >
                 {markInfo(m.kind).symbol}

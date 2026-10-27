@@ -3,12 +3,14 @@
 import type { CSSProperties } from "react";
 import { flowGroups } from "@/lib/flow/display";
 import type { LineFlow } from "@/lib/types";
+import type { Mark } from "@/lib/marks";
 
 /**
  * A line as it is sung: its word groups with a break (‖) between them, a long note drawn out (its underline
  * runs on, ~), the stressed syllables underlined in the accent colour. A wrapped line breaks between word
  * groups — never inside one — and goes on indented, so it reads as the same line. `lit`: syllables already
- * sung (karaoke); `rhyme`: the last word marked.
+ * sung (karaoke); `rhyme`: the last word marked. `marks`: the writer's symbols — a break (‖, a long one ‖‖, a
+ * breath ˇ), a held word (~), words in double-time joined (‿).
  */
 export function FlowText({
   text,
@@ -18,6 +20,7 @@ export function FlowText({
   rhyme,
   lit,
   bars = true,
+  marks,
 }: {
   text: string;
   lang: string;
@@ -27,8 +30,9 @@ export function FlowText({
   lit?: (syllable: number) => boolean;
   /** the stress bars under the syllables */
   bars?: boolean;
+  marks?: Mark[];
 }) {
-  const groups = flowGroups(text, lang, flow, beat);
+  const groups = flowGroups(text, lang, flow, beat, marks);
   if (!groups) return rhyme ? <RhymeEnd text={text} /> : <>{text}</>;
   const all = groups.flatMap((g) => g.syllables);
   // the rhyme word: from where the last word starts (a merged syllable counts as its start)
@@ -55,9 +59,15 @@ export function FlowText({
             {gi > 0 && (
               <>
                 {" "}
-                <span aria-label="break" className="mx-0.5 align-[0.05em] text-[0.7em] font-bold text-accent/45">
-                  ‖
-                </span>{" "}
+                {(() => {
+                  // the writer's own break stands out; one found in the flow is quieter
+                  const a = groups[gi - 1].after;
+                  return (
+                    <span aria-label={a === "rest" ? "long break" : a === "breath" ? "breath" : "break"} className={`mx-0.5 align-[0.05em] font-bold ${a ? "text-[0.8em] text-accent" : "text-[0.7em] text-accent/45"}`}>
+                      {a === "rest" ? "‖‖" : a === "breath" ? "ˇ" : "‖"}
+                    </span>
+                  );
+                })()}{" "}
               </>
             )}
             {/* a word group stays on one line (unless it's longer than one) */}
@@ -69,7 +79,8 @@ export function FlowText({
                 const inRhyme = rhyme && (s.i > rhymeFrom || (s.i === rhymeFrom && !s.text.includes(" ")));
                 return (
                   <span key={s.i}>
-                    {s.space && k > 0 && " "}
+                    {/* double-time: the words joined */}
+                    {s.space && k > 0 && (s.double && g.syllables[k - 1].double ? <span className="font-bold text-accent">‿</span> : " ")}
                     <span
                       className={`${lit?.(s.i) ? "text-accent" : inRhyme ? "text-accent" : ""}`}
                       style={{ ...bar(s.stressed), ...(held ? { paddingRight: "0.35em" } : {}) }}

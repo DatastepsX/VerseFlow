@@ -4,6 +4,7 @@ import { FlowText } from "@/components/FlowText";
 import { useEffect, useState, type ReactNode, type RefObject } from "react";
 import { syllableParts } from "@/lib/rhyme/syllabify";
 import { marksFor } from "@/lib/marks";
+import { slotsWithMarks, untyped } from "@/lib/flow/notation";
 import { MarkedText } from "@/components/Marks";
 import { Check, ChevronRight, Headphones, Laptop, Mic, Pause, Phone, Play, Plus, Restart, Sliders, Trash, Wand } from "@/components/icons";
 import { FX_CATEGORIES, FX_PRESETS, layerPreset } from "@/lib/fx/presets";
@@ -304,10 +305,10 @@ function RecordScreen({ r, tree, setTree, rangeOf, bar, timeline, onBusy, host, 
                 >
                   {isLive && r.clock && Number.isFinite(from) ? (
                     <Karaoke line={l} lang={tree.project.language} from={from} until={Math.min(Number.isFinite(next) ? next : from + bar, from + 2 * bar)} clock={r.clock} />
-                  ) : marksFor(l).length ? (
+                  ) : untyped(marksFor(l)).length ? (
                     <MarkedText text={l.text.trim()} marks={marksFor(l)} />
                   ) : (
-                    <FlowText text={l.text.trim()} lang={tree.project.language} flow={l.flow} beat={bar / 4} />
+                    <FlowText text={l.text.trim()} lang={tree.project.language} flow={l.flow} beat={bar / 4} marks={marksFor(l)} />
                   )}
                 </p>
               );
@@ -584,14 +585,17 @@ function Karaoke({ line, lang, from, until, clock }: { line: Line; lang: string;
   if (!parts) return marks.length ? <MarkedText text={line.text.trim()} marks={marks} /> : <>{line.text}</>;
   const sung = line.flow?.times;
   // the flow's syllable times; written with a syllable more or less: spread over the same stretch
-  const times =
+  const plain =
     sung && sung.length === parts.length
       ? sung
       : sung && sung.length > 1
         ? parts.map((_, i) => sung[0] + ((sung[sung.length - 1] - sung[0]) * i) / Math.max(1, parts.length - 1))
         : parts.map((_, i) => from + ((until - from) * i) / parts.length);
-  // with marks: word by word (a word lights up with its first syllable), the marks stay in place
-  if (marks.length) {
+  // the writer's symbols move the syllables as Hear does (double-time faster, breaks leave a gap)
+  const typed = untyped(marks).length ? null : slotsWithMarks({ times: plain, end: line.flow?.end ?? plain[plain.length - 1] + 0.3 }, line.text, lang, marks);
+  const times = typed?.slots.times ?? plain;
+  // with marks set in the editor (accent, up…): word by word (a word lights up with its first syllable), the marks stay in place
+  if (untyped(marks).length) {
     const wordStart: number[] = [];
     parts.forEach((p, i) => {
       if (i === 0 || p.space) wordStart.push(times[i]);
@@ -599,7 +603,7 @@ function Karaoke({ line, lang, from, until, clock }: { line: Line; lang: string;
     return <MarkedText text={line.text.trim()} marks={marks} lit={(w) => now >= (wordStart[w] ?? Infinity) - 0.03} />;
   }
   // as it is sung: word groups, breaks, long notes — each syllable lighting up on its time
-  return <FlowText text={line.text.trim()} lang={lang} flow={line.flow} lit={(i) => now >= (times[i] ?? Infinity) - 0.03} />;
+  return <FlowText text={line.text.trim()} lang={lang} flow={line.flow} marks={marks} lit={(i) => now >= (times[i] ?? Infinity) - 0.03} />;
 }
 
 function DockButton({ label, disabled, onClick, children }: { label: string; disabled?: boolean; onClick: () => void; children: ReactNode }) {

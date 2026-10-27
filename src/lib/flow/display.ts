@@ -1,6 +1,8 @@
 import { prosody } from "@/lib/rhyme/prosody";
 import { syllableParts, type SyllablePart } from "@/lib/rhyme/syllabify";
 import type { LineFlow } from "@/lib/types";
+import type { Mark } from "@/lib/marks";
+import { lastSyllableOf, syllableWords } from "./notation";
 
 /**
  * A line as its flow reads: the word groups sung together (a break between them), the stressed syllables and
@@ -14,15 +16,19 @@ export interface FlowSyllable extends SyllablePart {
   stressed: boolean;
   /** held (a long note) */
   long: boolean;
+  /** in a double-time stretch (marked by the writer) */
+  double?: boolean;
 }
 
 export interface FlowGroup {
   syllables: FlowSyllable[];
+  /** the writer's break after this group (a typed symbol): short, long, a breath */
+  after?: "pause" | "rest" | "breath";
 }
 
 const PUNCT_END = /[,;:.!?…—–]["»”’)]*$/;
 
-export function flowGroups(text: string, lang: string, flow: LineFlow | null | undefined, beat?: number): FlowGroup[] | null {
+export function flowGroups(text: string, lang: string, flow: LineFlow | null | undefined, beat?: number, marks: Mark[] = []): FlowGroup[] | null {
   const parts = syllableParts(text, lang);
   if (!parts || !parts.length) return null;
   const n = parts.length;
@@ -65,22 +71,42 @@ export function flowGroups(text: string, lang: string, flow: LineFlow | null | u
     if (i < n - 1 && PUNCT_END.test(p.text.trim()) && parts[i + 1].space) breaks.add(i);
   });
 
+  // the writer's marks: breaks after words, held words, double-time words
+  const words = syllableWords(parts);
+  const brk = new Map<number, "pause" | "rest" | "breath">();
+  const double = new Set<number>();
+  for (const m of marks) {
+    if (m.kind === "double") words.forEach((w, i) => w.start >= m.at && w.end <= (m.to ?? m.at) && double.add(i));
+    if (m.kind !== "pause" && m.kind !== "rest" && m.kind !== "breath") continue;
+    const i = lastSyllableOf(words, m.at);
+    if (i < 0 || i >= n - 1) continue;
+    // "te io" with a break after "te": the syllable splits there
+    if (words[i].end > m.at) splitAt.add(i);
+    else breaks.add(i);
+    if (brk.get(i) !== "rest") brk.set(i, m.kind);
+  }
+
   // long notes: as the flow holds them, or (timed) a syllable a beat or more before the next that isn't a break
   const long = new Set<number>();
   for (const k of flow?.long ?? []) if (k >= 1) long.add(Math.min(n - 1, map(k) - 1));
   if (flow?.held) long.add(n - 1);
   if (t && t.length === n && beat) t.forEach((x, i) => i < n - 1 && t[i + 1] - x >= 0.95 * beat && !breaks.has(i) && long.add(i));
+  for (const m of marks) if (m.kind === "stretch") long.add(lastSyllableOf(words, m.at));
 
   const groups: FlowGroup[] = [{ syllables: [] }];
   parts.forEach((p, i) => {
-    const s = { ...p, i, stressed: stressed.has(i), long: long.has(i) };
+    const s = { ...p, i, stressed: stressed.has(i), long: long.has(i), double: double.has(i) };
     if (splitAt.has(i)) {
       // "te io": "te" ends the group, "io" starts the next (both halves are syllable i)
       const cut = p.text.lastIndexOf(" ");
       groups[groups.length - 1].syllables.push({ ...s, text: p.text.slice(0, cut), long: false });
+      groups[groups.length - 1].after = brk.get(i);
       groups.push({ syllables: [{ ...s, text: p.text.slice(cut + 1), space: true, stressed: false }] });
     } else groups[groups.length - 1].syllables.push(s);
-    if (breaks.has(i)) groups.push({ syllables: [] });
+    if (breaks.has(i)) {
+      groups[groups.length - 1].after = brk.get(i);
+      groups.push({ syllables: [] });
+    }
   });
   return groups.filter((g) => g.syllables.length);
 }
