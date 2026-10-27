@@ -23,7 +23,7 @@ async function SongView({
   const q = await searchParams;
   const autoDetect = q.detect === "1";
   // ?view=record (&on=mac: this phone is the remote for the Mac)
-  const view = (["flow", "lyrics", "record", "more"] as const).find((v) => v === q.view);
+  const view = (["flow", "lyrics", "record", "mix", "more"] as const).find((v) => v === q.view);
   const on = q.on === "mac" ? "mac" : undefined;
   let tree;
   try {

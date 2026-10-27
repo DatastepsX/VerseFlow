@@ -53,8 +53,10 @@ export interface ProjectSettings {
   fx?: Record<string, string>;
   /** the mix: each channel's volume (1: as is; 0–1.5) — "beat", "flow", "voice" (Hear) and "lane:<layer>" */
   mix?: Record<string, number>;
-  /** recording layers turned off in the mix */
+  /** recording layers turned off in the mix (older songs; now in `mixer`) */
   mixOff?: string[];
+  /** the mixer: each channel ("beat", "flow", "voice", "lane:<layer>") — volume, pan, mute, solo (lib/studio/mix) */
+  mixer?: Record<string, { vol?: number; pan?: number; mute?: boolean; solo?: boolean }>;
   /** where the song's original vocals are out (once removed): everywhere ("all", the default) or these parts */
   vocalsOff?: "all" | string[];
   /** the writer's brief for each part's lyrics (mood, perspective, words, rhymes, topic): lib/brief */
@@ -199,6 +201,8 @@ export interface Take {
   trim_out: number | null;
   /** its volume in the mix (1: as recorded) */
   gain: number;
+  /** its place left / right (−1 … 1, 0: centre) */
+  pan: number;
   /** the take used for playback and exports (one per section + layer) */
   chosen: boolean;
   created_at: string;

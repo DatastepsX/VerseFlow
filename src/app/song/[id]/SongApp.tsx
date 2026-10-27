@@ -7,7 +7,7 @@ import type { RemoteCmd } from "@/lib/studio/remote";
 import { NAV_EVENT, postNav, type NavDetail } from "@/components/RemoteFollow";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fmtTime } from "@/lib/audio/song-map";
 import { buildTimeline, positionIn } from "@/lib/audio/timeline";
 import { extendBuffers } from "@/lib/audio/arrange";
@@ -24,14 +24,14 @@ import { followTo } from "@/components/writer/follow";
 import { download, fullText } from "@/components/writer/util";
 import { VoiceSheet, type VoiceInfo } from "./VoiceSheet";
 import { RecordView } from "./Record";
+import { Mixer } from "./Mixer";
 import { MarkedText, MarksEditor } from "@/components/Marks";
 import { marksFor, type Mark } from "@/lib/marks";
 import { NOTATION_KEYS, parseNotation, toNotation, untyped } from "@/lib/flow/notation";
 import { lanesOf, usePref } from "./recorder";
 import { buildChain } from "@/lib/fx/chain";
-import { FX_CATEGORIES, FX_PRESETS, layerPreset } from "@/lib/fx/presets";
-import { clipOf, laneBus, mixVolumes } from "@/lib/studio/mix";
-import { VolumeSlider } from "@/components/VolumeSlider";
+import { layerPreset } from "@/lib/fx/presets";
+import { channelOf, clipOf, laneBus, mixPans, mixVolumes, withChannel, type ChannelPatch } from "@/lib/studio/mix";
 import { undoHeaders, undoStep } from "@/lib/undo-group";
 import { TapFlow } from "./TapFlow";
 import { FlowSheet, type SheetAudio } from "./FlowSheet";
@@ -68,7 +68,7 @@ import {
   Waveform,
 } from "@/components/icons";
 
-export type View = "flow" | "lyrics" | "record" | "more";
+export type View = "flow" | "lyrics" | "record" | "mix" | "more";
 type LyricLine = Line & { alternatives: ProjectTree["sections"][number]["lines"][number]["alternatives"] };
 
 const STEPS: { key: FlowStep; label: string }[] = [
@@ -294,21 +294,33 @@ export function SongApp({
   // ---------- playback with the lyrics following ----------
   const timeline = useMemo(() => buildTimeline(tree.sections, tree.audio, lang), [tree.sections, tree.audio, lang]);
   const [playing, setPlaying] = useState(false);
-  const [withFlow, setWithFlow] = useState(true);
-  /** the mix (kept with the song: the phone mixes what the Mac plays) — the layers off, each channel's volume */
-  const muted = useMemo(() => tree.project.settings?.mixOff ?? [], [tree.project.settings?.mixOff]);
-  const [mixOpen, setMixOpen] = useState(false);
-  const saveMix = (patch: { mix?: Record<string, number>; mixOff?: string[] }) => {
-    const settings = { ...(tree.project.settings ?? {}), ...patch };
-    setTree({ ...tree, project: { ...tree.project, settings } });
-    void call(`/api/projects/${pid}`, { settings }, "PATCH");
+  // your recorded flow plays along (turned down or muted in the mixer)
+  const withFlow = true;
+  /** the mixer (kept with the song: the phone mixes what the Mac plays) — each channel's volume, pan, mute, solo */
+  const muted = lanesOf(tree).filter((l) => channelOf(tree.project.settings, laneBus(l)).mute);
+  // a channel changed: heard at once (the engine follows the song's settings), saved a moment later
+  const mixSave = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const treeRef = useRef(tree);
+  useEffect(() => {
+    treeRef.current = tree;
+  });
+  const setChannel = (key: string, patch: ChannelPatch) => {
+    const t = treeRef.current;
+    const settings = withChannel(t.project.settings, key, patch);
+    const next = { ...t, project: { ...t.project, settings } };
+    treeRef.current = next;
+    setTree(next);
+    if (mixSave.current) clearTimeout(mixSave.current);
+    mixSave.current = setTimeout(() => void call(`/api/projects/${pid}`, { settings: treeRef.current.project.settings }, "PATCH"), 450);
   };
-  // the engine's channels follow the mix (live, also while it plays)
-  const mixKey = JSON.stringify(mixVolumes(tree.project.settings, lanesOf(tree)));
+  // the engine's channels follow the mixer (live, also while it plays)
+  const mixKey = JSON.stringify([mixVolumes(tree.project.settings, lanesOf(tree)), mixPans(tree.project.settings, lanesOf(tree))]);
   useEffect(() => {
     const e = engine.current;
     if (!e) return;
-    for (const [k, v] of Object.entries(JSON.parse(mixKey) as Record<string, number>)) e.setVolume(k, v);
+    const [vols, pans] = JSON.parse(mixKey) as Record<string, number>[];
+    for (const [k, v] of Object.entries(vols)) e.setVolume(k, v);
+    for (const [k, v] of Object.entries(pans)) e.setPan(k, v);
   }, [mixKey]);
   /** the takes used in the song, each on its layer's channel (an off layer plays silent: turning it on is live), with their sound (as in Record; autotune only there) */
   const takeLayers = async (): Promise<PlayLayer[]> => {
@@ -324,7 +336,7 @@ export function SongApp({
       const buffer = flowBufs.current.get(t.id);
       const p = layerPreset(tree.project.settings?.fx, t.lane);
       return buffer
-        ? [{ buffer, at: t.start_at, gain: t.gain ?? 1, bus: laneBus(t.lane), id: t.id, fx: p.id === "raw" ? undefined : (ctx: BaseAudioContext) => buildChain(ctx, p, bpm), clip: clipOf(t) }]
+        ? [{ buffer, at: t.start_at, gain: t.gain ?? 1, pan: t.pan ?? 0, bus: laneBus(t.lane), id: t.id, fx: p.id === "raw" ? undefined : (ctx: BaseAudioContext) => buildChain(ctx, p, bpm), clip: clipOf(t) }]
         : [];
     });
   };
@@ -776,7 +788,7 @@ export function SongApp({
   useEffect(() => {
     hostRun.current = (c) => {
       if (c.t === "nav") {
-        if (["flow", "lyrics", "record", "more"].includes(c.view)) setView(c.view as View);
+        if (["flow", "lyrics", "record", "mix", "more"].includes(c.view)) setView(c.view as View);
         if (c.part) {
           setActivePart(c.part);
           setTimeout(() => document.getElementById(`part-${c.part}`)?.scrollIntoView({ block: "start", behavior: "smooth" }), 150);
@@ -1229,7 +1241,7 @@ export function SongApp({
             </div>
             <button
               className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-panel-2 text-fg/80"
-              onClick={() => setMixOpen(true)}
+              onClick={() => setView("mix")}
               title="Mixer: the beat, the original vocals, your flow, your recordings"
               aria-label="Mixer"
             >
@@ -1911,7 +1923,7 @@ export function SongApp({
           (tree.audio ? (
             <RecordView
               muted={muted}
-              onMix={() => setMixOpen(true)}
+              onMix={() => setView("mix")}
               part={activePart}
               onPart={setActivePart}
               tree={tree}
@@ -1937,6 +1949,37 @@ export function SongApp({
               </button>
             </div>
           ))}
+
+        {/* ----- MIX: the mixer ----- */}
+        {view === "mix" && (
+          <Mixer
+            tree={tree}
+            lanes={lanesOf(tree).filter((l) => l !== "Flow")}
+            parts={tree.sections.filter((x) => x.audio_start !== null).map((x) => ({ id: x.id, name: x.name, ...partRange(x) }))}
+            total={total}
+            playing={playing}
+            now={now}
+            onPlay={(from) => void play(from)}
+            onStop={stopPlay}
+            onSeek={(t) => (playing ? void play(t) : setNow(t))}
+            setChannel={setChannel}
+            setSound={async (lane, preset) => {
+              await call(`/api/projects/${pid}`, { action: "setSound", lane, preset });
+              // playing: heard with the new sound from here on
+              if (playing && !controller) void play(engine.current?.position() ?? now, stopAt.current);
+            }}
+            hasFlow={flowTakes.length > 0}
+            voice={withGuide && !!voice}
+            vocals={instrumental ? { on: vocalsOff !== "all" && vocalsOff.length === 0, toggle: () => setVocalsOff(vocalsOff !== "all" && vocalsOff.length === 0 ? "all" : []) } : null}
+            onSeparate={() => void separate()}
+            separating={separating}
+            call={call}
+            liveTake={(id, m) => {
+              if (m.gain !== undefined) engine.current?.setLayerGain(id, m.gain);
+              if (m.pan !== undefined) engine.current?.setLayerPan(id, m.pan);
+            }}
+          />
+        )}
 
         {/* ----- MORE ----- */}
         {view === "more" && (
@@ -2004,30 +2047,6 @@ export function SongApp({
             />
           );
         })()}
-      {mixOpen && (
-        <MixSheet
-          split={!!instrumental}
-          vocalsOff={vocalsOff}
-          setVocalsOff={setVocalsOff}
-          onSeparate={() => void separate()}
-          separating={separating}
-          flow={flowTakes.length ? { on: withFlow, set: setWithFlow } : null}
-          lanes={lanesOf(tree).filter((l) => tree.takes.some((t) => t.chosen && t.lane === l))}
-          muted={muted}
-          setMuted={(m) => saveMix({ mixOff: m })}
-          volumes={tree.project.settings?.mix ?? {}}
-          setVolumes={(mix) => saveMix({ mix })}
-          preview={(k, v) => engine.current?.setVolume(k, v)}
-          sounds={tree.project.settings?.fx ?? {}}
-          setSound={async (lane, preset) => {
-            await call(`/api/projects/${pid}`, { action: "setSound", lane, preset });
-            // playing: heard with the new sound from here on
-            if (playing && !controller) void play(engine.current?.position() ?? now, stopAt.current);
-          }}
-          voice={withGuide && !!voice}
-          onClose={() => setMixOpen(false)}
-        />
-      )}
       {voiceSheet && (
         <VoiceSheet
           engine={engine}
@@ -2050,6 +2069,7 @@ export function SongApp({
             ["flow", Waveform, "Flow"],
             ["lyrics", Lyrics, "Lyrics"],
             ["record", Mic, "Record"],
+            ["mix", Sliders, "Mix"],
             ["more", Ellipsis, "More"],
           ] as const
         ).map(([v, Icon, label]) => (
@@ -2805,131 +2825,6 @@ function withoutVocals(ctx: BaseAudioContext, full: AudioBuffer, music: AudioBuf
  * What you hear: the song's original vocals (once removed: on / off), your recorded flow, and each recording
  * layer (Lead, Double, Ad-libs…). Saved on this device; the vocals choice with the song.
  */
-function MixSheet(props: {
-  split: boolean;
-  vocalsOff: "all" | string[];
-  setVocalsOff: (v: "all" | string[]) => void;
-  onSeparate: () => void;
-  separating: boolean;
-  flow: { on: boolean; set: (on: boolean) => void } | null;
-  lanes: string[];
-  muted: string[];
-  setMuted: (m: string[]) => void;
-  /** each channel's volume, as saved (missing: 100%) */
-  volumes: Record<string, number>;
-  setVolumes: (v: Record<string, number>) => void;
-  /** heard at once while you drag (this device) */
-  preview: (key: string, v: number) => void;
-  /** the lyrics in your voice (Hear) are on */
-  voice: boolean;
-  /** each layer's sound (effect preset) */
-  sounds: Record<string, string>;
-  setSound: (lane: string, preset: string) => void;
-  onClose: () => void;
-}) {
-  const vocalsOn = props.vocalsOff !== "all" && props.vocalsOff.length === 0;
-  const someParts = props.vocalsOff !== "all" && props.vocalsOff.length > 0;
-  // the sliders move at once; saved a moment after you let go
-  const [vols, setVols] = useState(props.volumes);
-  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const latest = useRef(vols);
-  const setVol = (key: string, v: number) => {
-    const next = { ...latest.current, [key]: Math.round(v * 100) / 100 };
-    latest.current = next;
-    setVols(next);
-    props.preview(key, props.muted.includes(key.replace(/^lane:/, "")) && key.startsWith("lane:") ? 0 : v);
-    if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => props.setVolumes(latest.current), 450);
-  };
-  const close = () => {
-    if (saveTimer.current) {
-      clearTimeout(saveTimer.current);
-      props.setVolumes(latest.current);
-    }
-    props.onClose();
-  };
-  const vol = (key: string) => vols[key] ?? 1;
-  return (
-    <div className="fixed inset-0 z-40 flex items-end justify-center bg-black/40" onClick={close}>
-      <div onClick={(e) => e.stopPropagation()} className="max-h-[92dvh] w-full max-w-lg space-y-2.5 overflow-auto rounded-t-3xl bg-panel px-4 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-3">
-        <div className="mx-auto h-1.5 w-10 rounded-full bg-line" />
-        <div>
-          <h2 className="text-xl font-bold">Mixer</h2>
-          <p className="text-xs text-muted">Changes are heard at once and kept with the song. Tap a percentage for 100% again.</p>
-        </div>
-        <Channel label="Beat" sub={props.split ? (someParts ? "original vocals out in some parts" : vocalsOn ? "with the original vocals" : "the music alone") : undefined} value={vol("beat")} onValue={(v) => setVol("beat", v)}>
-          {props.split ? (
-            <Switch on={vocalsOn} onToggle={() => props.setVocalsOff(vocalsOn ? "all" : [])} label="Original vocals" />
-          ) : (
-            <button className="shrink-0 rounded-full bg-accent-soft px-3 py-1.5 text-xs font-semibold text-accent disabled:opacity-50" disabled={props.separating} onClick={props.onSeparate} title="To mute the original vocals, the song is split once into vocals and music · 1 call">
-              {props.separating ? "Removing…" : "Remove vocals · 1 call"}
-            </button>
-          )}
-        </Channel>
-        {props.flow && (
-          <Channel label="Your recorded flow" value={vol("flow")} onValue={(v) => setVol("flow", v)} off={!props.flow.on}>
-            <Switch on={props.flow.on} onToggle={() => props.flow!.set(!props.flow!.on)} label="Your recorded flow" />
-          </Channel>
-        )}
-        {props.voice && <Channel label="Your voice (Hear)" value={vol("voice")} onValue={(v) => setVol("voice", v)} />}
-        {props.lanes.map((l) => {
-          const on = !props.muted.includes(l);
-          return (
-            <Channel key={l} label={l} sub="your recording" value={vol(laneBus(l))} onValue={(v) => setVol(laneBus(l), v)} off={!on}>
-              {/* its sound: the effect on this layer (Record → Sound of the layer has the previews) */}
-              <select
-                className="max-w-[9.5rem] shrink-0 truncate rounded-full bg-panel px-2.5 py-1.5 text-xs font-semibold text-accent ring-1 ring-line/60"
-                value={layerPreset(props.sounds, l).id}
-                onChange={(e) => props.setSound(l, e.target.value)}
-                aria-label={`${l} effect`}
-              >
-                {FX_CATEGORIES.map((c) => (
-                  <optgroup key={c} label={c}>
-                    {FX_PRESETS.filter((p) => p.category === c).map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.name}
-                      </option>
-                    ))}
-                  </optgroup>
-                ))}
-              </select>
-              <Switch on={on} onToggle={() => props.setMuted(on ? [...props.muted, l] : props.muted.filter((x) => x !== l))} label={l} />
-            </Channel>
-          );
-        })}
-        {!props.lanes.length && <p className="px-1 text-xs text-muted">Your recordings (Lead, Double, Ad-libs…) show up here once you have takes. Each take&apos;s own volume: Record → ✂ on the take.</p>}
-        <button className="btn-primary w-full rounded-2xl py-3" onClick={close}>
-          Done
-        </button>
-      </div>
-    </div>
-  );
-}
-
-/** one channel of the mixer: its name, a big slider (0–150%), its switch */
-function Channel({ label, sub, value, onValue, off, children }: { label: string; sub?: string; value: number; onValue: (v: number) => void; off?: boolean; children?: ReactNode }) {
-  return (
-    <div className={`rounded-2xl bg-panel-2/70 px-4 py-3 ${off ? "opacity-60" : ""}`}>
-      <div className="flex items-center gap-3">
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-[15px] font-semibold">{label}</span>
-          {sub && <span className="block truncate text-xs text-muted">{sub}</span>}
-        </span>
-        {children}
-      </div>
-      <VolumeSlider value={value} onValue={onValue} label={label} />
-    </div>
-  );
-}
-
-function Switch({ on, onToggle, label }: { on: boolean; onToggle: () => void; label: string }) {
-  return (
-    <button onClick={onToggle} role="switch" aria-checked={on} aria-label={label} className={`relative h-7 w-12 shrink-0 rounded-full transition-colors ${on ? "bg-accent" : "bg-line"}`}>
-      <span className={`absolute top-0.5 h-6 w-6 rounded-full bg-white shadow transition-all ${on ? "left-[22px]" : "left-0.5"}`} />
-    </button>
-  );
-}
-
 /** the original vocals in one part: on / off (not split yet: removing them is 1 call) */
 function PartVocals({ off, busy, onToggle }: { off: boolean; busy: boolean; onToggle: () => void }) {
   return (

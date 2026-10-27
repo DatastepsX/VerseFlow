@@ -10,7 +10,7 @@ import { takeWindow } from "@/lib/studio/timing";
 import { encodeWav, peaksOf } from "@/lib/studio/wav";
 import type { ProjectSettings, ProjectTree, Take } from "@/lib/types";
 import { buildChain } from "@/lib/fx/chain";
-import { clipOf, laneBus } from "@/lib/studio/mix";
+import { channelOf, clipOf, laneBus } from "@/lib/studio/mix";
 import { detectKey } from "@/lib/fx/key";
 import { layerPreset, presetById, type FxPreset } from "@/lib/fx/presets";
 import { retune, type MusicKey } from "@/lib/fx/tune";
@@ -310,7 +310,7 @@ export function useLocalRecorder(o: {
     const takes = only
       ? [only, ...tree.takes.filter((t) => t.chosen && lanes.includes(t.lane) && t.lane !== only.lane && t.start_at < to && t.start_at + t.duration > from)]
       : tree.takes.filter((t) => t.chosen && lanes.includes(t.lane) && t.lane !== skipLane && t.start_at < to && t.start_at + t.duration > from);
-    const off = tree.project.settings?.mixOff ?? [];
+    const off = lanes.filter((l) => channelOf(tree.project.settings, laneBus(l)).mute);
     await loadTakes(takes);
     const out: PlayLayer[] = [];
     for (const t of takes) {
@@ -318,7 +318,7 @@ export function useLocalRecorder(o: {
       const buffer = await voiced(t, p);
       // the take played on its own is heard even when its layer is off
       const bus = t === only && off.includes(t.lane) ? undefined : laneBus(t.lane);
-      if (buffer) out.push({ buffer, at: t.start_at, gain: t.gain ?? 1, bus, id: t.id, fx: p.id === "raw" ? undefined : (ctx) => buildChain(ctx, p, bpm), clip: clipOf(t) });
+      if (buffer) out.push({ buffer, at: t.start_at, gain: t.gain ?? 1, pan: t.pan ?? 0, bus, id: t.id, fx: p.id === "raw" ? undefined : (ctx) => buildChain(ctx, p, bpm), clip: clipOf(t) });
     }
     return out;
   };

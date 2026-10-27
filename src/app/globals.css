@@ -154,3 +154,51 @@ body {
   background: #fff;
   box-shadow: 0 1px 4px rgb(0 0 0 / 0.3);
 }
+
+/* a mixer pan: filled from the centre to the value */
+.vf-pan {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 30px;
+  background: transparent;
+  touch-action: pan-y;
+}
+.vf-pan::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 999px;
+  background: linear-gradient(
+    to right,
+    color-mix(in srgb, var(--muted) 30%, transparent) var(--from, 50%),
+    var(--accent) var(--from, 50%),
+    var(--accent) var(--to, 50%),
+    color-mix(in srgb, var(--muted) 30%, transparent) var(--to, 50%)
+  );
+}
+.vf-pan::-moz-range-track {
+  height: 6px;
+  border-radius: 999px;
+  background: linear-gradient(
+    to right,
+    color-mix(in srgb, var(--muted) 30%, transparent) var(--from, 50%),
+    var(--accent) var(--from, 50%),
+    var(--accent) var(--to, 50%),
+    color-mix(in srgb, var(--muted) 30%, transparent) var(--to, 50%)
+  );
+}
+.vf-pan::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  margin-top: -9px;
+  height: 24px;
+  width: 24px;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: 0 1px 4px rgb(0 0 0 / 0.3);
+}
+.vf-pan::-moz-range-thumb {
+  height: 24px;
+  width: 24px;
+  border: 0;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: 0 1px 4px rgb(0 0 0 / 0.3);
+}

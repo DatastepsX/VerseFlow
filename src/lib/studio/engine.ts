@@ -23,8 +23,10 @@ export interface PlayLayer {
   clip?: { from: number; to: number | null };
   /** its mixer channel ("lane:Lead", "flow"…): turned up / down live with setVolume */
   bus?: string;
-  /** a take's id: its own volume can change while it plays (setLayerGain) */
+  /** a take's id: its own volume and pan can change while it plays (setLayerGain / setLayerPan) */
   id?: string;
+  /** −1 left … 1 right */
+  pan?: number;
 }
 
 export interface Recording {
@@ -69,11 +71,13 @@ export class StudioEngine {
   private playing: AudioScheduledSourceNode[] = [];
   /** the effect chains of what plays (cut off on stop) */
   private chains: AudioNode[] = [];
-  /** the mixer: a channel per key, its volume kept between plays */
-  private buses = new Map<string, GainNode>();
+  /** the mixer: a channel per key (volume → pan), its settings kept between plays */
+  private buses = new Map<string, { gain: GainNode; pan: StereoPannerNode }>();
   private volumes = new Map<string, number>();
-  /** what plays now, by take id: its volume */
+  private pans = new Map<string, number>();
+  /** what plays now, by take id: its volume and pan */
   private layerGains = new Map<string, GainNode>();
+  private layerPans = new Map<string, StereoPannerNode>();
   private chunks: { frame: number; channels: Float32Array[] }[] = [];
   private onDone: (() => void) | null = null;
   base = 0;
@@ -240,7 +244,8 @@ export class StudioEngine {
     const start = this.ctx.currentTime + 0.12;
     this.base = start - from;
     this.layerGains.clear();
-    const schedule = (buffer: AudioBuffer, at: number, gainValue: number, fx?: PlayLayer["fx"], clip?: PlayLayer["clip"], bus?: string, id?: string) => {
+    this.layerPans.clear();
+    const schedule = (buffer: AudioBuffer, at: number, gainValue: number, fx?: PlayLayer["fx"], clip?: PlayLayer["clip"], bus?: string, id?: string, pan = 0) => {
       // a cut take: only [c0, c1] of the buffer, at its place in the song
       const c0 = Math.max(0, clip?.from ?? 0);
       const c1 = Math.min(buffer.duration, clip?.to ?? buffer.duration);
@@ -254,15 +259,25 @@ export class StudioEngine {
       const level = this.ctx.createGain();
       level.gain.value = gainValue;
       g.connect(level);
-      if (id) this.layerGains.set(id, level);
       this.chains.push(level);
+      // a take with a place of its own left / right (or one that may get one while it plays)
+      let last: AudioNode = level;
+      if (id || pan) {
+        const p = this.ctx.createStereoPanner();
+        p.pan.value = pan;
+        level.connect(p);
+        last = p;
+        this.chains.push(p);
+        if (id) this.layerPans.set(id, p);
+      }
+      if (id) this.layerGains.set(id, level);
       const out = bus ? this.bus(bus) : this.ctx.destination;
       if (fx) {
         const chain = fx(this.ctx);
-        level.connect(chain.input);
+        last.connect(chain.input);
         chain.output.connect(out);
         this.chains.push(chain.output);
-      } else level.connect(out);
+      } else last.connect(out);
       // a short fade at a cut's edges: no click
       if (clip && (c0 > 0 || c1 < buffer.duration)) {
         const t0 = this.base + Math.max(at + c0, from);
@@ -276,7 +291,7 @@ export class StudioEngine {
       this.playing.push(src);
     };
     if (opts.beat) schedule(opts.beat, 0, opts.beatGain ?? 1, undefined, undefined, "beat");
-    for (const l of opts.layers ?? []) schedule(l.buffer, l.at, l.gain ?? 1, l.fx, l.clip, l.bus, l.id);
+    for (const l of opts.layers ?? []) schedule(l.buffer, l.at, l.gain ?? 1, l.fx, l.clip, l.bus, l.id, l.pan ?? 0);
     for (const c of opts.clicks ?? []) if (c.at >= from) this.click(this.base + c.at, c.accent);
     return this.base;
   }
@@ -284,8 +299,18 @@ export class StudioEngine {
   /** a mixer channel's volume (1: as is), live — also for what plays now */
   setVolume(key: string, v: number) {
     this.volumes.set(key, v);
-    const b = this.buses.get(key);
-    if (b) b.gain.setTargetAtTime(v, this.ctx.currentTime, 0.02);
+    this.buses.get(key)?.gain.gain.setTargetAtTime(v, this.ctx.currentTime, 0.02);
+  }
+
+  /** a mixer channel's pan (−1 left … 1 right), live */
+  setPan(key: string, p: number) {
+    this.pans.set(key, p);
+    this.buses.get(key)?.pan.pan.setTargetAtTime(p, this.ctx.currentTime, 0.02);
+  }
+
+  /** a take's own pan while it plays */
+  setLayerPan(id: string, p: number) {
+    this.layerPans.get(id)?.pan.setTargetAtTime(p, this.ctx.currentTime, 0.02);
   }
 
   /** a take's own volume while it plays */
@@ -296,12 +321,15 @@ export class StudioEngine {
   private bus(key: string) {
     let b = this.buses.get(key);
     if (!b) {
-      b = this.ctx.createGain();
-      b.gain.value = this.volumes.get(key) ?? 1;
-      b.connect(this.ctx.destination);
+      const gain = this.ctx.createGain();
+      gain.gain.value = this.volumes.get(key) ?? 1;
+      const pan = this.ctx.createStereoPanner();
+      pan.pan.value = this.pans.get(key) ?? 0;
+      gain.connect(pan).connect(this.ctx.destination);
+      b = { gain, pan };
       this.buses.set(key, b);
     }
-    return b;
+    return b.gain;
   }
 
   stop() {

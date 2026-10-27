@@ -32,7 +32,7 @@ import type { Extension } from "@/lib/audio/arrange";
 
 const r3 = (t: number) => Math.round(t * 1000) / 1000;
 
-const TAKE_COLS = "id, section_id, lane, take_no, start_at, duration, sample_rate, peaks, chosen, trim_in, trim_out, gain, created_at";
+const TAKE_COLS = "id, section_id, lane, take_no, start_at, duration, sample_rate, peaks, chosen, trim_in, trim_out, gain, pan, created_at";
 const LINE_COLS = "id, project_id, section_id, position, text, status, kind, note, audio_at, flow, marks, updated_at";
 const SNAPSHOT_FIELDS = ["text", "status", "kind", "note", "deleted", "flow", "marks"] as const;
 
@@ -1455,10 +1455,13 @@ export async function chooseTake(id: string) {
   return t.project_id;
 }
 
-/** a take's volume in the mix (1: as recorded; 0–2) */
-export async function setTakeGain(id: string, gain: number) {
+/** a take in the mix: its volume (1: as recorded; 0–2) and its pan (−1 left … 1 right) */
+export async function setTakeMix(id: string, mix: { gain?: number; pan?: number }) {
   const t = await getTake(id);
-  check(await db().from("takes").update({ gain: Math.round(Math.max(0, Math.min(2, gain)) * 100) / 100 }).eq("id", id));
+  const patch: { gain?: number; pan?: number } = {};
+  if (mix.gain !== undefined) patch.gain = Math.round(Math.max(0, Math.min(2, mix.gain)) * 100) / 100;
+  if (mix.pan !== undefined) patch.pan = Math.round(Math.max(-1, Math.min(1, mix.pan)) * 100) / 100;
+  check(await db().from("takes").update(patch).eq("id", id));
   await touch(t.project_id);
   return t.project_id;
 }
