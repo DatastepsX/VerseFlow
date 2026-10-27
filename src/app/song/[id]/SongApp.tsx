@@ -24,7 +24,8 @@ import { followTo } from "@/components/writer/follow";
 import { download, fullText } from "@/components/writer/util";
 import { VoiceSheet, type VoiceInfo } from "./VoiceSheet";
 import { RecordView } from "./Record";
-import { Mixer } from "./Mixer";
+import { Mixer, type ExportOptions } from "./Mixer";
+import { exportStems as exportStemsZip, type Stem } from "@/lib/studio/export";
 import { MarkedText, MarksEditor } from "@/components/Marks";
 import { marksFor, type Mark } from "@/lib/marks";
 import { NOTATION_KEYS, parseNotation, toNotation, untyped } from "@/lib/flow/notation";
@@ -460,6 +461,47 @@ export function SongApp({
     e.play(Math.max(0, from), { beat: beat.current, layers, beatGain: guideL.length ? 0.6 : 0.8, clicks: opts.clicks });
     stopAt.current = until;
     setPlaying(true);
+  };
+  // ---------- stems for Logic: each track from 0:00, as WAVs in a ZIP ----------
+  const exportStems = async (o: ExportOptions, progress: (text: string) => void) => {
+    const e = engine.current;
+    const b = beat.current;
+    if (!e || !b) throw new Error("The beat is still loading.");
+    progress("Loading the takes…");
+    const takes = await takeLayers();
+    if (o.flow) await loadFlow().catch(() => {});
+    const flows = o.flow ? flowTakes.flatMap((t) => (flowBufs.current.has(t.id) ? [{ buffer: flowBufs.current.get(t.id)!, at: t.start_at, gain: 1, clip: clipOf(t) }] : [])) : [];
+    const lanes = lanesOf(tree).filter((l) => l !== "Flow");
+    const vols = mixVolumes(tree.project.settings, lanes);
+    const pans = mixPans(tree.project.settings, lanes);
+    const ch = (key: string) => ({ vol: vols[key] ?? 1, pan: pans[key] ?? 0 });
+    const stems: Stem[] = [{ name: "Beat", layers: [{ buffer: b, at: 0 }], channel: o.mixed ? ch("beat") : null, stereo: true }];
+    if (flows.length) stems.push({ name: "Flow (guide)", layers: flows, channel: o.mixed ? ch("flow") : null, stereo: false });
+    for (const l of lanes) {
+      const layers = takes.filter((x) => x.bus === laneBus(l));
+      if (layers.length) stems.push({ name: l, layers, channel: o.mixed ? ch(laneBus(l)) : null, stereo: false });
+    }
+    // the mix: as heard (the beat a little down, as it plays here)
+    const mix = o.mixdown
+      ? stems.map((s) => ({ ...s, layers: s.name === "Beat" ? [{ buffer: b, at: 0, gain: 0.8 }] : s.layers, channel: ch(s.name === "Beat" ? "beat" : s.name === "Flow (guide)" ? "flow" : laneBus(s.name)) }))
+      : null;
+    const zip = await exportStemsZip({
+      song: tree.project.title,
+      stems,
+      mix,
+      seconds: b.duration,
+      sampleRate: b.sampleRate,
+      withFx: o.mixed,
+      bpm: tree.audio?.bpm ?? null,
+      barOne: tree.audio?.beat_offset ?? 0,
+      onProgress: (done, total, what) => progress(what === "ZIP" ? "Packing the ZIP…" : `Rendering ${what} · ${done + 1}/${total}`),
+    });
+    const url = URL.createObjectURL(zip);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${tree.project.title.replace(/[\\/:*?"<>|]+/g, "-")} - stems.zip`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
   };
   const stopPlay = () => {
     if (controller) {
@@ -1974,6 +2016,7 @@ export function SongApp({
             onSeparate={() => void separate()}
             separating={separating}
             call={call}
+            onExport={beatReady ? exportStems : null}
             liveTake={(id, m) => {
               if (m.gain !== undefined) engine.current?.setLayerGain(id, m.gain);
               if (m.pan !== undefined) engine.current?.setLayerPan(id, m.pan);

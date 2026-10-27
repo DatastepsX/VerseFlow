@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Check, Pause, Play } from "@/components/icons";
+import { Check, Download, Pause, Play } from "@/components/icons";
 import { VolumeSlider } from "@/components/VolumeSlider";
 import { fmtTime } from "@/lib/audio/song-map";
 import { FX_CATEGORIES, FX_PRESETS, layerPreset } from "@/lib/fx/presets";
@@ -43,6 +43,17 @@ export interface MixerProps {
   call: (path: string, body?: unknown, method?: string) => Promise<unknown>;
   /** a take's volume / pan heard at once while it plays */
   liveTake: (id: string, mix: { gain?: number; pan?: number }) => void;
+  /** the stems as WAVs in a ZIP (null: the beat isn't loaded yet) */
+  onExport: ((o: ExportOptions, progress: (text: string) => void) => Promise<void>) | null;
+}
+
+export interface ExportOptions {
+  /** with the mixer's volume, pan and effects (else dry, as recorded) */
+  mixed: boolean;
+  /** your recorded flow as a stem too */
+  flow: boolean;
+  /** the whole mix as one more file */
+  mixdown: boolean;
 }
 
 export function Mixer(p: MixerProps) {
@@ -104,6 +115,7 @@ export function Mixer(p: MixerProps) {
 }
 
 function Transport(p: MixerProps) {
+  const [exporting, setExporting] = useState(false);
   return (
     <div className="flex items-center gap-3">
       <button
@@ -118,6 +130,86 @@ function Transport(p: MixerProps) {
           {fmtTime(p.now)} <span className="text-sm text-muted">/ {fmtTime(p.total)}</span>
         </p>
         <p className="truncate text-xs text-muted">{p.parts.find((x) => p.now >= x.start && p.now < x.end)?.name ?? "—"}</p>
+      </div>
+      <button className="flex shrink-0 items-center gap-1.5 rounded-full bg-panel-2 px-3.5 py-2 text-sm font-semibold disabled:opacity-50" disabled={!p.onExport} onClick={() => setExporting(true)}>
+        <Download className="h-4 w-4" /> Export
+      </button>
+      {exporting && p.onExport && <ExportSheet {...p} onExport={p.onExport} onClose={() => setExporting(false)} />}
+    </div>
+  );
+}
+
+/** stems for Logic: what goes in, and the ZIP */
+function ExportSheet(p: MixerProps & { onExport: NonNullable<MixerProps["onExport"]>; onClose: () => void }) {
+  const [o, setO] = useState<ExportOptions>({ mixed: false, flow: false, mixdown: true });
+  const [busy, setBusy] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const seg = (on: boolean) => `flex-1 rounded-full py-2 text-sm font-semibold ${on ? "bg-panel text-fg shadow-sm" : "text-muted"}`;
+  const layers = p.lanes.filter((l) => p.tree.takes.some((t) => t.lane === l && t.chosen));
+  const files = 1 + layers.length + (o.flow && p.hasFlow ? 1 : 0) + (o.mixdown ? 1 : 0);
+  return (
+    <div className="fixed inset-0 z-40 flex items-end justify-center bg-black/40" onClick={() => !busy && p.onClose()}>
+      <div onClick={(e) => e.stopPropagation()} className="max-h-[92dvh] w-full max-w-lg space-y-4 overflow-auto rounded-t-3xl bg-panel px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-3">
+        <div className="mx-auto h-1.5 w-10 rounded-full bg-line" />
+        <div>
+          <h2 className="text-xl font-bold">Export stems</h2>
+          <p className="text-xs text-muted">
+            Every track as its own WAV (24-bit), all from 0:00 to the end — they line up when you drop them at bar 1 in Logic. In one ZIP, with a note on the tempo.
+          </p>
+        </div>
+        <div className="space-y-1.5">
+          <p className="label">Sound</p>
+          <div className="flex rounded-full bg-panel-2 p-1">
+            <button className={seg(!o.mixed)} onClick={() => setO({ ...o, mixed: false })}>
+              Dry
+            </button>
+            <button className={seg(o.mixed)} onClick={() => setO({ ...o, mixed: true })}>
+              As mixed here
+            </button>
+          </div>
+          <p className="text-[11px] text-muted">
+            {o.mixed ? "With each channel's volume, pan and effect." : "As recorded (each take's cut and own volume kept) — to mix and add effects in Logic."}
+          </p>
+        </div>
+        <div className="space-y-2 text-sm">
+          <p className="label">Files</p>
+          <p className="flex justify-between">
+            <span>Beat{layers.length ? ` · ${layers.join(" · ")}` : ""}</span>
+            <span className="text-muted">always</span>
+          </p>
+          {p.hasFlow && (
+            <label className="flex items-center justify-between gap-3">
+              Your recorded flow (guide)
+              <input type="checkbox" className="h-5 w-5 accent-[var(--accent)]" checked={o.flow} onChange={(e) => setO({ ...o, flow: e.target.checked })} />
+            </label>
+          )}
+          <label className="flex items-center justify-between gap-3">
+            The whole mix as one file
+            <input type="checkbox" className="h-5 w-5 accent-[var(--accent)]" checked={o.mixdown} onChange={(e) => setO({ ...o, mixdown: e.target.checked })} />
+          </label>
+        </div>
+        <p className="text-[11px] text-muted">
+          WAV only: an MP3 starts a few milliseconds late (the encoder adds silence), so MP3 stems would drift out of sync in Logic.
+        </p>
+        {err && <p className="rounded-xl bg-bad-soft px-3 py-2 text-sm text-bad">{err}</p>}
+        <button
+          className="btn-primary w-full justify-center rounded-2xl py-3 disabled:opacity-60"
+          disabled={!!busy}
+          onClick={async () => {
+            setErr(null);
+            setBusy("Preparing…");
+            try {
+              await p.onExport(o, setBusy);
+              p.onClose();
+            } catch (e) {
+              setErr(e instanceof Error ? e.message : "The export failed.");
+            } finally {
+              setBusy(null);
+            }
+          }}
+        >
+          <Download className="h-4 w-4" /> {busy ?? `Export ${files} WAV${files === 1 ? "" : "s"} · ZIP`}
+        </button>
       </div>
     </div>
   );
