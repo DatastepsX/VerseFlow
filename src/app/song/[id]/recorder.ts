@@ -120,6 +120,8 @@ export interface LocalSettings {
   setGainDb: (db: number) => void;
   /** hear yourself in the headphones */
   monitor: boolean;
+  /** how late you hear yourself (ms), as the device reports it; null: not known */
+  monitorDelayMs: number | null;
   setMonitor: (on: boolean) => void;
   /** sing for a few seconds: the gain (and the input the microphone is on) set by itself */
   autoLevel: () => void;
@@ -225,8 +227,16 @@ export function useLocalRecorder(o: {
     engine.current?.setInputGain(10 ** (gainDb / 20));
   }, [engine, gainDb, armed]);
   // hearing yourself: in headphones only (from a speaker it would feed back)
+  const [monitorDelayMs, setMonitorDelayMs] = useState<number | null>(null);
   useEffect(() => {
-    engine.current?.setMonitor(monitor && headphones && armed);
+    const e = engine.current;
+    e?.setMonitor(monitor && headphones && armed);
+    // the device's delay, once the microphone and the sound run (it settles a moment after)
+    if (!e || !armed) return;
+    const read = () => setMonitorDelayMs(e.monitorDelay().total > 0 ? Math.round(e.monitorDelay().total * 1000) : null);
+    read();
+    const id = setTimeout(read, 1500);
+    return () => clearTimeout(id);
   }, [engine, monitor, headphones, armed]);
   const [leveling, setLeveling] = useState<number | null>(null);
   const [levelNote, setLevelNote] = useState<string | null>(null);
@@ -861,6 +871,7 @@ export function useLocalRecorder(o: {
       gainDb,
       setGainDb,
       monitor,
+      monitorDelayMs,
       setMonitor,
       autoLevel: () => void autoLevel(),
       leveling,

@@ -1201,6 +1201,16 @@ function MicSheet({ r, onClose }: { r: Recorder; onClose: () => void }) {
             </span>
             <Toggle on={s.monitor && s.headphones} onChange={(on) => s.headphones && s.setMonitor(on)} />
           </label>
+          {s.monitor && s.headphones && (
+            <p className={`rounded-xl px-3 py-2 text-xs ${s.monitorDelayMs !== null && s.monitorDelayMs > 40 ? "bg-warn-soft text-warn" : "bg-panel-2 text-muted"}`}>
+              {s.monitorDelayMs === null
+                ? "This device doesn't say how late you hear yourself."
+                : `You hear yourself about ${s.monitorDelayMs} ms late.`}{" "}
+              {(s.monitorDelayMs === null || s.monitorDelayMs > 40) &&
+                "Above ~30 ms it's hard to sing with: Bluetooth headphones (AirPods) add 150–300 ms — use wired headphones, best plugged into the microphone itself (no delay at all) — and turn this off. "}
+              The timing setting (Clap along) puts your takes on the beat; it can&apos;t make what you hear while singing any earlier.
+            </p>
+          )}
         </div>
         <button className="btn-primary w-full justify-center rounded-2xl py-3" onClick={onClose}>
           Done

@@ -1,6 +1,7 @@
 "use client";
 
 import { measureClaps, measureLatency, songTimeOfFrame } from "./timing";
+import { softClip } from "./limiter";
 
 /**
  * The studio's audio engine (browser): the beat, other takes and the
@@ -227,6 +228,15 @@ export class StudioEngine {
     return { peaks, rms: sums.map((x) => Math.sqrt(x / Math.max(1, count))) };
   }
 
+  /** how late you hear yourself (s): the microphone's delay and the output's, as the device reports them */
+  monitorDelay() {
+    const t = this.stream?.getAudioTracks()[0];
+    const input = ((t?.getSettings() ?? {}) as { latency?: number }).latency ?? 0;
+    const ctx = this.ctx as AudioContext & { outputLatency?: number };
+    const output = (ctx.outputLatency ?? 0) + (ctx.baseLatency ?? 0);
+    return { input: Math.round(input * 1000) / 1000, output: Math.round(output * 1000) / 1000, total: Math.round((input + output) * 1000) / 1000 };
+  }
+
   /** what the microphone and the sound are doing (for the diagnostics of a failed take) */
   info() {
     const t = this.stream?.getAudioTracks()[0];
@@ -236,6 +246,8 @@ export class StudioEngine {
       ctxRate: this.ctx.sampleRate,
       track: t ? { label: t.label, state: t.readyState, muted: t.muted, enabled: t.enabled } : null,
       settings: { sampleRate: st.sampleRate, channelCount: st.channelCount, echoCancellation: st.echoCancellation, autoGainControl: st.autoGainControl, noiseSuppression: st.noiseSuppression },
+      // the delays the device reports (s): what you hear of yourself is about input + output
+      delays: this.monitorDelay(),
       lastTake: this.lastTake,
     };
   }
@@ -441,7 +453,7 @@ export class StudioEngine {
     for (const c of chunks) {
       const a = c.channels[Math.min(Math.max(0, channel), c.channels.length - 1)];
       const b = channel < 0 && c.channels.length > 1 ? c.channels[1] : null;
-      for (let i = 0; i < a.length; i++) mono[o + i] = b ? (a[i] + b[i]) / 2 : a[i];
+      for (let i = 0; i < a.length; i++) mono[o + i] = softClip(b ? (a[i] + b[i]) / 2 : a[i]);
       o += a.length;
     }
     const first = songTimeOfFrame(chunks[0].frame, sr, this.base, latency);

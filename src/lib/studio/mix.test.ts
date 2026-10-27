@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { softClip } from "./limiter";
 import { channelOf, louderGain, mixVolumes, panLabel, withChannel } from "./mix";
 
 test("older songs: the volumes and the layers off carry over", () => {
@@ -29,4 +30,12 @@ test("a quiet take made as loud as it can be, never past the limit", () => {
   assert.equal(louderGain([0.1, 0.2, 0.05]), 4.45 > 4 ? 4 : 4.45);
   assert.equal(louderGain([0.445]), 2);
   assert.equal(louderGain([0, 0.001]), null);
+});
+
+test("the limiter: quiet stays, loud bends towards full scale and never past it", () => {
+  assert.equal(softClip(0.5), 0.5);
+  assert.equal(softClip(-0.89), -0.89);
+  assert.ok(softClip(1.2) < 1 && softClip(1.2) > 0.95);
+  assert.ok(softClip(3.57) <= 1 && softClip(3.57) > softClip(1.2));
+  assert.ok(softClip(-3.57) >= -1);
 });
