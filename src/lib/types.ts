@@ -203,6 +203,8 @@ export interface Take {
   gain: number;
   /** its place left / right (−1 … 1, 0: centre) */
   pan: number;
+  /** how it was made from another take ("on the beat", "follows Lead 1"); null: recorded */
+  note: string | null;
   /** the take used for playback and exports (one per section + layer) */
   chosen: boolean;
   created_at: string;

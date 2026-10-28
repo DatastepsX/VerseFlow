@@ -32,7 +32,7 @@ import type { Extension } from "@/lib/audio/arrange";
 
 const r3 = (t: number) => Math.round(t * 1000) / 1000;
 
-const TAKE_COLS = "id, section_id, lane, take_no, start_at, duration, sample_rate, peaks, chosen, trim_in, trim_out, gain, pan, created_at";
+const TAKE_COLS = "id, section_id, lane, take_no, start_at, duration, sample_rate, peaks, chosen, trim_in, trim_out, gain, pan, note, created_at";
 const LINE_COLS = "id, project_id, section_id, position, text, status, kind, note, audio_at, flow, marks, updated_at";
 const SNAPSHOT_FIELDS = ["text", "status", "kind", "note", "deleted", "flow", "marks"] as const;
 
@@ -1401,7 +1401,7 @@ export async function takeUploadUrl(projectId: string) {
 /** a new take becomes the chosen one of its section + layer (the latest is usually the keeper) */
 export async function saveTake(
   projectId: string,
-  t: { path: string; section_id: string | null; lane: string; start_at: number; duration: number; sample_rate: number; peaks: number[] },
+  t: { path: string; section_id: string | null; lane: string; start_at: number; duration: number; sample_rate: number; peaks: number[]; note?: string | null },
 ) {
   if (!t.path.startsWith(`${projectId}/take-`)) throw new Error("Invalid take path");
   // a take without a section (the whole-song flow take) is grouped by its layer alone

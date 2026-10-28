@@ -12,7 +12,7 @@ export async function GET(req: Request, ctx: RouteContext<"/api/projects/[id]/ta
 /**
  * actions:
  *  uploadUrl → {path, signedUrl}: the browser PUTs the take's WAV straight to storage
- *  save {path, section_id, lane, start_at, duration, sample_rate, peaks} → tree (x-take-id)
+ *  save {path, section_id, lane, start_at, duration, sample_rate, peaks, note?} → tree (x-take-id)
  */
 export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]/takes">) {
   return handle(async () => {
@@ -26,6 +26,7 @@ export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]/t
       duration?: number;
       sample_rate?: number;
       peaks?: number[];
+      note?: string;
     }>(req);
     if (b.action === "uploadUrl") return Response.json(await takeUploadUrl(id));
     if (b.action === "save") {
@@ -40,6 +41,7 @@ export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]/t
         duration: num(b.duration)!,
         sample_rate: Math.round(num(b.sample_rate)!),
         peaks: Array.isArray(b.peaks) ? b.peaks.slice(0, 400).map((x) => Math.max(0, Math.min(1, Number(x) || 0))) : [],
+        note: typeof b.note === "string" ? b.note.slice(0, 80) : null,
       });
       const res = await treeResponse(id);
       res.headers.set("x-take-id", takeId);
