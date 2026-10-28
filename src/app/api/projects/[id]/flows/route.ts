@@ -26,7 +26,7 @@ export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]/f
     }
     if (b.action === "apply") {
       if (!b.flowId || !b.sectionId) return Response.json({ error: "flowId and sectionId required" }, { status: 400 });
-      const write = await applyFlow(id, b.flowId, b.sectionId, typeof b.fromLineId === "string" ? b.fromLineId : null, b.withText !== false);
+      const write = await applyFlow(id, b.flowId, b.sectionId, typeof b.fromLineId === "string" ? b.fromLineId : null, b.withText === true);
       return Response.json({ tree: await getTree(id), write });
     }
     return Response.json({ error: "Unknown action" }, { status: 400 });

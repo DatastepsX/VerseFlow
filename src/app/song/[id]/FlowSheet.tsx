@@ -3,7 +3,7 @@
 import { saveProfilePref } from "@/lib/client/profile";
 import { cleanBrief, MOODS, PERSPECTIVES, RHYMES, WORDS, type LyricsBrief } from "@/lib/brief";
 import { useEffect, useRef, useState } from "react";
-import { chipsOf, dropStrays, lineCuts, lineFromText, lineStarts, linesFromWords, linesIn, linesFromBreaks, linesFromOnsets, ownWords, relayout, type Onset } from "@/lib/flow/pattern";
+import { chipsOf, dropStrays, lineCuts, lineFromText, lineStarts, linesFromWords, linesIn, linesFromBreaks, linesFromOnsets, relayout, type Onset } from "@/lib/flow/pattern";
 import { quantizeTaps } from "@/lib/flow/grid";
 import type { FlowPattern, PatternLine, SongFlow } from "@/lib/types";
 import { Check, Hand, Headphones, LineBreak, Mic, Pencil, Play, Restart, Sparkles } from "@/components/icons";
@@ -74,7 +74,7 @@ export function FlowSheet({
   /** the part's brief for its lyrics, as set before */
   brief: LyricsBrief | null;
   /** use it: an existing flow (unchanged) or a new one — with your sung lines kept or not, the lyrics written or not */
-  onUse: (use: { flowId: string } | { pattern: FlowPattern }, opts: { keepSung: boolean; write: boolean; brief: LyricsBrief | null }) => Promise<void>;
+  onUse: (use: { flowId: string } | { pattern: FlowPattern }, opts: { write: boolean; brief: LyricsBrief | null }) => Promise<void>;
   onClose: () => void;
 }) {
   const initial = flows.find((f) => f.id === initialFlowId) ?? null;
@@ -324,21 +324,18 @@ export function FlowSheet({
   };
 
   const ready = lines.every((l) => l.syllables > 0);
-  // lines in your own words can be kept; the rest (example words, "pa pam") only set the rhythm and get written
-  const own = lines.map((l) => ownWords(l, lang, mode));
   const pattern: FlowPattern = { lines, scheme: p === 4 ? scheme : "AABB", bar, source: mode };
   const total = ready ? linesIn(pattern, bar, stretchSeconds) : linesInStretch;
   // the confirm step: where, your sung lines, the brief for the lyrics
   const [confirming, setConfirming] = useState(false);
-  const [keepSung, setKeepSung] = useState(true);
   const [brief, setBrief] = useState<LyricsBrief>(initialBrief ?? {});
-  const kept = keepSung ? Math.min(total, own.filter(Boolean).length) : 0;
-  const toWrite = Math.max(0, total - kept);
+  // what you sang is the pattern only — every line of the part is written to it (your words never become lyrics)
+  const toWrite = total;
   const calls = Math.ceil(toWrite / 8);
   const use = async (write: boolean) => {
     setBusy(true);
     try {
-      await onUse(picked && !changed ? { flowId: picked } : { pattern }, { keepSung, write, brief: cleanBrief(brief) });
+      await onUse(picked && !changed ? { flowId: picked } : { pattern }, { write, brief: cleanBrief(brief) });
     } catch (err) {
       setHint(err instanceof Error ? err.message : "Something went wrong");
       setBusy(false);
@@ -539,11 +536,7 @@ export function FlowSheet({
                 }}
               />
               {l.syllables > 0 && <Chips line={l} lang={lang} onChange={(next) => edit(lines.map((x, k) => (k === i ? next : x)))} bar={bar} />}
-              {l.syllables > 0 && l.text.trim() && (
-                <p className={`mt-1 text-[11px] ${own[i] ? "text-ok" : "text-muted"}`}>
-                  {own[i] ? "Your words — kept as the lyrics." : "Only the rhythm — the lyrics are written for you. Type your own words to keep them."}
-                </p>
-              )}
+              {l.syllables > 0 && l.text.trim() && <p className="mt-1 text-[11px] text-muted">The rhythm only — the lyrics are written to it.</p>}
             </div>
           ))}
           <p className="text-[11px] text-muted">
@@ -567,9 +560,6 @@ export function FlowSheet({
           <WriteStep
             scope={scope}
             total={total}
-            ownLines={own.filter(Boolean).length}
-            keepSung={keepSung}
-            setKeepSung={setKeepSung}
             brief={brief}
             setBrief={setBrief}
             toWrite={toWrite}
@@ -670,9 +660,6 @@ function Chips({ line, lang, bar, onChange }: { line: PatternLine; lang: string;
 function WriteStep(props: {
   scope: string;
   total: number;
-  ownLines: number;
-  keepSung: boolean;
-  setKeepSung: (on: boolean) => void;
   brief: LyricsBrief;
   setBrief: (b: LyricsBrief) => void;
   toWrite: number;
@@ -701,19 +688,9 @@ function WriteStep(props: {
       <div>
         <p className="text-base font-bold">Write {props.scope}</p>
         <p className="text-xs text-muted">
-          {props.total} line{props.total === 1 ? "" : "s"} in this flow · {props.total - props.toWrite} kept · {props.toWrite} to write
+          {props.total} line{props.total === 1 ? "" : "s"} in this flow, all written to its rhythm — what you sang is the pattern only, not the lyrics
         </p>
       </div>
-      {props.ownLines > 0 && (
-        <div className="flex rounded-full bg-panel p-1 text-sm">
-          <button className={`flex-1 rounded-full py-2 font-semibold ${props.keepSung ? "bg-accent text-white" : "text-muted"}`} onClick={() => props.setKeepSung(true)}>
-            Keep my {props.ownLines} sung line{props.ownLines === 1 ? "" : "s"}
-          </button>
-          <button className={`flex-1 rounded-full py-2 font-semibold ${!props.keepSung ? "bg-accent text-white" : "text-muted"}`} onClick={() => props.setKeepSung(false)}>
-            Only the rhythm
-          </button>
-        </div>
-      )}
       {group("Mood", MOODS, (id) => !!brief.moods?.includes(id), (id) => setBrief({ ...brief, moods: toggle(brief.moods, id) }))}
       {group("Perspective", PERSPECTIVES, (id) => brief.perspective === id, (id) => setBrief({ ...brief, perspective: brief.perspective === id ? undefined : id }))}
       {group("Words", WORDS, (id) => !!brief.words?.includes(id), (id) => setBrief({ ...brief, words: toggle(brief.words, id) }))}

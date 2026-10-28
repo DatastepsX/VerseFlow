@@ -1066,7 +1066,7 @@ export function SongApp({
       return detectSyllables(r.samples, r.sampleRate).map((x) => ({ t: x.t + r.startAt, strength: x.strength, dur: x.dur }));
     },
   };
-  type UseOpts = { keepSung: boolean; write: boolean; brief: LyricsBrief | null };
+  type UseOpts = { write: boolean; brief: LyricsBrief | null };
   const useFlow = async (use: { flowId: string } | { pattern: import("@/lib/types").FlowPattern }, opts: UseOpts) => {
     if (!flowSheet) return;
     const sec0 = tree.sections.find((x) => x.id === flowSheet.sectionId);
@@ -1093,7 +1093,7 @@ export function SongApp({
     };
     let flowId = "flowId" in use ? use.flowId : null;
     if (!flowId) flowId = (await post<{ flow: { id: string } }>({ action: "create", pattern: (use as { pattern: unknown }).pattern })).flow.id;
-    const out = await post<{ tree: ProjectTree; write: string[] }>({ action: "apply", flowId, sectionId: flowSheet.sectionId, fromLineId: flowSheet.fromLineId, withText: opts.keepSung });
+    const out = await post<{ tree: ProjectTree; write: string[] }>({ action: "apply", flowId, sectionId: flowSheet.sectionId, fromLineId: flowSheet.fromLineId });
     setTree(out.tree);
     setFlowSheet(null);
     // the new lines without words: written in the flow (1 call per ~8 lines)
