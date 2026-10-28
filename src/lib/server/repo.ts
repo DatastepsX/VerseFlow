@@ -24,7 +24,6 @@ import type {
   Take,
 } from "@/lib/types";
 import { lineFlowFrom, lineStarts, linesIn, nextFlowName, ownWords } from "@/lib/flow/pattern";
-import { isExampleText } from "@/lib/flow/example";
 import { fixPairs } from "@/lib/flow/rhymelines";
 import { songSections, type SungLine } from "@/lib/audio/song-lines";
 import { sectionRanges } from "@/lib/audio/song-map";
@@ -1840,19 +1839,12 @@ export async function applyFlow(projectId: string, flowId: string, sectionId: st
   for (const l of old) await deleteLine(l.id);
   // where the flow is used for the first time, the written words are the lyrics
   const firstUse = withText && !tree.sections.some((s) => s.lines.some((l) => l.flow?.flowId === flowId && !old.includes(l)));
-  // (example words that only showed a rhythm are no lyrics to rewrite)
   const lang = tree.project.language;
-  // only lyrics the writer chose (kept or edited) — not AI suggestions they didn't keep, nor what they sang to find a flow
-  const written = old.filter(
-    (l) => l.text.trim() && !isExampleText(l.text, lang) && (l.status === "APPROVED" || l.status === "APPROVED_EDITED") && l.text.trim() !== (l.flow?.words ?? "").trim(),
-  );
   const rows = Array.from({ length: n }, (_, i) => {
     const pl = flow.pattern.lines[i % flow.pattern.lines.length];
     const lf = lineFlowFrom(flow.pattern, i, start + starts[i], bar, flowId);
     // the writer's own words only — example words (or "pa pam") just set the rhythm: those lines get written
     const own = firstUse && i < flow.pattern.lines.length && ownWords(pl, lang, flow.pattern.source);
-    // the earlier lyrics, in order, to rewrite to the new flow
-    const draft = written.length ? written[Math.min(written.length - 1, Math.floor((i * written.length) / n))].text : undefined;
     return {
       project_id: projectId,
       section_id: section.id,
@@ -1861,7 +1853,9 @@ export async function applyFlow(projectId: string, flowId: string, sectionId: st
       status: (own ? "APPROVED" : "OPEN") as LineStatus,
       kind: "lyric",
       audio_at: lf.times?.[0] ?? start + starts[i],
-      flow: { ...lf, ...(!own && draft ? { draft } : {}) },
+      // a new flow is written afresh: the part's earlier lines aren't handed on to be reworded (they are in the
+      // version saved above, and one undo away)
+      flow: lf,
     };
   });
   // positions: the stretch's place in the part (the lines after it move down)

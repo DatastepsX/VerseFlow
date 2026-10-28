@@ -1049,6 +1049,9 @@ export function SongApp({
     setHeadphones,
     startRec: () => engine.current?.startRecording(),
     stopRec: async (keepFrom) => {
+      // a new take: the last one's words must never be recognised for it
+      sungSave.current = null;
+      sungTake.current = null;
       const e = engine.current;
       if (!e?.armed) return [];
       const r = await e.stopRecording(recLatency(e), 0, keepFrom);
