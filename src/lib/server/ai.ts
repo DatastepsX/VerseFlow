@@ -67,7 +67,15 @@ Rules:
 - Write in the project's language. Keep the vocabulary natural for the style; prefer simple, singable wording unless asked otherwise.
 - Every option must be meaningfully different (wording, image or angle), and must not repeat rejected options.
 - Each option must fit the story beat and emotional intensity of the section, and connect with the lines around it.
-- Return only the lyric text in the options — no numbering, quotes, explanations or stage directions.`;
+- Return only the lyric text in the options — no numbering, quotes, explanations or stage directions.
+
+Craft — the rhythm is the vessel, the meaning is the point:
+- Decide first what the part SAYS: one situation or idea, seen from a clear point of view, that develops from line to line — a setup, a development, a turn or punchline at the end. Then find words for it that fit the rhythm; never pick words because they fit the rhythm.
+- Every line carries meaning and moves the text on: a new image, a detail, a thought, a consequence, a contrast. A couplet's second line answers, sharpens or twists the first — it never just restates it.
+- Concrete over abstract: specific moments, places, objects, actions and sensory details (the cold coffee, the 3 a.m. bus, her jacket still on the chair) instead of generic words (vita, cuore, amore, sempre, ancora, qui, così, life, heart, forever). Show the feeling through what happens; don't name it.
+- No filler to reach a syllable count — no "sì", "eh", "oh", "yeah", "ancora", "proprio", "davvero", "qui", "così" or repeated words added to pad a line. Rebuild the sentence instead.
+- Fresh rhymes over obvious ones (cuore/amore, notte/forte, te/me, fire/desire): prefer exact rhymes of two or more syllables that feel inevitable; internal rhymes and wordplay are welcome in rap.
+- Natural, grammatical spoken language a real person would say — no word salad, no forced inversions, no clichés from a thousand songs. Each line or couplet must make sense on its own and in the text.`;
 
 const OUTPUT_SCHEMA = {
   type: "object",
@@ -220,14 +228,17 @@ Each option's "lines" array must contain exactly ${targetIdx.length} line${targe
 
 async function callJson<T>(projectId: string, kind: string, prompt: string, schema: object, system = SYSTEM, effort = EFFORT): Promise<T> {
   const client = new Anthropic();
-  const response = await client.beta.messages.create({
-    model: MODEL,
-    max_tokens: 16000,
-    ...(FALLBACKS ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const } : {}),
-    output_config: { effort, format: { type: "json_schema", schema: schema as Record<string, unknown> } },
-    system,
-    messages: [{ role: "user", content: prompt }],
-  });
+  // streamed: thinking hard (a part written in depth) can take longer than an unstreamed request may
+  const response = await client.beta.messages
+    .stream({
+      model: MODEL,
+      max_tokens: effort === "high" ? 32000 : 16000,
+      ...(FALLBACKS ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const } : {}),
+      output_config: { effort, format: { type: "json_schema", schema: schema as Record<string, unknown> } },
+      system,
+      messages: [{ role: "user", content: prompt }],
+    })
+    .finalMessage();
   await recordAiCall(projectId, kind, response.model, response.usage).catch(() => {});
   if (response.stop_reason === "refusal") throw new Error("The AI declined this request. Try rephrasing the direction.");
   if (response.stop_reason === "max_tokens") throw new Error("The AI response was cut off — try again.");
@@ -383,6 +394,19 @@ Return ${opts.count ?? 3} different versions.`;
 const DRAFT_SCHEMA = {
   type: "object",
   properties: {
+    // thought out before a line is written (not shown): what the part says and how it moves
+    plan: {
+      type: "object",
+      properties: {
+        idea: { type: "string" },
+        point_of_view: { type: "string" },
+        arc: { type: "string" },
+        images: { type: "array", items: { type: "string" } },
+        strongest_line: { type: "string" },
+      },
+      required: ["idea", "point_of_view", "arc", "images", "strongest_line"],
+      additionalProperties: false,
+    },
     slots: {
       type: "array",
       items: {
@@ -393,9 +417,12 @@ const DRAFT_SCHEMA = {
       },
     },
   },
-  required: ["slots"],
+  required: ["plan", "slots"],
   additionalProperties: false,
 };
+
+/** before the lines: the plan the model fills in first (the order of the JSON makes it think there) */
+const PLAN_FIRST = `Before writing any line, fill in "plan": the idea of the part (what it says, in one sentence), the point of view, the arc from the first to the last line (where it turns), 4–6 concrete images or details you will use, and the strongest line — the one people will quote. Then write the lines from that plan.`;
 
 export interface DraftSlot {
   /** 0-based line index in the section */
@@ -421,7 +448,8 @@ const NEEDS = new Set(["DECLINED", "NEEDS_NEW_OPTIONS"]);
 /** bars written per call — keeps each call short; a section's chunks run in parallel */
 export const DRAFT_CHUNK = 8;
 /** drafts think less than single-line options: much faster, the writer reviews them anyway */
-const DRAFT_EFFORT = (process.env.AI_DRAFT_EFFORT || "low") as "low" | "medium" | "high";
+// writing a part is where depth matters: it thinks it through (still one call per ~8 lines)
+const DRAFT_EFFORT = (process.env.AI_DRAFT_EFFORT || "high") as "low" | "medium" | "high";
 
 /**
  * Which bars a fill/replace writes: `n` = bar count of the section,
@@ -556,6 +584,7 @@ ${
 }
 ${instruction ? `Writer's direction: ${instruction}` : ""}
 ${rejected.size ? `Rejected before — do not repeat or closely paraphrase:\n${[...rejected].slice(0, 40).map((t) => `- ${t}`).join("\n")}` : ""}
+${PLAN_FIRST}
 Return one entry per ${refit ? "[REFIT]" : polish ? "[IMPROVE]" : "[OPEN]"} line, "line" = its number.`;
 
   const parsed = await callJson<{ slots: { line: number; options: string[] }[] }>(project.id, `section_${mode}`, prompt, DRAFT_SCHEMA, SYSTEM, DRAFT_EFFORT);
@@ -645,7 +674,7 @@ ${st.genre ? `Genre: ${st.genre}\n` : ""}${st.style ? `Style: ${st.style}\n` : "
 WHAT THE WRITER SANG over the beat to find the flow (recognised words per line; "(na-na)" = sounds without words):
 ${sang}
 
-From these words, work out the song's topic, mood and imagery (e.g. love, longing, the night…) — the lyrics must be about that. Words or phrases the writer sang are their raw material: keep them where they fit.
+These were sung only to find the rhythm — placeholder words, NOT lyrics. Don't copy or paraphrase them; at most they hint at the mood. The topic comes from the brief, the concept and the rest of the song.
 
 THE SONG (rhythm per line: DUM = stressed syllable, ~ = the last note is held, | = a short break in the singing)
 ${listing}
@@ -656,10 +685,12 @@ For every [WRITE] line write 3 options. Each option must:
 - have exactly the line's number of syllables (sung syllables, ±1) with the stressed syllables on the DUM positions — it must fit the rhythm the writer sang;
 - end on an open, singable vowel when the last note is held (~);
 - follow the breaks (|): a word, and a phrase, ends at every break, and the words between two breaks are one connected group sung together (e.g. "da-DUM-da-da-DUM | DUM-da-DUM-da | da-da-DUM-da-da-DUM" → "Voglio il silenzio, ogni giorno, sento l'amore con te");
-- respect its rhyme rule and continue the lines around it, so the song reads as one coherent text about the writer's topic.
+- respect its rhyme rule and continue the lines around it, so the song reads as one coherent text about the writer's topic;
+- say something: the rhythm decides the shape of a line, never its content (see the craft rules — no filler, no clichés, concrete images, a part that develops and turns).
 Lines with an "earlier version" got a new rhythm: rewrite that version to it — keep its meaning and its key words, shorten or lengthen it to the new syllable count (e.g. "Ti scrivo piano senza chiedere perché" → 6 syllables: "Ti scrivo dentro me"); the FIRST option stays closest to the earlier version. Neighbouring earlier versions may be merged or split.
 The rhyme matters most: the last words of a couplet must truly rhyme — the same ending from the stressed vowel on (cuore / amore, notte / forte), not just one shared vowel, and never the same word as the line it rhymes with (sei / sei, te / te is no rhyme) — and the 3 options end on 3 different words; in a couplet that is written together, option 1 rhymes with option 1, option 2 with option 2, option 3 with option 3.
-When the writer sang real words in a line that isn't recorded, the FIRST option keeps them (completed and corrected into a full line); the others may go further. Make the 3 options clearly different.${
+Make the 3 options clearly different — in image or angle, not just in wording — while each stays true to the plan.
+${PLAN_FIRST}${
     vocals
       ? `\nLines marked "recorded" are the writer's own lyrics from the vocals in the song — they stay. For those, write 3 ALTERNATIVE lines: same rhythm and rhyme sound, same meaning direction, different wording — never the recorded line itself.`
       : ""

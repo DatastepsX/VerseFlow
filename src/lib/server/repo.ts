@@ -1842,7 +1842,10 @@ export async function applyFlow(projectId: string, flowId: string, sectionId: st
   const firstUse = withText && !tree.sections.some((s) => s.lines.some((l) => l.flow?.flowId === flowId && !old.includes(l)));
   // (example words that only showed a rhythm are no lyrics to rewrite)
   const lang = tree.project.language;
-  const written = old.filter((l) => l.text.trim() && !isExampleText(l.text, lang));
+  // only lyrics the writer chose (kept or edited) — not AI suggestions they didn't keep, nor what they sang to find a flow
+  const written = old.filter(
+    (l) => l.text.trim() && !isExampleText(l.text, lang) && (l.status === "APPROVED" || l.status === "APPROVED_EDITED") && l.text.trim() !== (l.flow?.words ?? "").trim(),
+  );
   const rows = Array.from({ length: n }, (_, i) => {
     const pl = flow.pattern.lines[i % flow.pattern.lines.length];
     const lf = lineFlowFrom(flow.pattern, i, start + starts[i], bar, flowId);
