@@ -48,6 +48,8 @@ export interface MixerProps {
 }
 
 export interface ExportOptions {
+  /** the stems as WAVs in a ZIP, or the mix as one MP3 */
+  kind: "zip" | "mp3";
   /** with the mixer's volume, pan and effects (else dry, as recorded) */
   mixed: boolean;
   /** your recorded flow as a stem too */
@@ -141,7 +143,8 @@ function Transport(p: MixerProps) {
 
 /** stems for Logic: what goes in, and the ZIP */
 function ExportSheet(p: MixerProps & { onExport: NonNullable<MixerProps["onExport"]>; onClose: () => void }) {
-  const [o, setO] = useState<ExportOptions>({ mixed: false, flow: false, mixdown: true });
+  const [o, setO] = useState<ExportOptions>({ kind: "zip", mixed: false, flow: false, mixdown: true });
+  const mp3 = o.kind === "mp3";
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const seg = (on: boolean) => `flex-1 rounded-full py-2 text-sm font-semibold ${on ? "bg-panel text-fg shadow-sm" : "text-muted"}`;
@@ -152,11 +155,22 @@ function ExportSheet(p: MixerProps & { onExport: NonNullable<MixerProps["onExpor
       <div onClick={(e) => e.stopPropagation()} className="max-h-[92dvh] w-full max-w-lg space-y-4 overflow-auto rounded-t-3xl bg-panel px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-3">
         <div className="mx-auto h-1.5 w-10 rounded-full bg-line" />
         <div>
-          <h2 className="text-xl font-bold">Export stems</h2>
-          <p className="text-xs text-muted">
-            Every track as its own WAV (24-bit), all from 0:00 to the end — they line up when you drop them at bar 1 in Logic. In one ZIP, with a note on the tempo.
-          </p>
+          <h2 className="text-xl font-bold">Export</h2>
         </div>
+        <div className="flex rounded-full bg-panel-2 p-1">
+          <button className={seg(!mp3)} onClick={() => setO({ ...o, kind: "zip" })}>
+            Stems · WAV · ZIP
+          </button>
+          <button className={seg(mp3)} onClick={() => setO({ ...o, kind: "mp3" })}>
+            The mix · MP3
+          </button>
+        </div>
+        <p className="text-xs text-muted">
+          {mp3
+            ? "The song as you hear it here — every channel's volume, pan and effect — in one MP3 (256 kbps, stereo): to listen to, or to send."
+            : "Every track as its own WAV (24-bit), all from 0:00 to the end — they line up when you drop them at bar 1 in Logic. In one ZIP, with a note on the tempo."}
+        </p>
+        {!mp3 && (
         <div className="space-y-1.5">
           <p className="label">Sound</p>
           <div className="flex rounded-full bg-panel-2 p-1">
@@ -171,11 +185,12 @@ function ExportSheet(p: MixerProps & { onExport: NonNullable<MixerProps["onExpor
             {o.mixed ? "With each channel's volume, pan and effect." : "As recorded (each take's cut and own volume kept) — to mix and add effects in Logic."}
           </p>
         </div>
+        )}
         <div className="space-y-2 text-sm">
-          <p className="label">Files</p>
+          <p className="label">{mp3 ? "In the mix" : "Files"}</p>
           <p className="flex justify-between">
             <span>Beat{layers.length ? ` · ${layers.join(" · ")}` : ""}</span>
-            <span className="text-muted">always</span>
+            <span className="text-muted">{mp3 ? "as in the mixer" : "always"}</span>
           </p>
           {p.hasFlow && (
             <label className="flex items-center justify-between gap-3">
@@ -183,14 +198,18 @@ function ExportSheet(p: MixerProps & { onExport: NonNullable<MixerProps["onExpor
               <input type="checkbox" className="h-5 w-5 accent-[var(--accent)]" checked={o.flow} onChange={(e) => setO({ ...o, flow: e.target.checked })} />
             </label>
           )}
-          <label className="flex items-center justify-between gap-3">
-            The whole mix as one file
-            <input type="checkbox" className="h-5 w-5 accent-[var(--accent)]" checked={o.mixdown} onChange={(e) => setO({ ...o, mixdown: e.target.checked })} />
-          </label>
+          {!mp3 && (
+            <label className="flex items-center justify-between gap-3">
+              The whole mix as one file
+              <input type="checkbox" className="h-5 w-5 accent-[var(--accent)]" checked={o.mixdown} onChange={(e) => setO({ ...o, mixdown: e.target.checked })} />
+            </label>
+          )}
         </div>
-        <p className="text-[11px] text-muted">
-          WAV only: an MP3 starts a few milliseconds late (the encoder adds silence), so MP3 stems would drift out of sync in Logic.
-        </p>
+        {!mp3 && (
+          <p className="text-[11px] text-muted">
+            Stems as WAV only: an MP3 starts a few milliseconds late (the encoder adds silence), so MP3 stems would drift out of sync in Logic.
+          </p>
+        )}
         {err && <p className="rounded-xl bg-bad-soft px-3 py-2 text-sm text-bad">{err}</p>}
         <button
           className="btn-primary w-full justify-center rounded-2xl py-3 disabled:opacity-60"
@@ -208,7 +227,7 @@ function ExportSheet(p: MixerProps & { onExport: NonNullable<MixerProps["onExpor
             }
           }}
         >
-          <Download className="h-4 w-4" /> {busy ?? `Export ${files} WAV${files === 1 ? "" : "s"} · ZIP`}
+          <Download className="h-4 w-4" /> {busy ?? (mp3 ? "Export the mix · MP3" : `Export ${files} WAV${files === 1 ? "" : "s"} · ZIP`)}
         </button>
       </div>
     </div>

@@ -25,7 +25,7 @@ import { download, fullText } from "@/components/writer/util";
 import { VoiceSheet, type VoiceInfo } from "./VoiceSheet";
 import { RecordView } from "./Record";
 import { Mixer, type ExportOptions } from "./Mixer";
-import { exportStems as exportStemsZip, type Stem } from "@/lib/studio/export";
+import { encodeMp3, exportStems as exportStemsZip, renderAll, safeName, type Stem } from "@/lib/studio/export";
 import { MarkedText, MarksEditor } from "@/components/Marks";
 import { marksFor, type Mark } from "@/lib/marks";
 import { NOTATION_KEYS, parseNotation, toNotation, untyped } from "@/lib/flow/notation";
@@ -482,9 +482,33 @@ export function SongApp({
       if (layers.length) stems.push({ name: l, layers, channel: o.mixed ? ch(laneBus(l)) : null, stereo: false });
     }
     // the mix: as heard (the beat a little down, as it plays here)
-    const mix = o.mixdown
+    const mix = o.mixdown || o.kind === "mp3"
       ? stems.map((s) => ({ ...s, layers: s.name === "Beat" ? [{ buffer: b, at: 0, gain: 0.8 }] : s.layers, channel: ch(s.name === "Beat" ? "beat" : s.name === "Flow (guide)" ? "flow" : laneBus(s.name)) }))
       : null;
+    const download = (blob: Blob, name: string) => {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${safeName(tree.project.title)} - ${name}`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    };
+    if (o.kind === "mp3") {
+      const { mix: sum } = await renderAll({
+        song: tree.project.title,
+        stems: [],
+        mix,
+        seconds: b.duration,
+        sampleRate: b.sampleRate,
+        withFx: true,
+        bpm: tree.audio?.bpm ?? null,
+        barOne: 0,
+        onProgress: () => progress("Mixing…"),
+      });
+      if (!sum) throw new Error("Nothing to mix.");
+      const mp3 = await encodeMp3(sum, b.sampleRate, 256, (x) => progress(`MP3 · ${Math.round(x * 100)}%`));
+      return download(new Blob([mp3.buffer as ArrayBuffer], { type: "audio/mpeg" }), "mix.mp3");
+    }
     const zip = await exportStemsZip({
       song: tree.project.title,
       stems,
@@ -496,12 +520,7 @@ export function SongApp({
       barOne: tree.audio?.beat_offset ?? 0,
       onProgress: (done, total, what) => progress(what === "ZIP" ? "Packing the ZIP…" : `Rendering ${what} · ${done + 1}/${total}`),
     });
-    const url = URL.createObjectURL(zip);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${tree.project.title.replace(/[\\/:*?"<>|]+/g, "-")} - stems.zip`;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    download(zip, "stems.zip");
   };
   const stopPlay = () => {
     if (controller) {
