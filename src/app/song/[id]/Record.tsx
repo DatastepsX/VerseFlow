@@ -13,7 +13,7 @@ import { followTo } from "@/components/writer/follow";
 import { fmtTime } from "@/lib/audio/song-map";
 import { louderGain, pct, TAKE_MAX } from "@/lib/studio/mix";
 import { leadOf, partJobs, syncTakes, type SyncJob, type SyncMode } from "@/lib/studio/sync";
-import { NotesBadge, NotesSheet, notesOf } from "./Notes";
+import { NotesBadge, NotesSheet, notesOf, useNotesSeen } from "./Notes";
 import { VolumeSlider } from "@/components/VolumeSlider";
 import { undoHeaders, undoStep } from "@/lib/undo-group";
 import type { Timeline } from "@/lib/audio/timeline";
@@ -135,6 +135,7 @@ function RecordScreen({ r, tree, setTree, rangeOf, bar, timeline, onBusy, host, 
   const [cutting, setCutting] = useState<string | null>(null);
   /** the line whose notes are open */
   const [notesFor, setNotesFor] = useState<string | null>(null);
+  const notesSeen = useNotesSeen(tree.project.id);
   /** in time: one take, or the whole part */
   const [timing, setTiming] = useState<{ takeId: string } | { part: string } | null>(null);
   /** forced alignment: the take + its lines' text → every syllable's time (1 call); the lines' flow follows the take */
@@ -322,7 +323,7 @@ function RecordScreen({ r, tree, setTree, rangeOf, bar, timeline, onBusy, host, 
                   )}
                   </div>
                   {/* notes on the line: how to sing or record it (hidden while recording) */}
-                  {!recording && <NotesBadge count={notesOf(tree, l.id).length} onClick={() => setNotesFor(l.id)} always />}
+                  {!recording && <NotesBadge count={notesOf(tree, l.id).length} fresh={notesOf(tree, l.id).filter(notesSeen.isNew).length} onClick={() => setNotesFor(l.id)} always />}
                 </div>
               );
             })}

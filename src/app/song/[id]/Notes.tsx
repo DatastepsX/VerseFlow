@@ -22,12 +22,90 @@ const ago = (iso: string) => {
 /** the notes of a line (for its badge) */
 export const notesOf = (tree: ProjectTree, lineId: string) => (tree.notes ?? []).filter((n) => n.line_id === lineId);
 
+/**
+ * Which notes you haven't seen yet: the newest note of each line you opened is remembered (with your profile, so
+ * on every device). A note is new when someone else wrote it after that.
+ */
+export function useNotesSeen(pid: string) {
+  const key = `vf.notes.seen.${pid}`;
+  const [seen, setSeen] = usePref<Record<string, string>>(key, {});
+  const [myName] = usePref("vf.me.name", "");
+  const account = useAccount();
+  const mine = (n: LineNote) => (account?.user ? n.author_id === account.user.id : !!myName.trim() && n.author_name === myName.trim());
+  // nothing is new until it's known who you are (your own notes never are)
+  const isNew = (n: LineNote) => !!account && !mine(n) && n.created_at > (seen[n.line_id] ?? "");
+  const markSeen = (lineId: string, notes: LineNote[]) => {
+    const last = notes.reduce((m, n) => (n.created_at > m ? n.created_at : m), "");
+    // the latest copy (this state may not have loaded it yet): the other lines' stay as they are
+    let now = seen;
+    try {
+      now = { ...seen, ...(JSON.parse(localStorage.getItem(key) ?? "{}") as Record<string, string>) };
+    } catch {}
+    if (last && last > (now[lineId] ?? "")) setSeen({ ...now, [lineId]: last });
+  };
+  return { isNew, markSeen };
+}
+
+const voiceLength = (s: number | null) => (s ? ` ${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}` : "");
+
+/**
+ * A line's notes, shown under it in the lyrics: the latest one (who, what — or that it's a voice message), how
+ * many more, and how many are new to you. Tap: all of them.
+ */
+export function NotePreview({ notes, isNew, onOpen }: { notes: LineNote[]; isNew: (n: LineNote) => boolean; onOpen: () => void }) {
+  if (!notes.length) return null;
+  const fresh = notes.filter(isNew).length;
+  // the newest one you haven't seen, else the newest
+  const last = notes.findLast(isNew) ?? notes[notes.length - 1];
+  return (
+    <button
+      className={`mx-3 mb-1.5 flex w-[calc(100%-1.5rem)] items-center gap-2 rounded-xl px-2.5 py-1.5 text-left text-xs ring-1 ${fresh ? "bg-accent-soft ring-accent/50" : "bg-panel-2/70 ring-transparent"}`}
+      onClick={(e) => {
+        e.stopPropagation();
+        onOpen();
+      }}
+      aria-label={`${notes.length} note${notes.length === 1 ? "" : "s"} on this line${fresh ? `, ${fresh} new` : ""}`}
+    >
+      <span className="shrink-0">{last.audio_path ? "🎙" : "💬"}</span>
+      <span className="min-w-0 flex-1 truncate">
+        <span className="font-semibold">{last.author_name || "Someone"}</span>
+        <span className="text-muted">: </span>
+        {last.text ? last.text : <span className="text-muted">voice message{voiceLength(last.audio_seconds)}</span>}
+      </span>
+      {notes.length > 1 && <span className="shrink-0 text-muted">+{notes.length - 1}</span>}
+      {fresh > 0 && <span className="shrink-0 rounded-full bg-accent px-1.5 py-0.5 text-[10px] font-bold text-white">{fresh} new</span>}
+    </button>
+  );
+}
+
+/** at the top of the lyrics: notes you haven't seen yet — tap to open the first */
+export function NewNotesBanner({ tree, isNew, onOpen }: { tree: ProjectTree; isNew: (n: LineNote) => boolean; onOpen: (lineId: string) => void }) {
+  const order = tree.sections.flatMap((s) => s.lines.map((l) => l.id));
+  const fresh = (tree.notes ?? []).filter(isNew);
+  if (!fresh.length) return null;
+  const lines = order.filter((id) => fresh.some((n) => n.line_id === id));
+  if (!lines.length) return null;
+  const who = [...new Set(fresh.map((n) => n.author_name || "Someone"))];
+  return (
+    <button className="mb-3 flex w-full items-center gap-3 rounded-2xl bg-accent-soft px-4 py-2.5 text-left ring-1 ring-accent/40" onClick={() => onOpen(lines[0])}>
+      <span className="text-lg">💬</span>
+      <span className="min-w-0 flex-1 text-[13px]">
+        <span className="block font-semibold text-accent">
+          {fresh.length} new note{fresh.length === 1 ? "" : "s"} on {lines.length} line{lines.length === 1 ? "" : "s"}
+        </span>
+        <span className="block truncate text-muted">from {who.join(", ")}</span>
+      </span>
+      <span className="shrink-0 text-xs font-semibold text-accent">Show</span>
+    </button>
+  );
+}
+
 /** 💬 2 — a line's notes, small (nothing when there are none, unless `always`) */
-export function NotesBadge({ count, onClick, always }: { count: number; onClick: () => void; always?: boolean }) {
+export function NotesBadge({ count, onClick, always, fresh = 0 }: { count: number; onClick: () => void; always?: boolean; fresh?: number }) {
   if (!count && !always) return null;
   return (
     <button
-      className={`inline-flex shrink-0 items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[11px] font-semibold ${count ? "bg-accent-soft text-accent" : "text-muted/60"}`}
+      className={`inline-flex shrink-0 items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[11px] font-semibold ${fresh ? "bg-accent text-white" : count ? "bg-accent-soft text-accent" : "text-muted/60"}`}
       onClick={(e) => {
         e.stopPropagation();
         onClick();
@@ -52,9 +130,13 @@ export function NotesSheet({ tree, line, setTree, onClose }: { tree: ProjectTree
   const [err, setErr] = useState<string | null>(null);
   const voice = useVoiceMemo();
   const list = useRef<HTMLDivElement | null>(null);
+  const { markSeen } = useNotesSeen(pid);
   useEffect(() => {
     list.current?.scrollTo({ top: list.current.scrollHeight });
-  }, [notes.length]);
+    // open: the line's notes are seen (and the ones that arrive while it's open)
+    markSeen(line.id, notes);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- when the line's notes change
+  }, [notes.length, line.id]);
 
   const send = async () => {
     if (!name.trim()) return setErr("Your name first — so the others know who wrote it.");

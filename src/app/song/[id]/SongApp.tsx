@@ -19,13 +19,13 @@ import { prosody } from "@/lib/rhyme/prosody";
 import { StudioEngine, type PlayLayer } from "@/lib/studio/engine";
 import { detectSyllables } from "@/lib/flow/syllables";
 import { guideLayers, spokenIds } from "@/lib/voice/client";
-import { LANGUAGES, type Line, type ProjectTree } from "@/lib/types";
+import { LANGUAGES, type Line, type LineNote, type ProjectTree } from "@/lib/types";
 import { followTo } from "@/components/writer/follow";
 import { download, fullText } from "@/components/writer/util";
 import { VoiceSheet, type VoiceInfo } from "./VoiceSheet";
 import { RecordView } from "./Record";
 import { Mixer, type ExportOptions } from "./Mixer";
-import { NotesSheet, notesOf } from "./Notes";
+import { NewNotesBanner, NotePreview, NotesSheet, notesOf, useNotesSeen } from "./Notes";
 import { encodeMp3, exportStems as exportStemsZip, logicNote, renderAll, safeName, type Stem } from "@/lib/studio/export";
 import { encodeWav } from "@/lib/studio/wav";
 import { MarkedText, MarksEditor } from "@/components/Marks";
@@ -865,6 +865,8 @@ export function SongApp({
   const [partMenu, setPartMenu] = useState<string | null>(null);
   /** the line whose notes are open */
   const [notesFor, setNotesFor] = useState<string | null>(null);
+  /** notes new to you: shown in the lyrics until opened */
+  const notesSeen = useNotesSeen(tree.project.id);
   /** the part merges into the one before it: its lines move there (one undo step) */
   const mergePart = (id: string) => void call(`/api/sections/${id}`, { action: "mergePrevious" });
   /** the part made longer by some bars of its beat: empty lines to write (one undo step) */
@@ -1387,6 +1389,7 @@ export function SongApp({
                 const empty = isEmptyPart(s);
                 const lyric = s.lines.filter((l) => l.kind === "lyric");
                 const done = lyric.length > 0 && lyric.every((l) => l.status === "APPROVED" || l.status === "APPROVED_EDITED");
+                const fresh = (tree.notes ?? []).some((n) => notesSeen.isNew(n) && s.lines.some((l) => l.id === n.line_id));
                 return (
                   <button
                     key={s.id}
@@ -1399,6 +1402,7 @@ export function SongApp({
                     {done && <Check className="h-3.5 w-3.5" />}
                     {empty && <Plus className="h-3.5 w-3.5" />}
                     {s.name}
+                    {fresh && <span className="h-2 w-2 rounded-full bg-accent" aria-label="new notes" />}
                     <span className={`font-mono text-[11px] font-normal ${active ? "opacity-70" : "text-muted"}`}>{fmtTime(partRange(s).start)}</span>
                   </button>
                 );
@@ -1468,6 +1472,16 @@ export function SongApp({
       )}
 
       <main className="flex-1 px-4 pb-32 pt-4">
+        {view === "lyrics" && (
+          <NewNotesBanner
+            tree={tree}
+            isNew={notesSeen.isNew}
+            onOpen={(lineId) => {
+              document.getElementById(`line-${lineId}`)?.scrollIntoView({ block: "center", behavior: "smooth" });
+              setNotesFor(lineId);
+            }}
+          />
+        )}
         {role === "viewer" && (
           <p className="mb-3 rounded-2xl bg-panel-2 px-4 py-2.5 text-[13px] text-muted">
             You can listen and leave notes on this song — ask its owner (More → People) to make you an editor to write and record.
@@ -1971,6 +1985,8 @@ export function SongApp({
                             onFlowFromHere={beatGrid ? () => openFlowSheet({ sectionId: s.id, fromLineId: l.id, flowId: l.flow?.flowId ?? null }) : undefined}
                             onSaveMarks={(m) => void lineAction(l.id, () => call(`/api/lines/${l.id}`, { marks: { items: m }, action: "marks" }, "PATCH"), "Marks")}
                             notes={notesOf(tree, l.id).length}
+                            noteList={notesOf(tree, l.id)}
+                            isNewNote={notesSeen.isNew}
                             onNotes={() => setNotesFor(l.id)}
                             onNewPart={
                               s.lines.findIndex((x) => x.id === l.id) > 0
@@ -2259,6 +2275,9 @@ function LineCard(props: {
   /** notes on the line (comments, voice messages): how many, and open them */
   notes: number;
   onNotes: () => void;
+  /** the line's notes (shown under it) and which are new to you */
+  noteList: LineNote[];
+  isNewNote: (n: LineNote) => boolean;
   onToggle: () => void;
 }) {
   const { line: l, lang } = props;
@@ -2328,19 +2347,21 @@ function LineCard(props: {
   // closed: just the text — the lyrics read like a sheet; tap to open the line
   if (!props.open && !props.editing && !props.gridOpen) {
     return (
+      <div>
       <button
         id={`line-${l.id}`}
         onClick={props.onToggle}
         className={`flex w-full items-start gap-2 rounded-2xl px-3 py-1 text-left transition-colors ${props.live ? "bg-accent-soft" : "active:bg-panel-2"}`}
       >
         <span className="min-w-0 flex-1">{lineText}</span>
-        {props.notes > 0 && <span className="mt-1.5 shrink-0 rounded-full bg-accent-soft px-1.5 py-0.5 text-[11px] font-semibold text-accent">💬 {props.notes}</span>}
         {props.busy ? (
           <span className="mt-2 inline-block h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-accent border-r-transparent" />
         ) : (
           kept && <Check className="mt-2 h-4 w-4 shrink-0 text-ok" aria-label="kept" />
         )}
       </button>
+      <NotePreview notes={props.noteList} isNew={props.isNewNote} onOpen={props.onNotes} />
+      </div>
     );
   }
   return (
@@ -2413,6 +2434,11 @@ function LineCard(props: {
               onSave={props.onSaveGrid}
               onCancel={props.onGrid}
             />
+          )}
+          {props.noteList.length > 0 && (
+            <div className="-mx-3 mt-1.5">
+              <NotePreview notes={props.noteList} isNew={props.isNewNote} onOpen={props.onNotes} />
+            </div>
           )}
           <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-muted">
             <button
