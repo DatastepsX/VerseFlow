@@ -7,7 +7,7 @@ import { marksFor } from "@/lib/marks";
 import { slotsWithMarks, untyped } from "@/lib/flow/notation";
 import { MarkedText } from "@/components/Marks";
 import { Check, ChevronRight, Headphones, Laptop, Mic, Pause, Phone, Play, Plus, Restart, Sliders, Trash, Wand } from "@/components/icons";
-import { FX_CATEGORIES, FX_PRESETS, layerPreset } from "@/lib/fx/presets";
+import { FX_CATEGORIES, FX_PRESETS, hasPartSound, layerPreset } from "@/lib/fx/presets";
 import { keyName, NOTE_NAMES } from "@/lib/fx/tune";
 import { followTo } from "@/components/writer/follow";
 import { fmtTime } from "@/lib/audio/song-map";
@@ -113,6 +113,8 @@ function RecordScreen({ r, tree, setTree, rangeOf, bar, timeline, onBusy, host, 
   const [micSheet, setMicSheet] = useState(false);
   /** the sound library, open for this layer */
   const [soundFor, setSoundFor] = useState<string | null>(null);
+  /** "Copy this part's sound" open */
+  const [copying, setCopying] = useState(false);
   const [adding, setAdding] = useState(false);
   /** how far each take was moved here (shown next to its timing buttons) */
   const [moved, setMoved] = useState<Record<string, number>>({});
@@ -430,11 +432,19 @@ function RecordScreen({ r, tree, setTree, rangeOf, bar, timeline, onBusy, host, 
               <Wand className="h-[18px] w-[18px]" />
             </span>
             <span className="min-w-0 flex-1">
-              <span className="block text-xs text-muted">Sound of the {r.lane}</span>
-              <span className="block truncate text-[15px] font-semibold">{layerPreset(r.sounds, r.lane).name}</span>
+              <span className="block text-xs text-muted">
+                Sound of the {r.lane}
+                {hasPartSound(r.sounds, r.lane, r.sectionId) ? " · this part only" : ""}
+              </span>
+              <span className="block truncate text-[15px] font-semibold">{layerPreset(r.sounds, r.lane, r.sectionId).name}</span>
             </span>
             <ChevronRight className="h-4 w-4 text-muted" />
           </button>
+          {tree.sections.length > 1 && r.sectionId && (
+            <button className="w-full px-1 text-left text-xs font-semibold text-accent disabled:opacity-50" disabled={!idle} onClick={() => setCopying(true)}>
+              Copy this part&apos;s sound to other parts…
+            </button>
+          )}
           {takes.length === 0 ? (
             <p className="px-1 text-sm text-muted">No {r.lane} takes yet — tap the red button to record one.</p>
           ) : (
@@ -625,6 +635,7 @@ function RecordScreen({ r, tree, setTree, rangeOf, bar, timeline, onBusy, host, 
           );
         })()}
       {soundFor && <SoundLibrary r={r} lane={soundFor} hasTake={r.takes.some((t) => t.lane === soundFor)} onClose={() => setSoundFor(null)} />}
+      {copying && r.sectionId && <CopySound tree={tree} from={r.sectionId} lanes={r.lanes} setTree={setTree} onClose={() => setCopying(false)} />}
     </>
   );
 }
@@ -724,7 +735,10 @@ function Peaks({ peaks, className }: { peaks: number[]; className?: string }) {
  * it on the layer's take in this part, with the beat and the other layers.
  */
 function SoundLibrary({ r, lane, hasTake, onClose }: { r: Recorder; lane: string; hasTake: boolean; onClose: () => void }) {
-  const current = layerPreset(r.sounds, lane).id;
+  const current = layerPreset(r.sounds, lane, r.sectionId).id;
+  const own = hasPartSound(r.sounds, lane, r.sectionId);
+  /** a sound for this part only, or for the layer in every part (the parts with their own keep theirs) */
+  const [onlyHere, setOnlyHere] = useState(own);
   const playing = r.status === "playing";
   const key = r.songKey;
   return (
@@ -740,6 +754,36 @@ function SoundLibrary({ r, lane, hasTake, onClose }: { r: Recorder; lane: string
             {hasTake ? `Tap a sound to hear it on your ${lane} take — your recording stays as it is.` : `Record a ${lane} take in this part to hear the sounds on it.`}
           </p>
         </div>
+        {r.sectionId && (
+          <div className="space-y-1.5">
+            <div className="flex rounded-full bg-panel-2 p-1" role="radiogroup" aria-label="Where the sound goes">
+              {(
+                [
+                  [false, "Every part"],
+                  [true, "This part only"],
+                ] as const
+              ).map(([v, label]) => (
+                <button
+                  key={label}
+                  role="radio"
+                  aria-checked={onlyHere === v}
+                  className={`flex-1 rounded-full py-2 text-[13px] font-semibold ${onlyHere === v ? "bg-panel text-fg shadow-sm" : "text-muted"}`}
+                  onClick={() => setOnlyHere(v)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            {own && (
+              <p className="flex items-center gap-2 px-1 text-xs text-muted">
+                <span className="flex-1">This part has its own {lane} sound.</span>
+                <button className="font-semibold text-accent" disabled={r.tuning} onClick={() => r.trySound(lane, "inherit", true)}>
+                  Use the song&apos;s
+                </button>
+              </p>
+            )}
+          </div>
+        )}
         {FX_CATEGORIES.map((cat) => (
           <div key={cat}>
             <p className="label">{cat === "Tuned" ? "Autotune" : cat === "Layers" ? "For doubles & ad-libs" : cat}</p>
@@ -751,7 +795,7 @@ function SoundLibrary({ r, lane, hasTake, onClose }: { r: Recorder; lane: string
                     key={p.id}
                     className={`rounded-2xl p-3 text-left ring-1 transition-colors disabled:opacity-50 ${on ? "bg-accent-soft ring-accent" : "bg-panel-2 ring-transparent active:bg-line/60"}`}
                     disabled={r.tuning || (!r.connected && r.remote)}
-                    onClick={() => r.trySound(lane, p.id)}
+                    onClick={() => r.trySound(lane, p.id, onlyHere)}
                     aria-pressed={on}
                   >
                     <span className="flex items-center gap-1 text-sm font-bold">
@@ -1379,6 +1423,105 @@ function SyncSheet({ tree, jobs: initial, title, onDone, onClose }: { tree: Proj
             ⇄ {busy ?? `Sync ${jobs.length} take${jobs.length === 1 ? "" : "s"}`}
           </button>
         )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * A part's sound onto other parts, layer by layer — the Lead's effect to their Lead, the Double's to their
+ * Double… and (if wanted) the volume and pan of the takes that play. No AI call.
+ */
+function CopySound({ tree, from, lanes, setTree, onClose }: { tree: ProjectTree; from: string; lanes: string[]; setTree: (t: ProjectTree) => void; onClose: () => void }) {
+  const fx = tree.project.settings?.fx;
+  const source = tree.sections.find((x) => x.id === from);
+  const others = tree.sections.filter((x) => x.id !== from);
+  const [to, setTo] = useState<string[]>([]);
+  const [levels, setLevels] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const chosen = (sectionId: string, lane: string) => tree.takes.find((t) => t.section_id === sectionId && t.lane === lane && t.chosen);
+  const pct = (g: number) => `${Math.round(g * 100)}%`;
+  const panText = (p: number) => (Math.abs(p) < 0.01 ? "centre" : `${p < 0 ? "L" : "R"}${Math.round(Math.abs(p) * 100)}`);
+  const apply = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await fetch(`/api/projects/${tree.project.id}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "copySound", from, to, levels }),
+      });
+      const data = (await res.json().catch(() => ({}))) as ProjectTree & { error?: string };
+      if (!res.ok) throw new Error(data.error ?? `Request failed (${res.status})`);
+      setTree(data);
+      onClose();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Something went wrong");
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="fixed inset-0 z-40 flex items-end justify-center bg-black/40" onClick={onClose}>
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="max-h-[92dvh] w-full max-w-lg space-y-4 overflow-auto rounded-t-3xl bg-panel px-4 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-3"
+      >
+        <div className="mx-auto h-1.5 w-10 rounded-full bg-line" />
+        <div>
+          <h2 className="text-xl font-bold">Copy the sound of {source?.name ?? "this part"}</h2>
+          <p className="text-xs text-muted">Layer by layer: its Lead sound goes to their Lead, its Double to their Double… The recordings stay as they are.</p>
+        </div>
+        <div className="divide-y divide-line/60 rounded-2xl bg-panel-2/70">
+          {lanes.map((lane) => {
+            const t = chosen(from, lane);
+            return (
+              <div key={lane} className="flex items-center gap-3 px-3.5 py-2 text-sm">
+                <span className="w-20 shrink-0 font-semibold">{lane}</span>
+                <span className="min-w-0 flex-1 truncate">{layerPreset(fx, lane, from).name}</span>
+                {levels && t && (
+                  <span className="shrink-0 text-xs text-muted">
+                    {pct(t.gain ?? 1)} · {panText(t.pan ?? 0)}
+                  </span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        <label className="flex items-center gap-2.5 px-1 text-sm">
+          <input type="checkbox" className="h-4 w-4 accent-[var(--color-accent)]" checked={levels} onChange={(e) => setLevels(e.target.checked)} />
+          <span>Volume and pan of the takes too</span>
+        </label>
+        <div className="space-y-1.5">
+          <div className="flex items-center px-1">
+            <p className="label flex-1">To</p>
+            <button className="text-xs font-semibold text-accent" onClick={() => setTo(to.length === others.length ? [] : others.map((x) => x.id))}>
+              {to.length === others.length ? "None" : "All parts"}
+            </button>
+          </div>
+          {others.map((x) => {
+            const on = to.includes(x.id);
+            const takes = tree.takes.filter((t) => t.section_id === x.id && t.chosen && lanes.includes(t.lane)).length;
+            return (
+              <button
+                key={x.id}
+                role="checkbox"
+                aria-checked={on}
+                className={`flex w-full items-center gap-3 rounded-2xl px-3.5 py-2.5 text-left ring-1 ${on ? "bg-accent-soft ring-accent" : "bg-panel-2 ring-transparent"}`}
+                onClick={() => setTo(on ? to.filter((y) => y !== x.id) : [...to, x.id])}
+              >
+                <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-md ${on ? "bg-accent text-white" : "bg-panel ring-1 ring-line"}`}>{on && <Check className="h-3.5 w-3.5" />}</span>
+                <span className="flex-1 text-sm font-semibold">{x.name}</span>
+                <span className="text-xs text-muted">{takes ? `${takes} take${takes === 1 ? "" : "s"}` : "no takes yet"}</span>
+              </button>
+            );
+          })}
+        </div>
+        {err && <p className="text-sm text-bad">{err}</p>}
+        <button className="btn-primary w-full justify-center" disabled={busy || !to.length} onClick={() => void apply()}>
+          {busy ? "Copying…" : to.length ? `Copy to ${to.length} part${to.length === 1 ? "" : "s"}` : "Choose the parts"}
+        </button>
+        <p className="text-center text-[11px] text-muted">Parts without takes get the sound for their next recordings.</p>
       </div>
     </div>
   );

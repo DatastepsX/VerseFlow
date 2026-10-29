@@ -78,6 +78,9 @@ test("effect presets: unique, raw by default, echoes on the tempo", () => {
   assert.equal(new Set(FX_PRESETS.map((p) => p.id)).size, FX_PRESETS.length);
   assert.equal(layerPreset(undefined, "Lead").id, "raw");
   assert.equal(layerPreset({ Lead: "trap" }, "Lead").name, "Trap autotune");
+  // a part's own sound wins over the song's; other parts keep the song's
+  assert.equal(layerPreset({ Lead: "trap", "s1:Lead": "raw" }, "Lead", "s1").id, "raw");
+  assert.equal(layerPreset({ Lead: "trap", "s1:Lead": "raw" }, "Lead", "s2").id, "trap");
   assert.equal(noteSeconds("1/4", 120), 0.5);
   assert.equal(noteSeconds("1/8", 120), 0.25);
 });

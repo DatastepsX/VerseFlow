@@ -11,6 +11,7 @@ import {
   saveVersion,
   setLanes,
   setSound,
+  copyPartSound,
   setLineTimes,
   undo,
   updateProject,
@@ -53,7 +54,7 @@ export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]">
   return handle(async () => {
     await access((await ctx.params).id, "edit");
     const { id } = await ctx.params;
-    const b = await body<{ action: string; name?: string; group_size?: number; label?: string; audio_start?: number | null; times?: { id: string; at: number | null }[]; text?: string; artistId?: string; color?: string; notes?: string; lanes?: string[]; lane?: string; preset?: string; key?: unknown }>(req);
+    const b = await body<{ action: string; name?: string; group_size?: number; label?: string; audio_start?: number | null; times?: { id: string; at: number | null }[]; text?: string; artistId?: string; color?: string; notes?: string; lanes?: string[]; lane?: string; preset?: string; key?: unknown; sectionId?: unknown; part?: unknown; from?: unknown; to?: unknown; levels?: unknown }>(req);
     switch (b.action) {
       case "undo":
       case "redo": {
@@ -99,7 +100,7 @@ export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]">
         break;
       case "setSound": {
         // a layer's effect preset and / or the song's key ("chromatic" or {root 0–11, minor})
-        if (b.preset !== undefined && !FX_PRESETS.some((p) => p.id === b.preset)) return Response.json({ error: "Unknown sound" }, { status: 400 });
+        if (b.preset !== undefined && b.preset !== "inherit" && !FX_PRESETS.some((p) => p.id === b.preset)) return Response.json({ error: "Unknown sound" }, { status: 400 });
         const k = b.key as { root?: unknown; minor?: unknown } | string | undefined;
         const key: ProjectSettings["songKey"] | undefined =
           k === "chromatic"
@@ -107,9 +108,25 @@ export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]">
             : k && typeof k === "object" && Number.isInteger(k.root) && (k.root as number) >= 0 && (k.root as number) < 12
               ? { root: k.root as number, minor: !!k.minor }
               : undefined;
-        await setSound(id, { lane: typeof b.lane === "string" ? b.lane : undefined, preset: b.preset, key });
+        await setSound(id, {
+          lane: typeof b.lane === "string" ? b.lane : undefined,
+          preset: b.preset,
+          key,
+          // a part's own sound ("part": only this part; else the song's, and this part follows it)
+          sectionId: typeof b.sectionId === "string" ? b.sectionId : undefined,
+          partOnly: b.part === true,
+        });
         break;
       }
+      case "copySound":
+        // a part's sound (each layer's effect, and the takes' volume and pan) onto other parts, layer by layer
+        await copyPartSound(
+          id,
+          typeof b.from === "string" ? b.from : "",
+          Array.isArray(b.to) ? b.to.filter((x): x is string => typeof x === "string") : [],
+          b.levels !== false,
+        );
+        break;
       case "setLanes":
         await setLanes(id, Array.isArray(b.lanes) ? b.lanes.filter((x) => typeof x === "string") : []);
         break;

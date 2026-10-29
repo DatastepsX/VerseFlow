@@ -117,6 +117,10 @@ Deep voice, High voice) and for layers (Wide double, Ad-lib echo). Tap one: it's
 generated reverb, echoes on the song's tempo, stereo width; loudness-matched presets); autotune and voice up /
 down re-pitch the take in the browser (YIN pitch + TD-PSOLA, `tune.ts`) to the key found in the beat (`key.ts`,
 changeable). The recording itself never changes. No API calls.
+"Every part" / "This part only": a part can have its own sound for a layer (`settings.fx["<sectionId>:<layer>"]`,
+else the song's; `layerPreset(fx, lane, sectionId)`). **Copy this part's sound to other parts…** (`copySound`,
+`copyPartSound` in `repo.ts`) gives other parts the same sound layer by layer — Lead to Lead, Double to Double — and,
+if wanted, the volume and pan of the takes that play.
 
 **Remove the vocals** (More → "The song's vocals"; `separateVocals` in `src/lib/server/transcribe.ts`): one
 ElevenLabs stem-separation call (`two_stems_v1`) splits the uploaded song into its vocals and the music without them;

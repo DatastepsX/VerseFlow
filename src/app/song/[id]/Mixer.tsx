@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Check, Download, Pause, Play } from "@/components/icons";
 import { VolumeSlider } from "@/components/VolumeSlider";
 import { fmtTime } from "@/lib/audio/song-map";
-import { FX_CATEGORIES, FX_PRESETS, layerPreset } from "@/lib/fx/presets";
+import { FX_CATEGORIES, FX_PRESETS, hasPartSound, layerPreset } from "@/lib/fx/presets";
 import { channelOf, laneBus, louderGain, panLabel, TAKE_MAX, type ChannelPatch } from "@/lib/studio/mix";
 import type { ProjectTree, Take } from "@/lib/types";
 
@@ -414,6 +414,15 @@ function Strip(p: MixerProps & { track: { key: string; name: string; color: stri
           </select>
         </label>
       )}
+      {p.track.lane &&
+        (() => {
+          const own = p.tree.sections.filter((x) => hasPartSound(p.tree.project.settings?.fx, p.track.lane!, x.id));
+          return own.length ? (
+            <p className="mt-1 truncate text-[11px] text-muted">
+              Own sound in {own.map((x) => x.name).join(", ")} (Record → Sound)
+            </p>
+          ) : null;
+        })()}
       <VolumeSlider value={c.vol} label={p.track.name} onValue={(v) => p.setChannel(p.track.key, { vol: Math.round(v * 100) / 100 })} />
       <PanSlider value={c.pan} label={p.track.name} onValue={(v) => p.setChannel(p.track.key, { pan: v })} />
     </div>

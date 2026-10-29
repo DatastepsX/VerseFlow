@@ -1,4 +1,5 @@
 import "server-only";
+import { partFxKey } from "@/lib/fx/presets";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { headers } from "next/headers";
 import { check, db } from "./db";
@@ -1519,16 +1520,66 @@ export async function takeUrls(projectId: string, ids: string[]) {
   return out;
 }
 
-/** the sound (effect preset) of a layer, and / or the song's key for autotune */
-export async function setSound(projectId: string, s: { lane?: string; preset?: string; key?: ProjectSettings["songKey"] }) {
+/**
+ * The sound (effect preset) of a layer, and / or the song's key for autotune. With `sectionId` and `partOnly`:
+ * only that part's (kept as "<sectionId>:<layer>"; "inherit" gives the part the song's sound again). With
+ * `sectionId` alone: the song's sound, and that part follows it again.
+ */
+export async function setSound(projectId: string, s: { lane?: string; preset?: string; key?: ProjectSettings["songKey"]; sectionId?: string; partOnly?: boolean }) {
   const settings = await projectSettings(projectId);
   const fx = { ...(settings.fx ?? {}) };
   if (s.lane && s.preset) {
     const lane = s.lane.trim().slice(0, 30);
-    if (s.preset === "raw") delete fx[lane];
-    else fx[lane] = s.preset;
+    const own = s.sectionId ? partFxKey(s.sectionId, lane) : null;
+    if (own && s.partOnly) {
+      if (s.preset === "inherit") delete fx[own];
+      else fx[own] = s.preset;
+    } else {
+      if (s.preset === "raw") delete fx[lane];
+      else if (s.preset !== "inherit") fx[lane] = s.preset;
+      if (own) delete fx[own];
+    }
   }
   await updateProject(projectId, { settings: { ...settings, fx, ...(s.key !== undefined ? { songKey: s.key } : {}) } });
+}
+
+/**
+ * A part's sound copied onto other parts, layer by layer: Lead → Lead, Double → Double… Each layer's effect
+ * (the part's own or the song's), and — with `levels` — the volume and pan of the take it plays, given to the
+ * takes those parts play on the same layer. A layer the part has no take on gives its effect only.
+ */
+export async function copyPartSound(projectId: string, from: string, to: string[], levels: boolean) {
+  const sections = check(await db().from("sections").select("id").eq("project_id", projectId)) as { id: string }[];
+  const ids = new Set(sections.map((x) => x.id));
+  if (!ids.has(from)) throw new NotFound("Part not found");
+  const targets = [...new Set(to)].filter((x) => x !== from && ids.has(x));
+  if (!targets.length) throw new Error("Choose a part to copy the sound to.");
+  const settings = await projectSettings(projectId);
+  const fx = { ...(settings.fx ?? {}) };
+  const takes = check(await db().from("takes").select("id, section_id, lane, chosen, gain, pan").eq("project_id", projectId)) as {
+    id: string;
+    section_id: string | null;
+    lane: string;
+    chosen: boolean;
+    gain: number | null;
+    pan: number | null;
+  }[];
+  const lanes = [...new Set([...(settings.lanes?.length ? settings.lanes : ["Lead", "Double", "Ad-libs"]), ...takes.filter((t) => t.section_id === from).map((t) => t.lane)])];
+  for (const lane of lanes) {
+    const sound = fx[partFxKey(from, lane)] ?? fx[lane] ?? "raw";
+    for (const t of targets) {
+      // the same as the song's: the part simply follows the song again
+      if (sound === (fx[lane] ?? "raw")) delete fx[partFxKey(t, lane)];
+      else fx[partFxKey(t, lane)] = sound;
+    }
+    if (!levels) continue;
+    const src = takes.find((t) => t.section_id === from && t.lane === lane && t.chosen);
+    if (!src) continue;
+    const dest = takes.filter((t) => t.chosen && t.lane === lane && t.section_id && targets.includes(t.section_id)).map((t) => t.id);
+    if (dest.length) check(await db().from("takes").update({ gain: src.gain ?? 1, pan: src.pan ?? 0 }).in("id", dest));
+  }
+  await updateProject(projectId, { settings: { ...settings, fx } });
+  await touch(projectId);
 }
 
 export async function setLanes(projectId: string, lanes: string[]) {

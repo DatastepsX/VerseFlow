@@ -17,7 +17,7 @@ export type RemoteCmd =
   | { t: "stop" }
   | { t: "addLane"; name: string }
   | { t: "countIn"; bars: number }
-  | { t: "sound"; lane: string; preset: string }
+  | { t: "sound"; lane: string; preset: string; part?: boolean }
   | { t: "key"; key: "chromatic" | { root: number; minor: boolean } }
   // the phone drives the whole song on the Mac (the Mac is the main device): what it shows, what it plays
   | { t: "nav"; view: string; part: string | null }

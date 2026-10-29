@@ -87,8 +87,8 @@ export interface Recorder {
   sounds: Record<string, string>;
   /** the song's key for autotune: chosen or found in the beat (null: not looked for yet) */
   songKey: ProjectSettings["songKey"] | null;
-  /** a layer gets this sound — heard at once on its take in this part */
-  trySound: (lane: string, preset: string) => void;
+  /** a layer gets this sound — heard at once on its take in this part (`part`: in this part only) */
+  trySound: (lane: string, preset: string, part?: boolean) => void;
   setKey: (key: NonNullable<ProjectSettings["songKey"]>) => void;
   /** a voice is being tuned (autotune / pitch) */
   tuning: boolean;
@@ -358,7 +358,7 @@ export function useLocalRecorder(o: {
     await loadTakes(takes);
     const out: PlayLayer[] = [];
     for (const t of takes) {
-      const p = trying?.lane === t.lane ? presetById(trying.preset) : layerPreset(sounds, t.lane);
+      const p = trying?.lane === t.lane && t.section_id === sectionId ? presetById(trying.preset) : layerPreset(sounds, t.lane, t.section_id);
       const buffer = await voiced(t, p);
       // the take played on its own is heard even when its layer is off
       const bus = t === only && off.includes(t.lane) ? undefined : laneBus(t.lane);
@@ -665,12 +665,14 @@ export function useLocalRecorder(o: {
     // a take that sat late was recorded with too little delay compensation: the next ones get more
     setLatencyMs(Math.max(0, Math.round((latency * 1000 - by * 1000) * 10) / 10));
   };
-  /** a layer's sound: saved for the song, and heard at once on the layer's take in this part */
-  const trySound = (lane: string, preset: string) => {
+  /** a layer's sound: saved for the song (or for this part only), and heard at once on the layer's take in this part */
+  const trySound = (lane: string, preset: string, part?: boolean) => {
     if (busy && status.kind !== "playing") return;
-    void api(`/api/projects/${pid}`, { action: "setSound", lane, preset }).catch(failed);
+    void api(`/api/projects/${pid}`, { action: "setSound", lane, preset, sectionId, part: !!part }).catch(failed);
     const take = sectionTakes.find((t) => t.lane === lane && t.chosen) ?? sectionTakes.filter((t) => t.lane === lane).pop();
-    if (take) void play(take, { lane, preset });
+    // "inherit": the part goes back to the song's sound
+    const heard = preset === "inherit" ? (sounds[lane] ?? "raw") : preset;
+    if (take) void play(take, { lane, preset: heard });
   };
   const setKey = (key: NonNullable<ProjectSettings["songKey"]>) => void api(`/api/projects/${pid}`, { action: "setSound", key }).catch(failed);
   const addLane = (name: string) => {
@@ -732,7 +734,7 @@ export function useLocalRecorder(o: {
           addLane(c.name);
           break;
         case "sound":
-          trySound(c.lane, c.preset);
+          trySound(c.lane, c.preset, c.part);
           break;
         case "key":
           setKey(c.key);
@@ -980,7 +982,7 @@ export function useRemoteRecorder(o: { tree: ProjectTree; section: [string | nul
     },
     sounds: connected ? (state.sounds ?? {}) : (o.tree.project.settings?.fx ?? {}),
     songKey: connected ? (state.songKey ?? null) : (o.tree.project.settings?.songKey ?? null),
-    trySound: (lane, preset) => send({ t: "sound", lane, preset }),
+    trySound: (lane, preset, part) => send({ t: "sound", lane, preset, part }),
     setKey: (key) => send({ t: "key", key }),
     tuning: connected && !!state.tuning,
     arm: () => {},

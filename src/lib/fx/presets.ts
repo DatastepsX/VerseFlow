@@ -250,10 +250,17 @@ export const FX_CATEGORIES: FxCategory[] = ["Clean", "Space", "Tuned", "Characte
 
 export const presetById = (id: string | undefined | null) => FX_PRESETS.find((p) => p.id === id) ?? FX_PRESETS[0];
 
-/** the preset a layer uses (the song's choice; none chosen: raw) */
-export function layerPreset(fx: Record<string, string> | undefined, lane: string) {
-  return presetById(fx?.[lane]);
+/** a part's own sound for a layer, kept beside the song's ("<sectionId>:<layer>" in `settings.fx`) */
+export const partFxKey = (sectionId: string, lane: string) => `${sectionId}:${lane}`;
+
+/** the preset a layer uses in a part: the part's own, else the song's choice (none chosen: raw) */
+export function layerPreset(fx: Record<string, string> | undefined, lane: string, sectionId?: string | null) {
+  return presetById((sectionId ? fx?.[partFxKey(sectionId, lane)] : undefined) ?? fx?.[lane]);
 }
+
+/** the part has its own sound for the layer (not the song's) */
+export const hasPartSound = (fx: Record<string, string> | undefined, lane: string, sectionId: string | null | undefined) =>
+  !!sectionId && fx?.[partFxKey(sectionId, lane)] !== undefined;
 
 /** a delay note in seconds at the song's tempo */
 export function noteSeconds(note: NonNullable<FxPreset["delay"]>["note"], bpm: number) {
