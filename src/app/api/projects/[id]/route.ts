@@ -19,13 +19,18 @@ import { body, handle, pick, treeResponse } from "@/lib/server/http";
 import { parseText } from "@/lib/text-import";
 import type { Project, ProjectSettings } from "@/lib/types";
 import { FX_PRESETS } from "@/lib/fx/presets";
+import { access, addMember, currentUserId } from "@/lib/server/users";
 
 export async function GET(_req: Request, ctx: RouteContext<"/api/projects/[id]">) {
-  return handle(async () => treeResponse((await ctx.params).id));
+  return handle(async () => {
+    await access((await ctx.params).id, "view");
+    return treeResponse((await ctx.params).id);
+  });
 }
 
 export async function PATCH(req: Request, ctx: RouteContext<"/api/projects/[id]">) {
   return handle(async () => {
+    await access((await ctx.params).id, "edit");
     const { id } = await ctx.params;
     const b = await body(req);
     await updateProject(id, pick<Project>(b, ["title", "type", "language", "concept", "settings"]));
@@ -35,6 +40,7 @@ export async function PATCH(req: Request, ctx: RouteContext<"/api/projects/[id]"
 
 export async function DELETE(_req: Request, ctx: RouteContext<"/api/projects/[id]">) {
   return handle(async () => {
+    await access((await ctx.params).id, "own");
     await deleteProject((await ctx.params).id);
     return Response.json({ ok: true });
   });
@@ -45,6 +51,7 @@ export const maxDuration = 300;
 
 export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]">) {
   return handle(async () => {
+    await access((await ctx.params).id, "edit");
     const { id } = await ctx.params;
     const b = await body<{ action: string; name?: string; group_size?: number; label?: string; audio_start?: number | null; times?: { id: string; at: number | null }[]; text?: string; artistId?: string; color?: string; notes?: string; lanes?: string[]; lane?: string; preset?: string; key?: unknown }>(req);
     switch (b.action) {
@@ -56,8 +63,13 @@ export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]">
         if (label) res.headers.set("x-undo-label", encodeURIComponent(label));
         return res;
       }
-      case "duplicate":
-        return Response.json(await duplicateProject(id), { status: 201 });
+      case "duplicate": {
+        // the copy is its maker's
+        const copy = await duplicateProject(id);
+        const uid = await currentUserId();
+        if (uid) await addMember(copy.id, uid, "owner");
+        return Response.json(copy, { status: 201 });
+      }
       case "addSection":
         await addSection(id, { name: b.name ?? "New section", group_size: b.group_size, audio_start: b.audio_start ?? null });
         break;

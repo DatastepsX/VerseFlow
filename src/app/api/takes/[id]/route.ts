@@ -3,12 +3,14 @@ import { alignTake } from "@/lib/server/transcribe";
 import { alignmentText, alignTakeLines } from "@/lib/flow/align";
 import { body, handle, treeResponse } from "@/lib/server/http";
 import type { LineFlow } from "@/lib/types";
+import { accessVia } from "@/lib/server/users";
 
 export const maxDuration = 120;
 
 /** choose this take for its section + layer; {shift: s} moves it on the beat instead (± 0.5 s at most); {gain, pan}: its volume and pan */
 export async function PATCH(req: Request, ctx: RouteContext<"/api/takes/[id]">) {
   return handle(async () => {
+    await accessVia("takes", (await ctx.params).id, "edit");
     const { id } = await ctx.params;
     const b = await body<{ shift?: unknown; gain?: unknown; pan?: unknown; trim?: { from?: unknown; to?: unknown } }>(req);
     if (typeof b.shift === "number" && Number.isFinite(b.shift)) return treeResponse(await shiftTake(id, Math.max(-0.5, Math.min(0.5, b.shift))));
@@ -23,7 +25,10 @@ export async function PATCH(req: Request, ctx: RouteContext<"/api/takes/[id]">) 
 }
 
 export async function DELETE(_req: Request, ctx: RouteContext<"/api/takes/[id]">) {
-  return handle(async () => treeResponse(await deleteTake((await ctx.params).id)));
+  return handle(async () => {
+    await accessVia("takes", (await ctx.params).id, "edit");
+    return treeResponse(await deleteTake((await ctx.params).id));
+  });
 }
 
 /**
@@ -33,6 +38,7 @@ export async function DELETE(_req: Request, ctx: RouteContext<"/api/takes/[id]">
  */
 export async function POST(req: Request, ctx: RouteContext<"/api/takes/[id]">) {
   return handle(async () => {
+    await accessVia("takes", (await ctx.params).id, "edit");
     const { id } = await ctx.params;
     const b = await body<{ action?: string; lineIds?: unknown }>(req);
     if (b.action !== "align") return Response.json({ error: "Unknown action" }, { status: 400 });

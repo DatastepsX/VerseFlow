@@ -3,13 +3,17 @@ import { audioPlaybackUrl, audioUploadUrl, deleteAudio, getTree, saveAudio, upda
 import type { AudioTrack } from "@/lib/types";
 import { body, handle, treeResponse } from "@/lib/server/http";
 import { separateVocals } from "@/lib/server/transcribe";
+import { access } from "@/lib/server/users";
 
 // removing the vocals waits for ElevenLabs (up to a minute or two for a song)
 export const maxDuration = 300;
 
 /** Signed URL to stream the project's beat */
 export async function GET(_req: Request, ctx: RouteContext<"/api/projects/[id]/audio">) {
-  return handle(async () => Response.json(await audioPlaybackUrl((await ctx.params).id)));
+  return handle(async () => {
+    await access((await ctx.params).id, "view");
+    return Response.json(await audioPlaybackUrl((await ctx.params).id));
+  });
 }
 
 /**
@@ -22,6 +26,7 @@ export async function GET(_req: Request, ctx: RouteContext<"/api/projects/[id]/a
  */
 export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]/audio">) {
   return handle(async () => {
+    await access((await ctx.params).id, "edit");
     const { id } = await ctx.params;
     const b = await body<{
       action: string;
@@ -86,6 +91,7 @@ export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]/a
 
 export async function DELETE(_req: Request, ctx: RouteContext<"/api/projects/[id]/audio">) {
   return handle(async () => {
+    await access((await ctx.params).id, "edit");
     const { id } = await ctx.params;
     await deleteAudio(id);
     return treeResponse(id);

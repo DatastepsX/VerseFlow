@@ -1,9 +1,11 @@
 import { saveTake, takeUploadUrl, takeUrls } from "@/lib/server/repo";
 import { body, handle, treeResponse } from "@/lib/server/http";
+import { access } from "@/lib/server/users";
 
 /** ?ids=a,b → { urls: {id: signedUrl} } to play / mix takes */
 export async function GET(req: Request, ctx: RouteContext<"/api/projects/[id]/takes">) {
   return handle(async () => {
+    await access((await ctx.params).id, "view");
     const ids = (new URL(req.url).searchParams.get("ids") ?? "").split(",").filter(Boolean);
     return Response.json({ urls: await takeUrls((await ctx.params).id, ids) });
   });
@@ -16,6 +18,7 @@ export async function GET(req: Request, ctx: RouteContext<"/api/projects/[id]/ta
  */
 export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]/takes">) {
   return handle(async () => {
+    const uid = await access((await ctx.params).id, "edit");
     const { id } = await ctx.params;
     const b = await body<{
       action: string;
@@ -42,6 +45,7 @@ export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]/t
         sample_rate: Math.round(num(b.sample_rate)!),
         peaks: Array.isArray(b.peaks) ? b.peaks.slice(0, 400).map((x) => Math.max(0, Math.min(1, Number(x) || 0))) : [],
         note: typeof b.note === "string" ? b.note.slice(0, 80) : null,
+        created_by: uid,
       });
       const res = await treeResponse(id);
       res.headers.set("x-take-id", takeId);

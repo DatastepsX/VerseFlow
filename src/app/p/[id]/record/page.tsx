@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import { getTree, NotFound } from "@/lib/server/repo";
+import { myRole } from "@/lib/server/users";
 import { Recorder } from "./Recorder";
 
 export default function RecordPage(props: PageProps<"/p/[id]/record">) {
@@ -13,6 +14,7 @@ export default function RecordPage(props: PageProps<"/p/[id]/record">) {
 
 async function RecordView({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  if (!(await myRole(id))) notFound();
   let tree;
   try {
     tree = await getTree(id);

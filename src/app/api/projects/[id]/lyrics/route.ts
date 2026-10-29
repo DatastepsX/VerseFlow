@@ -4,6 +4,7 @@ import { applyLyricsPlan, getTree, rebuildSong, setLineTimes } from "@/lib/serve
 import { storedTranscript, transcribeBeat, transcriptionConfigured, vocalTimes } from "@/lib/server/transcribe";
 import { body, handle, treeResponse } from "@/lib/server/http";
 import type { ProjectTree } from "@/lib/types";
+import { access } from "@/lib/server/users";
 
 export const maxDuration = 300;
 
@@ -40,6 +41,7 @@ function rebuild(tree: ProjectTree, words: Parameters<typeof planLyrics>[0]["wor
 /** Whether lyrics reading is set up, and the stored transcript's date (if any). */
 export async function GET(_req: Request, ctx: RouteContext<"/api/projects/[id]/lyrics">) {
   return handle(async () => {
+    await access((await ctx.params).id, "view");
     const t = await storedTranscript((await ctx.params).id);
     return Response.json({ configured: transcriptionConfigured(), transcript: t ? { created_at: t.created_at, words: t.words.length } : null });
   });
@@ -55,6 +57,7 @@ export async function GET(_req: Request, ctx: RouteContext<"/api/projects/[id]/l
  */
 export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]/lyrics">) {
   return handle(async () => {
+    await access((await ctx.params).id, "edit");
     const { id } = await ctx.params;
     const b = await body<{ action: string; autoSections?: boolean }>(req);
     const tree = await getTree(id);

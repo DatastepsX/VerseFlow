@@ -8,7 +8,7 @@ import { api } from "@/lib/client/api";
 import { BEAT_ACCEPT, MAX_BEAT_BYTES, uploadBeat } from "@/lib/client/beat";
 import { LANGUAGES, PROJECT_TYPES, type Project, type ProjectType } from "@/lib/types";
 
-type ProjectRow = Pick<Project, "id" | "title" | "type" | "language" | "updated_at">;
+type ProjectRow = Pick<Project, "id" | "title" | "type" | "language" | "updated_at"> & { role?: "owner" | "editor" | "viewer" };
 
 /**
  * Home: your songs, and a new song in three taps — name, language, beat.
@@ -108,6 +108,7 @@ export default function Home() {
                 <span className="block truncate font-semibold">{p.title}</span>
                 <span className="text-xs text-muted">
                   {PROJECT_TYPES.find((t) => t.value === p.type)?.label} · {p.language.toUpperCase()} · {new Date(p.updated_at).toLocaleDateString()}
+                  {p.role && p.role !== "owner" && <> · shared with you{p.role === "viewer" ? " (listen)" : ""}</>}
                 </span>
               </span>
               <ChevronRight className="h-4 w-4 text-muted" />

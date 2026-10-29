@@ -1,6 +1,7 @@
 import { applyFlow, createFlow, getTree, updateFlow } from "@/lib/server/repo";
 import { body, handle } from "@/lib/server/http";
 import type { FlowPattern, PatternLine } from "@/lib/types";
+import { access } from "@/lib/server/users";
 
 /**
  * The song's flows (patterns of 2 or 4 lines):
@@ -11,6 +12,7 @@ import type { FlowPattern, PatternLine } from "@/lib/types";
  */
 export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]/flows">) {
   return handle(async () => {
+    await access((await ctx.params).id, "edit");
     const { id } = await ctx.params;
     const b = await body<{ action: string; pattern?: unknown; flowId?: string; sectionId?: string; fromLineId?: string | null; withText?: boolean }>(req);
     if (b.action === "create" || b.action === "update") {

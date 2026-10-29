@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import { getTree, NotFound } from "@/lib/server/repo";
+import { myRole } from "@/lib/server/users";
 import { SongApp } from "./SongApp";
 
 export default function SongPage(props: PageProps<"/song/[id]">) {
@@ -25,6 +26,9 @@ async function SongView({
   // ?view=record (&on=mac: this phone is the remote for the Mac)
   const view = (["flow", "lyrics", "record", "mix", "more"] as const).find((v) => v === q.view);
   const on = q.on === "mac" ? "mac" : undefined;
+  // not on this song (or not signed in): as if it didn't exist
+  const role = await myRole(id);
+  if (!role) notFound();
   let tree;
   try {
     tree = await getTree(id);
@@ -32,5 +36,5 @@ async function SongView({
     if (e instanceof NotFound || (e instanceof Error && /invalid input syntax/.test(e.message))) notFound();
     throw e;
   }
-  return <SongApp initialTree={tree} autoDetect={autoDetect} initialView={view} recordOn={on} />;
+  return <SongApp initialTree={tree} autoDetect={autoDetect} initialView={view} recordOn={on} role={role} />;
 }

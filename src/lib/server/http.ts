@@ -2,6 +2,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import { AiUnavailable } from "./ai";
 import { getTree, NotFound, requestScope } from "./repo";
+import { Forbidden, Unauthorized } from "./users";
 
 export async function treeResponse(projectId: string) {
   return Response.json(await getTree(projectId));
@@ -11,7 +12,7 @@ export async function treeResponse(projectId: string) {
 export function handle(fn: () => Promise<Response>): Promise<Response> {
   return requestScope.run({ key: randomUUID(), steps: new Map() }, () => fn()).catch((e: unknown) => {
     const message = e instanceof Error ? e.message : "Unexpected error";
-    const status = e instanceof NotFound ? 404 : e instanceof AiUnavailable ? 503 : 500;
+    const status = e instanceof NotFound ? 404 : e instanceof Unauthorized ? 401 : e instanceof Forbidden ? 403 : e instanceof AiUnavailable ? 503 : 500;
     if (status === 500) console.error(e);
     return Response.json({ error: message }, { status });
   });

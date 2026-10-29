@@ -1,6 +1,7 @@
 import { getTree } from "@/lib/server/repo";
 import { body, handle } from "@/lib/server/http";
 import { speakLines, spokenAlready } from "@/lib/server/voice";
+import { access } from "@/lib/server/users";
 
 export const maxDuration = 300;
 
@@ -11,6 +12,7 @@ export const maxDuration = 300;
  */
 export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]/voice">) {
   return handle(async () => {
+    await access((await ctx.params).id, "view");
     const { id } = await ctx.params;
     const b = await body<{ action: string; lineIds?: string[] }>(req);
     const ids = (b.lineIds ?? []).filter((x) => typeof x === "string").slice(0, 200);

@@ -1,5 +1,6 @@
 import { createShare, finishShare, listShares, revokeShare, shareUploadUrl, type ShareFile } from "@/lib/server/repo";
 import { body, handle } from "@/lib/server/http";
+import { access } from "@/lib/server/users";
 
 /**
  * Share links (the stems and the mix to download, no account needed):
@@ -10,11 +11,15 @@ import { body, handle } from "@/lib/server/http";
  *  DELETE ?token= → the link stops working, its files are deleted
  */
 export async function GET(_req: Request, ctx: RouteContext<"/api/projects/[id]/shares">) {
-  return handle(async () => Response.json({ shares: await listShares((await ctx.params).id) }));
+  return handle(async () => {
+    await access((await ctx.params).id, "edit");
+    return Response.json({ shares: await listShares((await ctx.params).id) });
+  });
 }
 
 export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]/shares">) {
   return handle(async () => {
+    await access((await ctx.params).id, "edit");
     const { id } = await ctx.params;
     const b = await body<{ action?: string; title?: unknown; note?: unknown; days?: unknown; token?: unknown; index?: unknown; kind?: unknown; files?: unknown }>(req);
     const str = (v: unknown) => (typeof v === "string" ? v : "");
@@ -34,6 +39,7 @@ export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]/s
 
 export async function DELETE(req: Request, ctx: RouteContext<"/api/projects/[id]/shares">) {
   return handle(async () => {
+    await access((await ctx.params).id, "edit");
     await revokeShare((await ctx.params).id, new URL(req.url).searchParams.get("token") ?? "");
     return Response.json({ ok: true });
   });

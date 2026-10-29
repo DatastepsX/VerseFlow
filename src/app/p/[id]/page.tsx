@@ -3,6 +3,7 @@ import { Suspense } from "react";
 import { Writer } from "@/components/writer/Writer";
 import { aiConfigured } from "@/lib/server/ai";
 import { getTree, NotFound } from "@/lib/server/repo";
+import { myRole } from "@/lib/server/users";
 
 export default function ProjectPage(props: PageProps<"/p/[id]">) {
   return (
@@ -14,6 +15,7 @@ export default function ProjectPage(props: PageProps<"/p/[id]">) {
 
 async function ProjectWriter({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  if (!(await myRole(id))) notFound();
   let tree;
   try {
     tree = await getTree(id);

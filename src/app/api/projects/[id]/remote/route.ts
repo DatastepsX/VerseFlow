@@ -1,5 +1,6 @@
 import { getRemoteState, postRemoteCommand, putRemoteState, remoteCommandsAfter } from "@/lib/server/repo";
 import { body, handle } from "@/lib/server/http";
+import { access } from "@/lib/server/users";
 
 export const maxDuration = 30;
 
@@ -14,6 +15,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  */
 export async function GET(req: Request, ctx: RouteContext<"/api/projects/[id]/remote">) {
   return handle(async () => {
+    await access((await ctx.params).id, "edit");
     const { id } = await ctx.params;
     const q = new URL(req.url).searchParams;
     const after = Number(q.get("after") ?? -1);
@@ -37,6 +39,7 @@ export async function GET(req: Request, ctx: RouteContext<"/api/projects/[id]/re
 /** { cmd } from the phone, or { state } from the studio */
 export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]/remote">) {
   return handle(async () => {
+    await access((await ctx.params).id, "edit");
     const { id } = await ctx.params;
     const b = await body<{ cmd?: { t?: unknown }; state?: unknown }>(req);
     if (b.cmd && typeof b.cmd.t === "string") await postRemoteCommand(id, b.cmd);

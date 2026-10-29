@@ -29,10 +29,11 @@ import { fixPairs } from "@/lib/flow/rhymelines";
 import { songSections, type SungLine } from "@/lib/audio/song-lines";
 import { sectionRanges } from "@/lib/audio/song-map";
 import type { Extension } from "@/lib/audio/arrange";
+import { settingsKey } from "./users";
 
 const r3 = (t: number) => Math.round(t * 1000) / 1000;
 
-const TAKE_COLS = "id, section_id, lane, take_no, start_at, duration, sample_rate, peaks, chosen, trim_in, trim_out, gain, pan, note, created_at";
+const TAKE_COLS = "id, section_id, lane, take_no, start_at, duration, sample_rate, peaks, chosen, trim_in, trim_out, gain, pan, note, created_by, created_at";
 const LINE_COLS = "id, project_id, section_id, position, text, status, kind, note, audio_at, flow, marks, updated_at";
 const SNAPSHOT_FIELDS = ["text", "status", "kind", "note", "deleted", "flow", "marks"] as const;
 
@@ -1403,7 +1404,7 @@ export async function takeUploadUrl(projectId: string) {
 /** a new take becomes the chosen one of its section + layer (the latest is usually the keeper) */
 export async function saveTake(
   projectId: string,
-  t: { path: string; section_id: string | null; lane: string; start_at: number; duration: number; sample_rate: number; peaks: number[]; note?: string | null },
+  t: { path: string; section_id: string | null; lane: string; start_at: number; duration: number; sample_rate: number; peaks: number[]; note?: string | null; created_by?: string | null },
 ) {
   if (!t.path.startsWith(`${projectId}/take-`)) throw new Error("Invalid take path");
   // a take without a section (the whole-song flow take) is grouped by its layer alone
@@ -1913,8 +1914,12 @@ export async function applyFlowOptions(projectId: string, items: { id: string; o
 
 /** the writer's settings: recording, timing per kind of device, appearance… */
 export async function getProfile(): Promise<Record<string, unknown>> {
-  const row = check(await db().from("user_settings").select("prefs").eq("id", "me").maybeSingle()) as { prefs: Record<string, unknown> } | null;
-  return row?.prefs ?? {};
+  const key = await settingsKey("me");
+  const row = check(await db().from("user_settings").select("prefs").eq("id", key).maybeSingle()) as { prefs: Record<string, unknown> } | null;
+  if (row || key === "me") return row?.prefs ?? {};
+  // a new account starts from the settings from before accounts (the timing found on each device…)
+  const shared = check(await db().from("user_settings").select("prefs").eq("id", "me").maybeSingle()) as { prefs: Record<string, unknown> } | null;
+  return shared?.prefs ?? {};
 }
 
 /** changes some settings (null removes one) */
@@ -1924,7 +1929,7 @@ export async function updateProfile(patch: Record<string, unknown>) {
     if (v === null) delete prefs[k];
     else prefs[k] = v;
   }
-  check(await db().from("user_settings").upsert({ id: "me", prefs, updated_at: new Date().toISOString() }));
+  check(await db().from("user_settings").upsert({ id: await settingsKey("me"), prefs, updated_at: new Date().toISOString() }));
   return prefs;
 }
 
@@ -1948,7 +1953,7 @@ export interface RemoteNav {
 }
 
 export async function getRemoteNav(): Promise<RemoteNav | null> {
-  const row = check(await db().from("user_settings").select("prefs").eq("id", "nav").maybeSingle()) as { prefs: RemoteNav } | null;
+  const row = check(await db().from("user_settings").select("prefs").eq("id", await settingsKey("nav")).maybeSingle()) as { prefs: RemoteNav } | null;
   return row?.prefs?.path ? row.prefs : null;
 }
 
@@ -1967,19 +1972,19 @@ export interface RemoteHost {
 }
 
 export async function getRemoteHost(): Promise<RemoteHost | null> {
-  const row = check(await db().from("user_settings").select("prefs").eq("id", "host").maybeSingle()) as { prefs: RemoteHost } | null;
+  const row = check(await db().from("user_settings").select("prefs").eq("id", await settingsKey("host")).maybeSingle()) as { prefs: RemoteHost } | null;
   return row?.prefs?.sound ? row.prefs : null;
 }
 
 export async function putRemoteHost(h: Omit<RemoteHost, "at">) {
   const value: RemoteHost = { ...h, at: Date.now() };
-  check(await db().from("user_settings").upsert({ id: "host", prefs: value, updated_at: new Date().toISOString() }));
+  check(await db().from("user_settings").upsert({ id: await settingsKey("host"), prefs: value, updated_at: new Date().toISOString() }));
   return value;
 }
 
 export async function putRemoteNav(nav: Omit<RemoteNav, "at">) {
   const value: RemoteNav = { ...nav, at: Date.now() };
-  check(await db().from("user_settings").upsert({ id: "nav", prefs: value, updated_at: new Date().toISOString() }));
+  check(await db().from("user_settings").upsert({ id: await settingsKey("nav"), prefs: value, updated_at: new Date().toISOString() }));
   return value;
 }
 
@@ -2113,7 +2118,7 @@ export async function deleteNote(projectId: string, noteId: string, authorId: st
     author_id: string | null;
   } | null;
   if (!n || n.project_id !== projectId) throw new NotFound("Note not found");
-  if (authorId && n.author_id && n.author_id !== authorId) throw new Error("Only who wrote a note can delete it.");
+  if (authorId && n.author_id !== authorId) throw new Error("Only who wrote a note (or the song's owner) can delete it.");
   if (n.audio_path) await db().storage.from(BUCKET).remove([n.audio_path]);
   check(await db().from("line_notes").delete().eq("id", noteId));
 }

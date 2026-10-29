@@ -220,6 +220,8 @@ export interface Take {
   pan: number;
   /** how it was made from another take ("on the beat", "follows Lead 1"); null: recorded */
   note: string | null;
+  /** who recorded it (an account; null: from before accounts) */
+  created_by: string | null;
   /** the take used for playback and exports (one per section + layer) */
   chosen: boolean;
   created_at: string;

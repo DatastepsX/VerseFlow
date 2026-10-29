@@ -1,9 +1,11 @@
 import { rejectAlternative, selectAlternative, swapAlternative } from "@/lib/server/repo";
 import { body, handle, treeResponse } from "@/lib/server/http";
+import { accessVia } from "@/lib/server/users";
 
 /** actions: select (optionally with edited text), reject */
 export async function POST(req: Request, ctx: RouteContext<"/api/alternatives/[id]">) {
   return handle(async () => {
+    await accessVia("alternatives", (await ctx.params).id, "edit");
     const { id } = await ctx.params;
     const b = await body<{ action: string; text?: string }>(req);
     if (b.action === "select") return treeResponse(await selectAlternative(id, b.text));

@@ -161,6 +161,16 @@ A rebuilt song is undone by restoring the version saved before it.
 
 **Appearance** (More): Automatic / Light / Dark, saved on the device (`ThemePicker.tsx`, `data-theme` on `<html>`).
 
+**Working together** (More → People): with accounts on (`APP_PASSWORD` set), everyone signs in with their own
+account (`/login`; email + password, `users`, scrypt; a signed `vf_session` cookie, `src/lib/auth.ts`). Making an
+account needs the access code (`APP_PASSWORD`) or a song's invitation link (`/join/[token]`, `invites`, 14 days). The
+first account made with the code becomes the owner of every song from before accounts. Roles per song
+(`project_members`): owner (shares, deletes), editor (writes, records, mixes), listener (listens, leaves notes). Every
+route checks the role first (`access()` in `src/lib/server/users.ts`); someone not on a song gets "not found". Takes
+remember who recorded them (`takes.created_by`), notes carry the account's name. Settings, the main device and the
+remote are per person (`user_settings` rows `me:<id>`, `nav:<id>`, `host:<id>`); the shared voice is changed only by
+people who joined with the code. Without `APP_PASSWORD` there are no accounts and everything is open, as before.
+
 The full editor (`/p/[id]`) is still there under **More → Advanced**.
 
 ## What works today (full editor)
@@ -270,8 +280,8 @@ Next.js 16 (App Router, React 19, Tailwind 4)  — deployed on Vercel
 ```
 
 Database: Supabase project `verseflow` (tables `projects`, `sections`, `lines`, `alternatives`, `line_events`,
-`project_versions`, `bank_lines`, `ai_calls`, `audio_tracks`, `transcripts`; storage bucket `beats`). The DB key is used **server-side only**. Until user accounts exist, access is protected by a
-single shared password (`APP_PASSWORD`).
+`project_versions`, `bank_lines`, `ai_calls`, `audio_tracks`, `transcripts`; storage bucket `beats`). The DB key is used **server-side only**. Access: user accounts and roles per song (see "Working
+together"); `users`, `project_members`, `invites`, `line_notes`, `shares`.
 
 ## Environment variables
 
@@ -280,7 +290,8 @@ single shared password (`APP_PASSWORD`).
 | `SUPABASE_URL` | Supabase project URL |
 | `SUPABASE_KEY` | Supabase API key (server only) |
 | `ANTHROPIC_API_KEY` | enables AI suggestions (optional — the app works without it) |
-| `APP_PASSWORD` | shared access password (if unset, the app is open) |
+| `APP_PASSWORD` | turns accounts on; also the access code for making an account without an invitation (if unset, the app is open) |
+| `SESSION_SECRET` | optional, signs the sign-in cookie (default: `APP_PASSWORD`; changing it signs everyone out) |
 | `ELEVENLABS_API_KEY` | lyrics recognition (Scribe), your cloned voice and the guide vocal (needs the Speech to Text, Text to Speech and Voices permissions) |
 | `TTS_MODEL` | optional, ElevenLabs voice model for the guide vocal (default `eleven_multilingual_v2`) |
 | `AI_MODEL` | Claude model (default `claude-opus-5-5`; e.g. `claude-sonnet-5-5` / `claude-haiku-5-5` cost less) |

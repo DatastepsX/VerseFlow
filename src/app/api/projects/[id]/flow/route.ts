@@ -2,6 +2,7 @@ import { flowSuggest } from "@/lib/server/ai";
 import { applyFlowOptions, buildFlowPart, buildFlowSong, getTree } from "@/lib/server/repo";
 import { storedTranscript, transcribeBeat, transcribeTake } from "@/lib/server/transcribe";
 import { body, handle, treeResponse } from "@/lib/server/http";
+import { access } from "@/lib/server/users";
 
 export const maxDuration = 300;
 
@@ -16,6 +17,7 @@ export const maxDuration = 300;
  */
 export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]/flow">) {
   return handle(async () => {
+    await access((await ctx.params).id, "edit");
     const { id } = await ctx.params;
     const b = await body<{
       action: string;

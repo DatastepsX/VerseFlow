@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { ChevronLeft, Headphones, Mic } from "@/components/icons";
+import { AccountCard } from "@/components/AccountCard";
 import { ElevenAccount } from "@/components/ElevenAccount";
 import { ThemePicker } from "@/components/ThemePicker";
 import { deviceKind, loadProfile, onProfile } from "@/lib/client/profile";
@@ -96,6 +97,8 @@ export default function Settings() {
           <p className="text-xs text-muted">The same in every song, on your iPhone and your Mac.</p>
         </div>
       </header>
+
+      <AccountCard card={card} />
 
       <section className="space-y-2">
         <p className="label">Main device</p>

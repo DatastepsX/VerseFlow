@@ -39,6 +39,7 @@ import { undoHeaders, undoStep } from "@/lib/undo-group";
 import { TapFlow } from "./TapFlow";
 import { FlowSheet, type SheetAudio } from "./FlowSheet";
 import { exampleWords } from "@/lib/flow/example";
+import { People } from "./People";
 import { coupletsOf } from "@/lib/flow/couplets";
 import { analyzeLine, compareLines } from "@/lib/rhyme/analyze";
 import { gridFor, type BeatGrid, type FlowGridModel } from "@/lib/flow/grid";
@@ -101,7 +102,10 @@ export function SongApp({
   autoDetect = false,
   initialView,
   recordOn,
+  role = "owner",
 }: {
+  /** the signed-in person's role on the song */
+  role?: "owner" | "editor" | "viewer";
   initialTree: ProjectTree;
   autoDetect?: boolean;
   initialView?: View;
@@ -1464,6 +1468,11 @@ export function SongApp({
       )}
 
       <main className="flex-1 px-4 pb-32 pt-4">
+        {role === "viewer" && (
+          <p className="mb-3 rounded-2xl bg-panel-2 px-4 py-2.5 text-[13px] text-muted">
+            You can listen and leave notes on this song — ask its owner (More → People) to make you an editor to write and record.
+          </p>
+        )}
         {/* ----- FLOW ----- */}
         {view === "flow" && !tree.audio && (
           <BeatUpload
@@ -2093,6 +2102,7 @@ export function SongApp({
         {view === "more" && (
           <MoreView
             tree={tree}
+            role={role}
             voice={voice ?? null}
             onVoice={() => setVoiceSheet(true)}
             onRename={(title) => void call(`/api/projects/${pid}`, { title }, "PATCH")}
@@ -2757,7 +2767,9 @@ function MoreView({
   onLanguage,
   onDelete,
   vocals,
+  role,
 }: {
+  role: "owner" | "editor" | "viewer";
   vocals: { split: boolean; off: "all" | string[]; set: (off: "all" | string[]) => void; separate: () => void; busy: boolean };
   tree: ProjectTree;
   voice: VoiceInfo | null;
@@ -2791,6 +2803,7 @@ function MoreView({
           ))}
         </div>
       </div>
+      <People pid={pid} title={tree.project.title} role={role} />
       {tree.audio && (
         <div className="space-y-2">
           <p className="label">The song&apos;s vocals</p>
@@ -2912,10 +2925,12 @@ function MoreView({
           <ChevronRight className="h-4 w-4 text-muted" />
         </Link>
       </div>
-      <button className={`${row} text-bad`} onClick={onDelete}>
-        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-panel-2 text-bad"><Trash className="h-[18px] w-[18px]" /></span>
-        <span className="flex-1">Delete this song</span>
-      </button>
+      {role === "owner" && (
+        <button className={`${row} text-bad`} onClick={onDelete}>
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-panel-2 text-bad"><Trash className="h-[18px] w-[18px]" /></span>
+          <span className="flex-1">Delete this song</span>
+        </button>
+      )}
     </div>
   );
 }

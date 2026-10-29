@@ -4,11 +4,13 @@ import { rhymePartners } from "@/lib/scheme";
 import { db } from "@/lib/server/db";
 import { body, handle, pick, treeResponse } from "@/lib/server/http";
 import type { LineKind, LineStatus, Section } from "@/lib/types";
+import { accessVia } from "@/lib/server/users";
 
 export const maxDuration = 300;
 
 export async function PATCH(req: Request, ctx: RouteContext<"/api/sections/[id]">) {
   return handle(async () => {
+    await accessVia("sections", (await ctx.params).id, "edit");
     const b = await body<Record<string, unknown>>(req);
     const patch = pick<Section>(b, ["name", "group_size", "story_beat", "intensity", "rhyme_scheme", "notes", "audio_start", "bars_per_line", "pattern"]);
     if (Array.isArray(b.artists)) patch.artists = b.artists.filter((x): x is string => typeof x === "string").slice(0, 12);
@@ -18,12 +20,16 @@ export async function PATCH(req: Request, ctx: RouteContext<"/api/sections/[id]"
 }
 
 export async function DELETE(_req: Request, ctx: RouteContext<"/api/sections/[id]">) {
-  return handle(async () => treeResponse(await deleteSection((await ctx.params).id)));
+  return handle(async () => {
+    await accessVia("sections", (await ctx.params).id, "edit");
+    return treeResponse(await deleteSection((await ctx.params).id));
+  });
 }
 
 /** Section actions: addLine, move */
 export async function POST(req: Request, ctx: RouteContext<"/api/sections/[id]">) {
   return handle(async () => {
+    await accessVia("sections", (await ctx.params).id, "edit");
     const { id } = await ctx.params;
     const b = await body<{
       action: string;

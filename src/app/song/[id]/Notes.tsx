@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Mic, Pause, Play, Trash } from "@/components/icons";
+import { useAccount } from "@/lib/client/account";
 import { usePref } from "@/lib/client/usePref";
 import type { Line, LineNote, ProjectTree } from "@/lib/types";
 
@@ -41,7 +42,11 @@ export function NotesBadge({ count, onClick, always }: { count: number; onClick:
 export function NotesSheet({ tree, line, setTree, onClose }: { tree: ProjectTree; line: Line; setTree: (t: ProjectTree) => void; onClose: () => void }) {
   const pid = tree.project.id;
   const notes = notesOf(tree, line.id);
-  const [name, setName] = usePref("vf.me.name", "");
+  const [prefName, setName] = usePref("vf.me.name", "");
+  const account = useAccount();
+  // signed in: the account's name (the server takes it from the account anyway)
+  const name = account?.user?.name ?? prefName;
+  const mine = (n: LineNote) => !account?.user || !n.author_id || n.author_id === account.user.id;
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -111,9 +116,11 @@ export function NotesSheet({ tree, line, setTree, onClose }: { tree: ProjectTree
               <div className="flex items-center gap-2 text-xs">
                 <span className="font-semibold">{n.author_name || "Someone"}</span>
                 <span className="text-muted">{ago(n.created_at)}</span>
-                <button className="ml-auto text-muted" onClick={() => void remove(n)} aria-label="Delete the note">
-                  <Trash className="h-3.5 w-3.5" />
-                </button>
+                {mine(n) && (
+                  <button className="ml-auto text-muted" onClick={() => void remove(n)} aria-label="Delete the note">
+                    <Trash className="h-3.5 w-3.5" />
+                  </button>
+                )}
               </div>
               {n.audio_path && <VoicePlayer pid={pid} noteId={n.id} seconds={n.audio_seconds} />}
               {n.text && <p className="mt-1 whitespace-pre-wrap text-sm">{n.text}</p>}

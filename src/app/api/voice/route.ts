@@ -1,7 +1,13 @@
 import { body, handle } from "@/lib/server/http";
+import { currentUserId, Forbidden, isHouse } from "@/lib/server/users";
 import { cloneVoice, deleteVoice, elevenAccount, getVoice, voiceUploadUrl } from "@/lib/server/voice";
 
 export const maxDuration = 120;
+
+/** the shared voice is set up by the people who joined with the access code, not by someone invited to one song */
+async function houseOnly() {
+  if (!(await isHouse(await currentUserId()))) throw new Forbidden("Only the studio's own people can change the shared voice.");
+}
 
 const pub = (v: Awaited<ReturnType<typeof getVoice>>) => (v ? { name: v.name, created_at: v.created_at } : null);
 
@@ -19,6 +25,7 @@ export async function GET(req: Request) {
  */
 export async function POST(req: Request) {
   return handle(async () => {
+    await houseOnly();
     const b = await body<{ action: string; paths?: string[]; name?: string; consent?: boolean; ext?: string }>(req);
     if (b.action === "uploadUrl") return Response.json(await voiceUploadUrl(b.ext?.toLowerCase()));
     if (b.action === "clone") {
@@ -33,6 +40,7 @@ export async function POST(req: Request) {
 
 export async function DELETE() {
   return handle(async () => {
+    await houseOnly();
     await deleteVoice();
     return Response.json({ voice: null });
   });
