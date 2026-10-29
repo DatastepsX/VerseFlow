@@ -1,11 +1,11 @@
 import { cookies } from "next/headers";
 import { authEnabled, SESSION_COOKIE, SESSION_DAYS, signSession } from "@/lib/auth";
 import { body, handle } from "@/lib/server/http";
-import { acceptInvite, currentUser, currentUserId, isHouse, renameUser, signIn, signUp, Unauthorized } from "@/lib/server/users";
+import { acceptInvite, currentUser, currentUserId, isHouse, noAccountsYet, renameUser, signIn, signUp, Unauthorized } from "@/lib/server/users";
 
 /**
  * Accounts:
- *  GET → {user, accounts}                                     who is signed in (accounts: whether they are on)
+ *  GET → {user, accounts, house, firstRun}                    who is signed in (firstRun: no account exists yet)
  *  POST {action: "signin", email, password}
  *  POST {action: "signup", name, email, password, code? | invite?}   code: the access code; invite: a song's link
  *  POST {action: "join", invite}                             signed in: the invited song joined → {projectId}
@@ -25,7 +25,8 @@ async function startSession(userId: string) {
 export async function GET() {
   return handle(async () => {
     const user = await currentUser();
-    return Response.json({ accounts: authEnabled(), user, house: user ? await isHouse(user.id) : !authEnabled() }, { headers: { "cache-control": "no-store" } });
+    const firstRun = authEnabled() && !user && (await noAccountsYet());
+    return Response.json({ accounts: authEnabled(), user, house: user ? await isHouse(user.id) : !authEnabled(), firstRun }, { headers: { "cache-control": "no-store" } });
   });
 }
 

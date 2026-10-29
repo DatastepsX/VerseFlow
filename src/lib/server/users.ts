@@ -114,6 +114,11 @@ export async function signIn(emailIn: string, password: string) {
   return { id: row.id, email: row.email, name: row.name } as User;
 }
 
+/** nobody has made an account yet (the first one, made with the access code, gets the songs from before) */
+export async function noAccountsYet() {
+  return !(check(await db().from("users").select("id").limit(1)) as unknown[]).length;
+}
+
 export async function renameUser(id: string, name: string) {
   const n = name.trim().slice(0, 60);
   if (!n) throw new Error("Your name, please.");

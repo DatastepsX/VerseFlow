@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { loadAccount } from "@/lib/client/account";
 
 /**
@@ -15,6 +15,23 @@ export function AuthForm({ invite, next, startWith = "signin" }: { invite?: stri
   const [code, setCode] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** no account exists yet: the first one is made with the access code (the old app password) */
+  const [firstRun, setFirstRun] = useState(false);
+  useEffect(() => {
+    if (invite) return;
+    let gone = false;
+    void fetch("/api/auth", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((a: { firstRun?: boolean }) => {
+        if (gone || !a.firstRun) return;
+        setFirstRun(true);
+        setMode("signup");
+      })
+      .catch(() => {});
+    return () => {
+      gone = true;
+    };
+  }, [invite]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -88,7 +105,17 @@ export function AuthForm({ invite, next, startWith = "signin" }: { invite?: stri
           <p className="text-xs text-muted">The access code is the studio&apos;s password. Invited to a song? Open the invitation link instead — no code needed.</p>
         </>
       )}
-      {error && <p className="text-sm text-bad">{error}</p>}
+      {firstRun && signup && (
+        <p className="rounded-xl bg-accent-soft px-3 py-2 text-xs text-accent">
+          Accounts are new: make yours first. The access code is the app&apos;s old password — the first account gets all the songs.
+        </p>
+      )}
+      {error && (
+        <p className="text-sm text-bad">
+          {error}
+          {mode === "signin" && !invite && " No account yet? Choose Create account — the access code is the app's old password."}
+        </p>
+      )}
       <button className="btn-primary w-full justify-center" disabled={busy || !email || !password || (signup && (!name.trim() || (!invite && !code)))}>
         {busy ? "One moment…" : signup ? (invite ? "Create account and join" : "Create account") : invite ? "Sign in and join" : "Sign in"}
       </button>
