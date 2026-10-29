@@ -12,6 +12,7 @@ import type {
   LineEvent,
   LineFlow,
   LineKind,
+  LineNote,
   LineStatus,
   Project,
   ProjectSettings,
@@ -196,7 +197,7 @@ export async function createProject(input: {
 }
 
 export async function getTree(projectId: string): Promise<ProjectTree> {
-  const [p, s, l, a, b, u, au, tk, fl] = await Promise.all([
+  const [p, s, l, a, b, u, au, tk, fl, nt] = await Promise.all([
     db().from("projects").select("*").eq("id", projectId).maybeSingle(),
     db().from("sections").select("*").eq("project_id", projectId).order("position"),
     db().from("lines").select(LINE_COLS).eq("project_id", projectId).eq("deleted", false).order("position"),
@@ -221,6 +222,7 @@ export async function getTree(projectId: string): Promise<ProjectTree> {
       .maybeSingle(),
     db().from("takes").select(TAKE_COLS).eq("project_id", projectId).order("created_at"),
     db().from("flows").select("id, name, pattern, created_at").eq("project_id", projectId).order("created_at"),
+    db().from("line_notes").select("id, line_id, author_id, author_name, text, audio_path, audio_seconds, created_at").eq("project_id", projectId).order("created_at"),
   ]);
   const project = check(p) as Project | null;
   if (!project) throw new NotFound("Project not found");
@@ -250,6 +252,7 @@ export async function getTree(projectId: string): Promise<ProjectTree> {
     audio: check(au) as AudioTrack | null,
     takes: check(tk) as Take[],
     flows: check(fl) as SongFlow[],
+    notes: check(nt) as LineNote[],
     history: await historyOf(projectId),
   };
 }
@@ -2060,4 +2063,57 @@ export async function publicShare(token: string) {
     }),
   );
   return { title: s.title, note: s.note, expires_at: s.expires_at, files: files.filter((f): f is typeof f & { url: string } => !!f.url) };
+}
+
+// ---------- notes on lines: a comment, a voice message ----------
+
+/** where a voice message is uploaded (the browser PUTs it) */
+export async function noteUploadUrl(projectId: string, kind: "webm" | "mp4" | "wav") {
+  const path = `${projectId}/note-${crypto.randomUUID()}.${kind}`;
+  const { data, error } = await db().storage.from(BUCKET).createSignedUploadUrl(path);
+  if (error || !data) throw new Error(error?.message ?? "Could not create upload URL");
+  return { path, signedUrl: data.signedUrl };
+}
+
+/** a note on a line of this song */
+export async function addNote(projectId: string, n: { lineId: string; authorId: string | null; authorName: string; text: string; audioPath: string | null; audioSeconds: number | null }) {
+  const line = check(await db().from("lines").select("project_id").eq("id", n.lineId).maybeSingle()) as { project_id: string } | null;
+  if (!line || line.project_id !== projectId) throw new NotFound("Line not found");
+  if (n.audioPath && !n.audioPath.startsWith(`${projectId}/note-`)) throw new Error("Invalid voice message");
+  if (!n.text.trim() && !n.audioPath) throw new Error("Write something or record a voice message.");
+  check(
+    await db()
+      .from("line_notes")
+      .insert({
+        project_id: projectId,
+        line_id: n.lineId,
+        author_id: n.authorId,
+        author_name: n.authorName.slice(0, 60),
+        text: n.text.trim().slice(0, 2000),
+        audio_path: n.audioPath,
+        audio_seconds: n.audioSeconds,
+      }),
+  );
+}
+
+/** a voice message to play (its address, valid an hour) */
+export async function noteAudioUrl(projectId: string, noteId: string) {
+  const n = check(await db().from("line_notes").select("project_id, audio_path").eq("id", noteId).maybeSingle()) as { project_id: string; audio_path: string | null } | null;
+  if (!n || n.project_id !== projectId || !n.audio_path) throw new NotFound("Voice message not found");
+  const { data, error } = await db().storage.from(BUCKET).createSignedUrl(n.audio_path, 3600);
+  if (error || !data) throw new Error(error?.message ?? "Could not load the voice message");
+  return data.signedUrl;
+}
+
+/** a note removed (with its voice message) — `authorId`: only its author's (null: anyone in the song) */
+export async function deleteNote(projectId: string, noteId: string, authorId: string | null) {
+  const n = check(await db().from("line_notes").select("project_id, audio_path, author_id").eq("id", noteId).maybeSingle()) as {
+    project_id: string;
+    audio_path: string | null;
+    author_id: string | null;
+  } | null;
+  if (!n || n.project_id !== projectId) throw new NotFound("Note not found");
+  if (authorId && n.author_id && n.author_id !== authorId) throw new Error("Only who wrote a note can delete it.");
+  if (n.audio_path) await db().storage.from(BUCKET).remove([n.audio_path]);
+  check(await db().from("line_notes").delete().eq("id", noteId));
 }

@@ -181,8 +181,23 @@ export interface ProjectTree {
   takes: Take[];
   /** the song's flows (patterns parts follow) */
   flows: SongFlow[];
+  /** notes on lines: comments and voice messages */
+  notes: LineNote[];
   /** undo / redo: how many steps each way, and what the next one is */
   history?: { undo: number; redo: number; undoLabel: string | null; redoLabel: string | null };
+}
+
+/** a note on a line — a comment, a voice message, or both — from someone working on the song */
+export interface LineNote {
+  id: string;
+  line_id: string;
+  author_id: string | null;
+  author_name: string;
+  text: string;
+  /** a voice message (its file; played through /api/projects/[id]/notes?audio=) */
+  audio_path: string | null;
+  audio_seconds: number | null;
+  created_at: string;
 }
 
 /** a recorded vocal take of a section on one layer (Lead, Double, Ad-libs…) */

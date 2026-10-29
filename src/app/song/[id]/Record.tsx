@@ -13,6 +13,7 @@ import { followTo } from "@/components/writer/follow";
 import { fmtTime } from "@/lib/audio/song-map";
 import { louderGain, pct, TAKE_MAX } from "@/lib/studio/mix";
 import { leadOf, partJobs, syncTakes, type SyncJob, type SyncMode } from "@/lib/studio/sync";
+import { NotesBadge, NotesSheet, notesOf } from "./Notes";
 import { VolumeSlider } from "@/components/VolumeSlider";
 import { undoHeaders, undoStep } from "@/lib/undo-group";
 import type { Timeline } from "@/lib/audio/timeline";
@@ -130,6 +131,8 @@ function RecordScreen({ r, tree, setTree, rangeOf, bar, timeline, onBusy, host, 
   };
   /** the take being cut */
   const [cutting, setCutting] = useState<string | null>(null);
+  /** the line whose notes are open */
+  const [notesFor, setNotesFor] = useState<string | null>(null);
   /** in time: one take, or the whole part */
   const [timing, setTiming] = useState<{ takeId: string } | { part: string } | null>(null);
   /** forced alignment: the take + its lines' text → every syllable's time (1 call); the lines' flow follows the take */
@@ -302,11 +305,12 @@ function RecordScreen({ r, tree, setTree, rangeOf, bar, timeline, onBusy, host, 
               const from = startOf(l);
               const next = lines[k + 1] ? startOf(lines[k + 1]) : (range?.end ?? from + bar);
               return (
-                <p
+                <div
                   key={l.id}
                   id={`rec-${l.id}`}
-                  className={`-mx-2 rounded-xl px-2 py-0.5 transition-colors ${isLive ? "bg-accent-soft font-semibold text-fg" : liveAt >= 0 && k < liveAt ? "text-muted" : "text-fg/90"}`}
+                  className={`-mx-2 flex items-start gap-1 rounded-xl px-2 py-0.5 transition-colors ${isLive ? "bg-accent-soft font-semibold text-fg" : liveAt >= 0 && k < liveAt ? "text-muted" : "text-fg/90"}`}
                 >
+                  <div className="min-w-0 flex-1">
                   {isLive && r.clock && Number.isFinite(from) ? (
                     <Karaoke line={l} lang={tree.project.language} from={from} until={Math.min(Number.isFinite(next) ? next : from + bar, from + 2 * bar)} clock={r.clock} />
                   ) : untyped(marksFor(l)).length ? (
@@ -314,7 +318,10 @@ function RecordScreen({ r, tree, setTree, rangeOf, bar, timeline, onBusy, host, 
                   ) : (
                     <FlowText text={l.text.trim()} lang={tree.project.language} flow={l.flow} beat={bar / 4} marks={marksFor(l)} />
                   )}
-                </p>
+                  </div>
+                  {/* notes on the line: how to sing or record it (hidden while recording) */}
+                  {!recording && <NotesBadge count={notesOf(tree, l.id).length} onClick={() => setNotesFor(l.id)} always />}
+                </div>
               );
             })}
           </div>
@@ -568,6 +575,11 @@ function RecordScreen({ r, tree, setTree, rangeOf, bar, timeline, onBusy, host, 
         />
       )}
       {micSheet && <MicSheet r={r} onClose={() => setMicSheet(false)} />}
+      {notesFor &&
+        (() => {
+          const line = tree.sections.flatMap((x) => x.lines).find((x) => x.id === notesFor);
+          return line ? <NotesSheet tree={tree} line={line} setTree={setTree} onClose={() => setNotesFor(null)} /> : null;
+        })()}
       {timing && (
         <SyncSheet
           tree={tree}

@@ -25,6 +25,7 @@ import { download, fullText } from "@/components/writer/util";
 import { VoiceSheet, type VoiceInfo } from "./VoiceSheet";
 import { RecordView } from "./Record";
 import { Mixer, type ExportOptions } from "./Mixer";
+import { NotesSheet, notesOf } from "./Notes";
 import { encodeMp3, exportStems as exportStemsZip, logicNote, renderAll, safeName, type Stem } from "@/lib/studio/export";
 import { encodeWav } from "@/lib/studio/wav";
 import { MarkedText, MarksEditor } from "@/components/Marks";
@@ -858,6 +859,8 @@ export function SongApp({
   // ---------- the parts bar: where you are, tap to jump ----------
   /** a part's name (Verse 1, Hook, Rap…) */
   const [partMenu, setPartMenu] = useState<string | null>(null);
+  /** the line whose notes are open */
+  const [notesFor, setNotesFor] = useState<string | null>(null);
   /** the part merges into the one before it: its lines move there (one undo step) */
   const mergePart = (id: string) => void call(`/api/sections/${id}`, { action: "mergePrevious" });
   /** the part made longer by some bars of its beat: empty lines to write (one undo step) */
@@ -1958,6 +1961,8 @@ export function SongApp({
                             onToggle={() => setOpenLine(openLine === l.id ? null : l.id)}
                             onFlowFromHere={beatGrid ? () => openFlowSheet({ sectionId: s.id, fromLineId: l.id, flowId: l.flow?.flowId ?? null }) : undefined}
                             onSaveMarks={(m) => void lineAction(l.id, () => call(`/api/lines/${l.id}`, { marks: { items: m }, action: "marks" }, "PATCH"), "Marks")}
+                            notes={notesOf(tree, l.id).length}
+                            onNotes={() => setNotesFor(l.id)}
                             onNewPart={
                               s.lines.findIndex((x) => x.id === l.id) > 0
                                 ? () => {
@@ -2150,6 +2155,11 @@ export function SongApp({
             />
           );
         })()}
+      {notesFor &&
+        (() => {
+          const line = tree.sections.flatMap((x) => x.lines).find((x) => x.id === notesFor);
+          return line ? <NotesSheet tree={tree} line={line} setTree={setTree} onClose={() => setNotesFor(null)} /> : null;
+        })()}
       {voiceSheet && (
         <VoiceSheet
           engine={engine}
@@ -2236,6 +2246,9 @@ function LineCard(props: {
   onNewPart?: () => void;
   /** notes for recording on the words */
   onSaveMarks: (marks: Mark[]) => void;
+  /** notes on the line (comments, voice messages): how many, and open them */
+  notes: number;
+  onNotes: () => void;
   onToggle: () => void;
 }) {
   const { line: l, lang } = props;
@@ -2311,6 +2324,7 @@ function LineCard(props: {
         className={`flex w-full items-start gap-2 rounded-2xl px-3 py-1 text-left transition-colors ${props.live ? "bg-accent-soft" : "active:bg-panel-2"}`}
       >
         <span className="min-w-0 flex-1">{lineText}</span>
+        {props.notes > 0 && <span className="mt-1.5 shrink-0 rounded-full bg-accent-soft px-1.5 py-0.5 text-[11px] font-semibold text-accent">💬 {props.notes}</span>}
         {props.busy ? (
           <span className="mt-2 inline-block h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-accent border-r-transparent" />
         ) : (
@@ -2397,6 +2411,13 @@ function LineCard(props: {
               title="Play this bar"
             >
               <Play className="h-3 w-3" /> Play
+            </button>
+            <button
+              className={`flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1 font-semibold ${props.notes ? "bg-accent-soft text-accent" : "bg-panel-2 text-fg/80"}`}
+              onClick={props.onNotes}
+              title="Comments and voice messages on this line, for everyone on the song"
+            >
+              💬 {props.notes ? `Notes · ${props.notes}` : "Note"}
             </button>
             {props.onFlowFromHere && (
               <button

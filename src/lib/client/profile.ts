@@ -7,7 +7,7 @@
  */
 
 /** the settings kept with the profile (others — the microphone, the part you were on — stay on the device) */
-const SYNCED = /^(vf\.studio\.(main|countin|metronome|headphones|latency(\.vp)?\.[A-Za-z]+)|vf\.rec\.(size|speed|numbers|approvedOnly)|verseflow\.(theme|flowMode))$/;
+const SYNCED = /^(vf\.studio\.(main|countin|metronome|headphones|latency(\.vp)?\.[A-Za-z]+)|vf\.rec\.(size|speed|numbers|approvedOnly)|verseflow\.(theme|flowMode)|vf\.me\.name)$/;
 
 export const isProfileKey = (key: string) => SYNCED.test(key);
 
