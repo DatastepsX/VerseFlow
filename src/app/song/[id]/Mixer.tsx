@@ -44,12 +44,14 @@ export interface MixerProps {
   /** a take's volume / pan heard at once while it plays */
   liveTake: (id: string, mix: { gain?: number; pan?: number }) => void;
   /** the stems as WAVs in a ZIP (null: the beat isn't loaded yet) */
-  onExport: ((o: ExportOptions, progress: (text: string) => void) => Promise<void>) | null;
+  onExport: ((o: ExportOptions, progress: (text: string) => void) => Promise<string | void>) | null;
 }
 
 export interface ExportOptions {
-  /** the stems as WAVs in a ZIP, or the mix as one MP3 */
-  kind: "zip" | "mp3";
+  /** the stems as WAVs in a ZIP, the mix as one MP3, or both online behind a link (no account needed) */
+  kind: "zip" | "mp3" | "share";
+  /** a share link: how long it works */
+  days: number;
   /** with the mixer's volume, pan and effects (else dry, as recorded) */
   mixed: boolean;
   /** your recorded flow as a stem too */
@@ -143,8 +145,11 @@ function Transport(p: MixerProps) {
 
 /** stems for Logic: what goes in, and the ZIP */
 function ExportSheet(p: MixerProps & { onExport: NonNullable<MixerProps["onExport"]>; onClose: () => void }) {
-  const [o, setO] = useState<ExportOptions>({ kind: "zip", mixed: false, flow: false, mixdown: true });
+  const [o, setO] = useState<ExportOptions>({ kind: "zip", mixed: false, flow: false, mixdown: true, days: 30 });
   const mp3 = o.kind === "mp3";
+  const share = o.kind === "share";
+  /** the link just made */
+  const [link, setLink] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const seg = (on: boolean) => `flex-1 rounded-full py-2 text-sm font-semibold ${on ? "bg-panel text-fg shadow-sm" : "text-muted"}`;
@@ -162,13 +167,18 @@ function ExportSheet(p: MixerProps & { onExport: NonNullable<MixerProps["onExpor
             Stems · WAV · ZIP
           </button>
           <button className={seg(mp3)} onClick={() => setO({ ...o, kind: "mp3" })}>
-            The mix · MP3
+            Mix · MP3
+          </button>
+          <button className={seg(share)} onClick={() => setO({ ...o, kind: "share" })}>
+            Share link
           </button>
         </div>
         <p className="text-xs text-muted">
           {mp3
             ? "The song as you hear it here — every channel's volume, pan and effect — in one MP3 (256 kbps, stereo): to listen to, or to send."
-            : "Every track as its own WAV (24-bit), all from 0:00 to the end — they line up when you drop them at bar 1 in Logic. In one ZIP, with a note on the tempo."}
+            : share
+              ? "The stems (WAV) and the mix (MP3) online, behind a link: whoever has it can download them — single files or all as a ZIP — without an account. You can turn it off any time."
+              : "Every track as its own WAV (24-bit), all from 0:00 to the end — they line up when you drop them at bar 1 in Logic. In one ZIP, with a note on the tempo."}
         </p>
         {!mp3 && (
         <div className="space-y-1.5">
@@ -198,7 +208,19 @@ function ExportSheet(p: MixerProps & { onExport: NonNullable<MixerProps["onExpor
               <input type="checkbox" className="h-5 w-5 accent-[var(--accent)]" checked={o.flow} onChange={(e) => setO({ ...o, flow: e.target.checked })} />
             </label>
           )}
-          {!mp3 && (
+          {share && (
+            <div className="flex items-center justify-between gap-3">
+              Link works for
+              <div className="flex rounded-full bg-panel-2 p-1">
+                {[7, 30].map((d) => (
+                  <button key={d} className={`rounded-full px-3 py-1 text-xs font-semibold ${o.days === d ? "bg-panel text-fg shadow-sm" : "text-muted"}`} onClick={() => setO({ ...o, days: d })}>
+                    {d} days
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          {o.kind === "zip" && (
             <label className="flex items-center justify-between gap-3">
               The whole mix as one file
               <input type="checkbox" className="h-5 w-5 accent-[var(--accent)]" checked={o.mixdown} onChange={(e) => setO({ ...o, mixdown: e.target.checked })} />
@@ -211,6 +233,9 @@ function ExportSheet(p: MixerProps & { onExport: NonNullable<MixerProps["onExpor
           </p>
         )}
         {err && <p className="rounded-xl bg-bad-soft px-3 py-2 text-sm text-bad">{err}</p>}
+        {link && <ShareLink link={link} title={p.tree.project.title} />}
+        {share && <Shares pid={p.tree.project.id} fresh={link} />}
+        {!link && (
         <button
           className="btn-primary w-full justify-center rounded-2xl py-3 disabled:opacity-60"
           disabled={!!busy}
@@ -218,8 +243,9 @@ function ExportSheet(p: MixerProps & { onExport: NonNullable<MixerProps["onExpor
             setErr(null);
             setBusy("Preparing…");
             try {
-              await p.onExport(o, setBusy);
-              p.onClose();
+              const made = await p.onExport(o, setBusy);
+              if (typeof made === "string") setLink(made);
+              else p.onClose();
             } catch (e) {
               setErr(e instanceof Error ? e.message : "The export failed.");
             } finally {
@@ -227,8 +253,9 @@ function ExportSheet(p: MixerProps & { onExport: NonNullable<MixerProps["onExpor
             }
           }}
         >
-          <Download className="h-4 w-4" /> {busy ?? (mp3 ? "Export the mix · MP3" : `Export ${files} WAV${files === 1 ? "" : "s"} · ZIP`)}
+          <Download className="h-4 w-4" /> {busy ?? (mp3 ? "Export the mix · MP3" : share ? `Make a link · ${files - (o.mixdown ? 1 : 0)} WAV${files === 1 ? "" : "s"} + the mix` : `Export ${files} WAV${files === 1 ? "" : "s"} · ZIP`)}
         </button>
+        )}
       </div>
     </div>
   );
@@ -517,6 +544,72 @@ function TakeSheet(p: MixerProps & { lane: string; sectionId: string | null; onC
           Done
         </button>
       </div>
+    </div>
+  );
+}
+
+/** the link just made: copy it, or send it (the phone's share sheet) */
+function ShareLink({ link, title }: { link: string; title: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="space-y-2 rounded-2xl bg-ok-soft px-4 py-3">
+      <p className="text-sm font-semibold text-ok">The link is ready</p>
+      <p className="break-all rounded-xl bg-panel px-3 py-2 font-mono text-xs">{link}</p>
+      <div className="flex gap-2">
+        <button
+          className="btn flex-1 justify-center rounded-xl border-0 bg-panel py-2 text-sm"
+          onClick={() => void navigator.clipboard.writeText(link).then(() => setCopied(true), () => {})}
+        >
+          {copied ? "Copied" : "Copy"}
+        </button>
+        {typeof navigator !== "undefined" && "share" in navigator && (
+          <button className="btn-primary flex-1 justify-center rounded-xl py-2 text-sm" onClick={() => void navigator.share({ title, text: `${title} — the stems and the mix`, url: link }).catch(() => {})}>
+            Share…
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** the song's links that still work: until when, turn one off */
+function Shares({ pid, fresh }: { pid: string; fresh: string | null }) {
+  const [list, setList] = useState<{ token: string; files: number; bytes: number; expires_at: string }[] | null>(null);
+  const [n, setN] = useState(0);
+  useEffect(() => {
+    let gone = false;
+    void fetch(`/api/projects/${pid}/shares`)
+      .then((r) => r.json())
+      .then((r: { shares?: { token: string; files: number; bytes: number; expires_at: string }[] }) => !gone && setList(r.shares ?? []))
+      .catch(() => {});
+    return () => {
+      gone = true;
+    };
+  }, [pid, fresh, n]);
+  if (!list?.length) return null;
+  return (
+    <div className="space-y-1.5">
+      <p className="label">Links that work now</p>
+      {list.map((s) => (
+        <div key={s.token} className="flex items-center gap-2 rounded-xl bg-panel-2/70 px-3 py-2 text-xs">
+          <a className="min-w-0 flex-1 truncate font-mono text-accent" href={`/s/${s.token}`} target="_blank" rel="noreferrer">
+            /s/{s.token.slice(0, 10)}…
+          </a>
+          <span className="shrink-0 text-muted">
+            {s.files} files · until {new Date(s.expires_at).toLocaleDateString(undefined, { day: "numeric", month: "short" })}
+          </span>
+          <button
+            className="shrink-0 rounded-full bg-panel px-2.5 py-1 font-semibold text-bad"
+            onClick={async () => {
+              if (!window.confirm("Turn this link off? Its files are deleted; whoever has it can't download any more.")) return;
+              await fetch(`/api/projects/${pid}/shares?token=${s.token}`, { method: "DELETE" });
+              setN((x) => x + 1);
+            }}
+          >
+            Turn off
+          </button>
+        </div>
+      ))}
     </div>
   );
 }

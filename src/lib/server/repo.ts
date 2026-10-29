@@ -1979,3 +1979,85 @@ export async function putRemoteNav(nav: Omit<RemoteNav, "at">) {
   check(await db().from("user_settings").upsert({ id: "nav", prefs: value, updated_at: new Date().toISOString() }));
   return value;
 }
+
+// ---------- share links: the stems and the mix, to download without an account ----------
+
+export interface ShareFile {
+  name: string;
+  path: string;
+  bytes: number;
+}
+
+export interface ShareRow {
+  token: string;
+  project_id: string;
+  title: string;
+  files: ShareFile[];
+  note: string;
+  created_at: string;
+  expires_at: string;
+  ready: boolean;
+  revoked: boolean;
+}
+
+/** a new link (its files come next): unguessable, valid `days` days */
+export async function createShare(projectId: string, title: string, note: string, days: number) {
+  const token = (crypto.randomUUID() + crypto.randomUUID()).replace(/-/g, "").slice(0, 40);
+  const expires = new Date(Date.now() + Math.max(1, Math.min(30, days)) * 86400_000).toISOString();
+  check(await db().from("shares").insert({ token, project_id: projectId, title: title.slice(0, 120), note: note.slice(0, 2000), expires_at: expires }));
+  return token;
+}
+
+async function shareOf(token: string) {
+  if (!/^[a-f0-9]{40}$/.test(token)) return null;
+  return check(await db().from("shares").select("*").eq("token", token).maybeSingle()) as ShareRow | null;
+}
+
+/** where one of the link's files is uploaded (the browser PUTs it there) */
+export async function shareUploadUrl(projectId: string, token: string, index: number, kind: "wav" | "mp3") {
+  const s = await shareOf(token);
+  if (!s || s.project_id !== projectId || s.ready || s.revoked) throw new NotFound("Share link not found");
+  const path = `${projectId}/share-${token}/${String(Math.max(0, Math.min(99, index))).padStart(2, "0")}.${kind}`;
+  const { data, error } = await db().storage.from(BUCKET).createSignedUploadUrl(path, { upsert: true });
+  if (error || !data) throw new Error(error?.message ?? "Could not create upload URL");
+  return { path, signedUrl: data.signedUrl };
+}
+
+/** the files are up: the link works */
+export async function finishShare(projectId: string, token: string, files: ShareFile[]) {
+  const s = await shareOf(token);
+  if (!s || s.project_id !== projectId || s.revoked) throw new NotFound("Share link not found");
+  const own = files.filter((f) => f.path.startsWith(`${projectId}/share-${token}/`)).slice(0, 40);
+  if (!own.length) throw new Error("No files to share");
+  check(await db().from("shares").update({ files: own.map((f) => ({ name: f.name.slice(0, 120), path: f.path, bytes: Math.max(0, Math.round(f.bytes)) })), ready: true }).eq("token", token));
+}
+
+/** the song's links that still work */
+export async function listShares(projectId: string) {
+  const rows = check(
+    await db().from("shares").select("token, title, files, created_at, expires_at").eq("project_id", projectId).eq("ready", true).eq("revoked", false).gt("expires_at", new Date().toISOString()).order("created_at", { ascending: false }),
+  ) as Pick<ShareRow, "token" | "title" | "files" | "created_at" | "expires_at">[];
+  return rows.map((r) => ({ token: r.token, title: r.title, files: r.files.length, bytes: r.files.reduce((n, f) => n + f.bytes, 0), created_at: r.created_at, expires_at: r.expires_at }));
+}
+
+/** a link stops working, and its files are deleted */
+export async function revokeShare(projectId: string, token: string) {
+  const s = await shareOf(token);
+  if (!s || s.project_id !== projectId) throw new NotFound("Share link not found");
+  const { data } = await db().storage.from(BUCKET).list(`${projectId}/share-${token}`, { limit: 100 });
+  if (data?.length) await db().storage.from(BUCKET).remove(data.map((f) => `${projectId}/share-${token}/${f.name}`));
+  check(await db().from("shares").update({ revoked: true }).eq("token", token));
+}
+
+/** what someone with the link sees: the files with download addresses (valid 2 hours); null: gone or expired */
+export async function publicShare(token: string) {
+  const s = await shareOf(token);
+  if (!s || !s.ready || s.revoked || new Date(s.expires_at).getTime() < Date.now()) return null;
+  const files = await Promise.all(
+    s.files.map(async (f) => {
+      const { data } = await db().storage.from(BUCKET).createSignedUrl(f.path, 2 * 3600, { download: f.name });
+      return { name: f.name, bytes: f.bytes, url: data?.signedUrl ?? null };
+    }),
+  );
+  return { title: s.title, note: s.note, expires_at: s.expires_at, files: files.filter((f): f is typeof f & { url: string } => !!f.url) };
+}

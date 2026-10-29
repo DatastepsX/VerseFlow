@@ -25,7 +25,8 @@ import { download, fullText } from "@/components/writer/util";
 import { VoiceSheet, type VoiceInfo } from "./VoiceSheet";
 import { RecordView } from "./Record";
 import { Mixer, type ExportOptions } from "./Mixer";
-import { encodeMp3, exportStems as exportStemsZip, renderAll, safeName, type Stem } from "@/lib/studio/export";
+import { encodeMp3, exportStems as exportStemsZip, logicNote, renderAll, safeName, type Stem } from "@/lib/studio/export";
+import { encodeWav } from "@/lib/studio/wav";
 import { MarkedText, MarksEditor } from "@/components/Marks";
 import { marksFor, type Mark } from "@/lib/marks";
 import { NOTATION_KEYS, parseNotation, toNotation, untyped } from "@/lib/flow/notation";
@@ -463,7 +464,8 @@ export function SongApp({
     setPlaying(true);
   };
   // ---------- stems for Logic: each track from 0:00, as WAVs in a ZIP ----------
-  const exportStems = async (o: ExportOptions, progress: (text: string) => void) => {
+  /** the export; a share link: its address */
+  const exportStems = async (o: ExportOptions, progress: (text: string) => void): Promise<string | void> => {
     const e = engine.current;
     const b = beat.current;
     if (!e || !b) throw new Error("The beat is still loading.");
@@ -482,7 +484,7 @@ export function SongApp({
       if (layers.length) stems.push({ name: l, layers, channel: o.mixed ? ch(laneBus(l)) : null, stereo: false });
     }
     // the mix: as heard (the beat a little down, as it plays here)
-    const mix = o.mixdown || o.kind === "mp3"
+    const mix = o.mixdown || o.kind !== "zip"
       ? stems.map((s) => ({ ...s, layers: s.name === "Beat" ? [{ buffer: b, at: 0, gain: 0.8 }] : s.layers, channel: ch(s.name === "Beat" ? "beat" : s.name === "Flow (guide)" ? "flow" : laneBus(s.name)) }))
       : null;
     const download = (blob: Blob, name: string) => {
@@ -493,6 +495,42 @@ export function SongApp({
       a.click();
       setTimeout(() => URL.revokeObjectURL(url), 60_000);
     };
+    if (o.kind === "share") {
+      // the stems (and the mix as an MP3) stored one by one, to download with a link — no account needed
+      const spec = { song: tree.project.title, stems, mix, seconds: b.duration, sampleRate: b.sampleRate, withFx: o.mixed, bpm: tree.audio?.bpm ?? null, barOne: tree.audio?.beat_offset ?? 0 };
+      const rendered = await renderAll({ ...spec, onProgress: (done, total, what) => progress(`Rendering ${what} · ${done + 1}/${total}`) });
+      const api = async <T,>(body: unknown): Promise<T> => {
+        const r = await fetch(`/api/projects/${pid}/shares`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+        const d = (await r.json().catch(() => ({}))) as T & { error?: string };
+        if (!r.ok) throw new Error(d.error ?? "Sharing failed");
+        return d;
+      };
+      const { token } = await api<{ token: string }>({ action: "start", title: tree.project.title, note: logicNote(spec), days: o.days });
+      const files: { name: string; data: Uint8Array; kind: "wav" | "mp3" }[] = [];
+      rendered.stems.forEach((s, i) => {
+        // the storage takes files up to 50 MB: a long stereo stem goes as 16-bit
+        let data = encodeWav(s.channels, b.sampleRate, 24);
+        if (data.length > 48e6) data = encodeWav(s.channels, b.sampleRate, 16);
+        files.push({ name: `${safeName(tree.project.title)} - ${String(i + 1).padStart(2, "0")} ${safeName(s.name)}.wav`, data, kind: "wav" });
+      });
+      if (rendered.mix) {
+        progress("The mix · MP3…");
+        files.push({ name: `${safeName(tree.project.title)} - Mix.mp3`, data: await encodeMp3(rendered.mix, b.sampleRate, 256), kind: "mp3" });
+      }
+      const saved: { name: string; path: string; bytes: number }[] = [];
+      for (const [i, f] of files.entries()) {
+        progress(`Uploading ${i + 1}/${files.length}…`);
+        const up = await api<{ path: string; signedUrl: string }>({ action: "uploadUrl", token, index: i, kind: f.kind });
+        const fd = new FormData();
+        fd.append("cacheControl", "3600");
+        fd.append("", new Blob([f.data.buffer as ArrayBuffer], { type: f.kind === "mp3" ? "audio/mpeg" : "audio/wav" }), f.name);
+        const put = await fetch(up.signedUrl, { method: "PUT", body: fd, headers: { "x-upsert": "true" } });
+        if (!put.ok) throw new Error(`Upload failed (${put.status}) — ${f.name}`);
+        saved.push({ name: f.name, path: up.path, bytes: f.data.length });
+      }
+      await api({ action: "finish", token, files: saved });
+      return `${window.location.origin}/s/${token}`;
+    }
     if (o.kind === "mp3") {
       const { mix: sum } = await renderAll({
         song: tree.project.title,
