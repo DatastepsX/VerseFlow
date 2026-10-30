@@ -12,7 +12,7 @@ export const metadata: Metadata = { title: "Shared song · VerseFlow", robots: {
 
 export default function SharePage(props: PageProps<"/s/[token]">) {
   return (
-    <main className="mx-auto min-h-dvh w-full max-w-lg px-4 pb-16 pt-[max(1.5rem,env(safe-area-inset-top))]">
+    <main className="mx-auto min-h-dvh w-full max-w-lg px-4 pb-16 pt-[max(1.5rem,calc(env(safe-area-inset-top)+1rem))]">
       <Suspense fallback={<p className="text-sm text-muted">Loading…</p>}>
         <Share params={props.params} />
       </Suspense>

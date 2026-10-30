@@ -87,7 +87,7 @@ export default function Settings() {
   const ms = (v: number | null | undefined) => (typeof v === "number" ? `${v} ms` : "not set");
 
   return (
-    <main className="mx-auto flex min-h-dvh w-full max-w-lg flex-col gap-5 px-4 pb-16 pt-[max(1rem,env(safe-area-inset-top))]">
+    <main className="mx-auto flex min-h-dvh w-full max-w-lg flex-col gap-5 px-4 pb-16 pt-[max(1rem,calc(env(safe-area-inset-top)+0.75rem))]">
       <header className="flex items-center gap-2">
         <Link href="/" className="flex h-9 w-9 items-center justify-center rounded-full text-muted active:bg-panel-2" aria-label="Back">
           <ChevronLeft className="h-5 w-5" />

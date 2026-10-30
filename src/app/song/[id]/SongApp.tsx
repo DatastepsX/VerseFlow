@@ -1278,7 +1278,7 @@ export function SongApp({
   return (
     <div className="mx-auto flex min-h-dvh w-full max-w-lg flex-col bg-bg">
       {/* top bar */}
-      <header className="sticky top-0 z-20 border-b border-line/70 bg-bg/90 pt-[max(0.75rem,env(safe-area-inset-top))] backdrop-blur-xl">
+      <header className="sticky top-0 z-20 border-b border-line/70 bg-bg/90 pt-[max(0.75rem,calc(env(safe-area-inset-top)+0.5rem))] backdrop-blur-xl">
         <div className="flex items-center gap-2 px-3">
           <Link href="/" className="flex h-9 w-9 items-center justify-center rounded-full text-muted active:bg-panel-2" aria-label="Back">
             <ChevronLeft className="h-6 w-6" />
@@ -1423,7 +1423,7 @@ export function SongApp({
       )}
 
       {toast && (
-        <div className="fixed left-1/2 top-[calc(env(safe-area-inset-top)+4.25rem)] z-40 flex max-w-[92%] -translate-x-1/2 items-center gap-3 rounded-full bg-fg py-1.5 pl-4 pr-1.5 text-sm text-bg shadow-lg">
+        <div className="fixed left-1/2 top-[calc(env(safe-area-inset-top)+4.75rem)] z-40 flex max-w-[92%] -translate-x-1/2 items-center gap-3 rounded-full bg-fg py-1.5 pl-4 pr-1.5 text-sm text-bg shadow-lg">
           <span className="truncate">{toast.text}</span>
           <button className="shrink-0 rounded-full bg-bg/15 px-3 py-1 text-xs font-semibold" onClick={() => void undoRedo(toast.then)}>
             {toast.then === "redo" ? "Redo" : "Undo"}
@@ -1441,7 +1441,7 @@ export function SongApp({
       )}
       {/* a part copied: where to paste it */}
       {copied && !toast && (
-        <div className="fixed left-1/2 top-[calc(env(safe-area-inset-top)+4.25rem)] z-40 flex max-w-[92%] -translate-x-1/2 items-center gap-3 rounded-full bg-accent py-1.5 pl-4 pr-1.5 text-sm text-white shadow-lg">
+        <div className="fixed left-1/2 top-[calc(env(safe-area-inset-top)+4.75rem)] z-40 flex max-w-[92%] -translate-x-1/2 items-center gap-3 rounded-full bg-accent py-1.5 pl-4 pr-1.5 text-sm text-white shadow-lg">
           <span className="truncate">“{tree.sections.find((x) => x.id === copied)?.name}” copied — tap a part&apos;s name to paste after it</span>
           <button className="shrink-0 rounded-full bg-white/20 px-3 py-1 text-xs font-semibold" onClick={() => setCopied(null)}>
             Cancel
