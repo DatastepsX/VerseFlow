@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useSyncExternalStore } from "react";
 import { AuthForm } from "@/components/AuthForm";
 
@@ -14,9 +15,12 @@ export default function Login() {
   return (
     <main className="flex flex-1 items-center justify-center px-4 py-10">
       <div className="w-full max-w-sm space-y-4 rounded-xl border border-line bg-panel p-6">
-        <div>
-          <h1 className="text-xl font-bold">VerseFlow</h1>
-          <p className="text-sm text-muted">Sign in to your songs.</p>
+        <div className="flex items-center gap-3">
+          <Image src="/icon-192.png" alt="" width={48} height={48} priority className="h-12 w-12 rounded-[13px] shadow-md shadow-accent/30" />
+          <div>
+            <h1 className="text-xl font-bold">VerseFlow</h1>
+            <p className="text-sm text-muted">Sign in to your songs.</p>
+          </div>
         </div>
         <AuthForm next={next} />
       </div>

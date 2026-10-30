@@ -15,5 +15,5 @@ export async function proxy(request: NextRequest) {
 
 export const config = {
   // open without signing in: the sign-in, a share link's download page, an invitation
-  matcher: ["/((?!login|api/auth|s/|join/|_next/static|_next/image|favicon.ico|icon|manifest).*)"],
+  matcher: ["/((?!login|api/auth|s/|join/|_next/static|_next/image|favicon.ico|icon|apple-icon|logo.svg|manifest).*)"],
 };

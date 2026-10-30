@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -77,6 +78,7 @@ export default function Home() {
   return (
     <main className="mx-auto flex min-h-dvh w-full max-w-lg flex-col px-4 pb-28 pt-[max(1.5rem,env(safe-area-inset-top))]">
       <header className="mb-6 flex items-start gap-3">
+        <Image src="/icon-192.png" alt="" width={44} height={44} priority className="mt-0.5 h-11 w-11 shrink-0 rounded-[12px] shadow-md shadow-accent/30" />
         <div className="flex-1">
           <h1 className="text-3xl font-extrabold tracking-tight">VerseFlow</h1>
           <p className="mt-1 text-sm text-muted">Upload a beat · sing your flow · get your lyrics</p>

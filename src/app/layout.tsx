@@ -19,6 +19,7 @@ export const metadata: Metadata = {
   title: "VerseFlow",
   description: "Write lyrics and texts line by line, with rhyme-aware AI suggestions.",
   appleWebApp: { capable: true, title: "VerseFlow", statusBarStyle: "black-translucent" },
+  applicationName: "VerseFlow",
 };
 
 export const viewport: Viewport = {
