@@ -676,7 +676,7 @@ ${sang}
 
 These were sung only to find the rhythm — placeholder words, NOT lyrics. Don't copy or paraphrase them; at most they hint at the mood. The topic comes from the brief, the concept and the rest of the song.
 
-THE SONG (rhythm per line: DUM = stressed syllable, ~ = the last note is held, | = a short break in the singing)
+THE SONG (rhythm per line: DUM = stressed syllable, ~ = the last note is held, | = a short break in the singing, [ ] = a fast run — rapped double-time)
 ${listing}
 
 ${rhymes.length ? `RHYMES\n${rhymes.join("\n")}\n` : ""}${briefs ? `\n${briefs}\n` : ""}
@@ -684,6 +684,7 @@ TASK
 For every [WRITE] line write 3 options. Each option must:
 - have exactly the line's number of syllables (sung syllables, ±1) with the stressed syllables on the DUM positions — it must fit the rhythm the writer sang;
 - end on an open, singable vowel when the last note is held (~);
+- in a fast run ([ ]), pack short, quick words that run together with no break inside — light syllables, few consonant clusters, easy to rap double-time (e.g. "da-DUM [da-da-da-da-DUM-da] | DUM" → "Io lo so [che mi manca la vita] stai");
 - follow the breaks (|): a word, and a phrase, ends at every break, and the words between two breaks are one connected group sung together (e.g. "da-DUM-da-da-DUM | DUM-da-DUM-da | da-da-DUM-da-da-DUM" → "Voglio il silenzio, ogni giorno, sento l'amore con te");
 - respect its rhyme rule and continue the lines around it, so the song reads as one coherent text about the writer's topic;
 - say something: the rhythm decides the shape of a line, never its content (see the craft rules — no filler, no clichés, concrete images, a part that develops and turns).
@@ -756,11 +757,14 @@ Return one entry per [WRITE] line, "line" = its number.`;
   }));
 }
 
-function patternOf(f: { syllables: number; stress: number[]; held: boolean; pauses?: number[] }) {
+function patternOf(f: { syllables: number; stress: number[]; held: boolean; pauses?: number[]; fast?: number[] }) {
   const s = new Set(f.stress);
   const breaks = new Set(f.pauses ?? []);
+  const fast = new Set(f.fast ?? []);
   const parts = Array.from({ length: f.syllables }, (_, i) => (s.has(i + 1) ? "DUM" : "da"));
   if (f.held && parts.length) parts[parts.length - 1] += "~";
+  // a fast run (double-time): in [ ]
+  const marked = parts.map((p, i) => `${fast.has(i + 1) && !fast.has(i) ? "[" : ""}${p}${fast.has(i + 1) && !fast.has(i + 2) ? "]" : ""}`);
   // a break: the word group ends there
-  return parts.map((p, i) => (i > 0 && breaks.has(i) ? ` | ${p}` : i > 0 ? `-${p}` : p)).join("");
+  return marked.map((p, i) => (i > 0 && breaks.has(i) ? ` | ${p}` : i > 0 ? `${fast.has(i) && !fast.has(i + 1) ? " " : fast.has(i + 1) && !fast.has(i) ? " " : "-"}${p}` : p)).join("");
 }

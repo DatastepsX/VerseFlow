@@ -16,19 +16,47 @@ import { alignTakeLines } from "./align";
 
 /** the chips of a line: one per syllable, with its letters when the line can be split */
 export function chipsOf(text: string, lang: string, commaPauses = false): string[] {
-  const parts = syllableParts(text, lang, commaPauses);
+  const clean = unlinked(text);
+  const parts = syllableParts(clean, lang, commaPauses);
   if (parts) return parts.map((p) => p.text);
-  const n = prosody(text, lang, commaPauses).syllables;
+  const n = prosody(clean, lang, commaPauses).syllables;
   return Array.from({ length: n }, () => "•");
+}
+
+/** words joined by - _ ~ between letters ("questa-vita-che"): rapped fast, run together */
+const LINK = /(\p{L})[-_~]+(?=\p{L})/gu;
+
+/** the words as sung (the links between them taken out) — what's counted, and what becomes the lyrics */
+export const unlinked = (text: string) => text.replace(LINK, "$1 ");
+
+/** the syllables of the linked word runs, 1-based ("e questa-vita-che mi" → the syllables of questa vita che) */
+export function fastFromText(text: string, lang: string, commaPauses = false): number[] {
+  const tokens = text.trim().split(/\s+/).filter(Boolean);
+  if (!tokens.some((t) => /\p{L}[-_~]+\p{L}/u.test(t))) return [];
+  const count = (t: string) => (t.trim() ? (syllableParts(t, lang, commaPauses)?.length ?? prosody(t, lang, commaPauses).syllables) : 0);
+  const fast: number[] = [];
+  let before = "";
+  for (const t of tokens) {
+    const words = unlinked(t);
+    const from = count(before) + 1;
+    before = `${before} ${words}`.trim();
+    // a run of two or more linked words: all its syllables
+    if (/\p{L}[-_~]+\p{L}/u.test(t)) for (let k = from; k <= count(before); k++) fast.push(k);
+  }
+  return [...new Set(fast)];
 }
 
 /** a written line → a pattern line: its syllables, natural stresses, a pause at a comma */
 export function lineFromText(text: string, lang: string, bar: number, keep?: PatternLine): PatternLine {
   const cp = !!keep?.commaPauses;
-  const parts = syllableParts(text, lang, cp);
-  const n = parts ? parts.length : prosody(text, lang, cp).syllables;
+  const clean = unlinked(text);
+  const parts = syllableParts(clean, lang, cp);
+  const n = parts ? parts.length : prosody(clean, lang, cp).syllables;
   const sameCount = keep && keep.syllables === n;
-  const natural = prosody(text, lang, cp).stresses.map((s) => s + 1);
+  const natural = prosody(clean, lang, cp).stresses.map((s) => s + 1);
+  // linked words typed: those runs are fast; none typed: what was linked on the chips stays (same syllables)
+  const typed = fastFromText(text, lang, cp);
+  const fast = typed.length ? typed : sameCount ? (keep.fast ?? []) : [];
   const pauses = parts ? parts.map((p, i) => (/[,;:.!?…—–-]$/.test(p.text.trim()) && i < parts.length - 1 ? i + 1 : 0)).filter(Boolean) : [];
   const line: PatternLine = {
     text,
@@ -41,10 +69,12 @@ export function lineFromText(text: string, lang: string, bar: number, keep?: Pat
     stress: sameCount ? keep.stress : natural,
     long: sameCount ? keep.long : n ? [n] : [],
     pauses: sameCount ? keep.pauses : pauses,
+    ...(fast.length ? { fast } : {}),
     offsets: [],
   };
+  const sameFast = (keep?.fast ?? []).join() === fast.join();
   line.offsets =
-    sameCount && keep.offsets.length === n
+    sameCount && sameFast && keep.offsets.length === n
       ? keep.offsets
       : keep?.sung && keep.offsets.length > 1 && n > 1
         ? spread(keep.offsets, n)
@@ -71,7 +101,7 @@ export function ownWords(line: PatternLine, lang: string, source?: FlowPattern["
   if (!line.written || !text) return false;
   const ws = text
     .toLowerCase()
-    .split(/[\s,.;:!?…'’-]+/)
+    .split(/[\s,.;:!?…'’_~-]+/)
     .filter(Boolean);
   if (ws.every((w) => SCAT.test(w))) return false;
   const sung = line.sung ?? (source !== undefined && source !== "write");
@@ -80,17 +110,18 @@ export function ownWords(line: PatternLine, lang: string, source?: FlowPattern["
 
 /**
  * Where the syllables of a written line fall in its bar: an 8th note each
- * (a long one two), a pause an 8th; squeezed when the line is longer than
- * the bar.
+ * (a long one two, a fast one — linked words, double-time — a 16th), a pause
+ * an 8th; squeezed when the line is longer than the bar.
  */
-export function layoutOffsets(line: Pick<PatternLine, "syllables" | "long" | "pauses">, bar: number): number[] {
+export function layoutOffsets(line: Pick<PatternLine, "syllables" | "long" | "pauses" | "fast">, bar: number): number[] {
   const long = new Set(line.long);
   const pauses = new Set(line.pauses);
+  const fast = new Set(line.fast ?? []);
   const units: number[] = [];
   let total = 0;
   for (let k = 1; k <= line.syllables; k++) {
     units.push(total);
-    total += (long.has(k) && k < line.syllables ? 2 : 1) + (pauses.has(k) ? 1 : 0);
+    total += (long.has(k) && k < line.syllables ? 2 : fast.has(k) ? 0.5 : 1) + (pauses.has(k) ? 1 : 0);
   }
   const unit = Math.min(bar / 8, bar / Math.max(1, total));
   return units.map((u) => round(u * unit));
@@ -387,6 +418,7 @@ export function lineFlowFrom(pattern: FlowPattern, i: number, barStart: number, 
     pair,
     ...(pl.pauses?.length ? { pauses: pl.pauses } : {}),
     ...(pl.long?.length ? { long: pl.long } : {}),
+    ...(pl.fast?.length ? { fast: pl.fast } : {}),
     flowId,
     patternLine: k,
     scheme: pattern.scheme,

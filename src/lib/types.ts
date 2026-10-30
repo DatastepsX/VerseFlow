@@ -265,6 +265,8 @@ export interface LineFlow {
   pauses?: number[];
   /** long (held) syllables, 1-based */
   long?: number[];
+  /** syllables rapped fast, run together (double-time), 1-based */
+  fast?: number[];
   /** the line's text before a new flow was set for its part: rewritten to the new rhythm (meaning and key words kept) */
   draft?: string;
   /** the song flow this line follows (flows table), which of its pattern lines, and its rhyme scheme */
@@ -290,6 +292,8 @@ export interface PatternLine {
   long: number[];
   /** a pause after these syllables, 1-based */
   pauses: number[];
+  /** syllables rapped fast, words run together (double-time), 1-based — typed as "questa-vita-che" or linked on the chips */
+  fast?: number[];
   /** where each syllable starts, seconds from the bar line */
   offsets: number[];
   /** sung / tapped with "Next line" or the singer's pauses: the bar its timing is from, counted from the

@@ -540,7 +540,8 @@ export function FlowSheet({
             </div>
           ))}
           <p className="text-[11px] text-muted">
-            Tap a syllable: stressed · hold it: long note · tap <span className="inline-block rounded bg-panel-2 px-1">+</span> between two: a pause
+            Tap a syllable: stressed · hold it: long note · tap <span className="inline-block rounded bg-panel-2 px-1">+</span> between two: a pause, twice:
+            linked — rapped fast (double-time). Or type the words joined: <span className="font-mono">questa-vita-che</span>
           </p>
         </div>
 
@@ -600,6 +601,22 @@ function Chips({ line, lang, bar, onChange }: { line: PatternLine; lang: string;
   const labels = chipsOf(line.text, lang, !!line.commaPauses);
   const hold = useRef<{ k: number; timer: ReturnType<typeof setTimeout>; fired: boolean } | null>(null);
   const toggle = (arr: number[], k: number) => (arr.includes(k) ? arr.filter((x) => x !== k) : [...arr, k].sort((a, b) => a - b));
+  const fast = line.fast ?? [];
+  /** syllables k and k+1 run together (both fast) */
+  const linked = (k: number) => fast.includes(k) && fast.includes(k + 1);
+  /** between two syllables, a tap goes: nothing → a pause → linked (fast, double-time) → nothing */
+  const cycle = (k: number) => {
+    if (linked(k)) {
+      // unlinked: each keeps fast only while still linked to its other neighbour
+      const next = fast.filter((x) => !((x === k && !fast.includes(k - 1)) || (x === k + 1 && !fast.includes(k + 2))));
+      return onChange(relayout({ ...line, fast: next }, bar));
+    }
+    if (line.pauses.includes(k)) {
+      const next = [...new Set([...fast, k, k + 1])].sort((a, b) => a - b);
+      return onChange(relayout({ ...line, pauses: line.pauses.filter((x) => x !== k), fast: next }, bar));
+    }
+    onChange(relayout({ ...line, pauses: toggle(line.pauses, k) }, bar));
+  };
   return (
     <div className="mt-2 flex flex-wrap items-center gap-y-1.5">
       {Array.from({ length: line.syllables }, (_, i) => {
@@ -607,10 +624,12 @@ function Chips({ line, lang, bar, onChange }: { line: PatternLine; lang: string;
         const stressed = line.stress.includes(k);
         const long = line.long.includes(k);
         const pause = line.pauses.includes(k);
+        const quick = fast.includes(k);
+        const link = linked(k);
         return (
           <span key={i} className="flex items-center">
             <button
-              className={`h-9 touch-manipulation select-none rounded-lg px-2 text-[13px] font-semibold transition-colors ${long ? "min-w-14" : "min-w-9"} ${stressed ? "bg-accent text-white" : "bg-panel text-fg/80 ring-1 ring-line"}`}
+              className={`h-9 touch-manipulation select-none rounded-lg px-2 text-[13px] font-semibold transition-colors ${long ? "min-w-14" : quick ? "min-w-7" : "min-w-9"} ${stressed ? "bg-accent text-white" : "bg-panel text-fg/80 ring-1 ring-line"} ${quick ? "border-b-[3px] border-[#a3d10f]" : ""}`}
               onPointerDown={() => {
                 const timer = setTimeout(() => {
                   if (hold.current) hold.current.fired = true;
@@ -632,18 +651,19 @@ function Chips({ line, lang, bar, onChange }: { line: PatternLine; lang: string;
                   hold.current = null;
                 }
               }}
-              aria-label={`Syllable ${k}${stressed ? ", stressed" : ""}${long ? ", long" : ""}`}
+              aria-label={`Syllable ${k}${stressed ? ", stressed" : ""}${long ? ", long" : ""}${quick ? ", fast" : ""}`}
             >
               {labels[i] ?? "•"}
               {long && <span className="ml-0.5 opacity-70">—</span>}
             </button>
             {i < line.syllables - 1 && (
               <button
-                className={`mx-[2px] flex h-9 w-4 items-center justify-center rounded text-[11px] font-bold ${pause ? "bg-warn-soft text-warn" : "text-muted/60"}`}
-                onClick={() => onChange(relayout({ ...line, pauses: toggle(line.pauses, k) }, bar))}
-                aria-label={pause ? `Pause after syllable ${k} (tap to remove)` : `Add a pause after syllable ${k}`}
+                className={`flex h-9 justify-center rounded text-[11px] font-bold ${link ? "mx-0 w-2.5 items-end" : pause ? "mx-[2px] w-4 items-center bg-warn-soft text-warn" : "mx-[2px] w-4 items-center text-muted/60"}`}
+                onClick={() => cycle(k)}
+                aria-label={link ? `Syllables ${k} and ${k + 1} linked, rapped fast (tap to unlink)` : pause ? `Pause after syllable ${k} (tap to link the two, fast)` : `Add a pause after syllable ${k}`}
               >
-                {pause ? "‖" : "+"}
+                {/* linked: the run's line carries on under the gap */}
+                {link ? <span className="mb-0 block h-[3px] w-full bg-[#a3d10f]" /> : pause ? "‖" : "+"}
               </button>
             )}
           </span>

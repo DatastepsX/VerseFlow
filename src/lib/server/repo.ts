@@ -25,7 +25,7 @@ import type {
   SongFlow,
   Take,
 } from "@/lib/types";
-import { lineFlowFrom, lineStarts, linesIn, nextFlowName, ownWords } from "@/lib/flow/pattern";
+import { lineFlowFrom, lineStarts, linesIn, nextFlowName, ownWords, unlinked } from "@/lib/flow/pattern";
 import { fixPairs } from "@/lib/flow/rhymelines";
 import { songSections, type SungLine } from "@/lib/audio/song-lines";
 import { sectionRanges } from "@/lib/audio/song-map";
@@ -1904,7 +1904,8 @@ export async function applyFlow(projectId: string, flowId: string, sectionId: st
       project_id: projectId,
       section_id: section.id,
       position: 0,
-      text: own ? pl.text.trim() : "",
+      // linked words ("questa-vita-che") are sung as words: the links are only the flow's
+      text: own ? unlinked(pl.text).trim() : "",
       status: (own ? "APPROVED" : "OPEN") as LineStatus,
       kind: "lyric",
       audio_at: lf.times?.[0] ?? start + starts[i],

@@ -6,7 +6,7 @@ import { dropSounds, isSound } from "./fillers";
 import { cycle, flowFromGrid, gridFor, quantizeTaps } from "./grid";
 import { exampleWords, isExampleText } from "./example";
 import { coupletsOf } from "./couplets";
-import { barsPerLine, chipsOf, lineCuts, lineFlowFrom, lineStarts, linesFromWords, linesIn, patternBars, lineFromText, linesFromBreaks, linesFromOnsets, nextFlowName, ownWords, relayout } from "./pattern";
+import { barsPerLine, chipsOf, fastFromText, lineCuts, lineFlowFrom, lineStarts, linesFromWords, linesIn, patternBars, lineFromText, linesFromBreaks, linesFromOnsets, nextFlowName, ownWords, relayout, unlinked } from "./pattern";
 import { prosody } from "@/lib/rhyme/prosody";
 import { emptyParts, vocalLines } from "./vocals";
 
@@ -517,4 +517,33 @@ test("recognised words that run on into each other: the breaks still show (timin
   // and where the take was silent (between "notte" and "io"), a break too
   const [m] = linesFromWords(words, [], 10, bar, 1, "it", [{ from: 11.6, to: 11.83 }]);
   assert.equal(m.text, "Mentre ti guardo, questa notte, io mi sveglio con te");
+});
+
+test("linked words are a fast run (double-time): real syllables, half the time, plain words as lyrics", () => {
+  const bar = 2.4;
+  // the chips show the syllables, not dots
+  assert.deepEqual(chipsOf("questa-vita-che mi", "it"), ["que", "sta", "vi", "ta", "che", "mi"]);
+  // only the linked run is fast
+  assert.deepEqual(fastFromText("tu questa-vita-che mi", "it"), [2, 3, 4, 5, 6]);
+  assert.deepEqual(fastFromText("questa vita che mi", "it"), []);
+  const linked = lineFromText("tu questa-vita-che mi manca", "it", bar);
+  const plain = lineFromText("tu questa vita che mi manca", "it", bar);
+  assert.equal(linked.syllables, plain.syllables);
+  assert.deepEqual(linked.fast, [2, 3, 4, 5, 6]);
+  // the hyphens are links, not pauses
+  assert.deepEqual(linked.pauses, plain.pauses);
+  // the fast syllables come twice as quick (a line that fits the bar: nothing squeezed)
+  const short = lineFromText("tu questa-vita", "it", bar);
+  const slow = lineFromText("tu questa vita", "it", bar);
+  const gap = (l: typeof short, k: number) => l.offsets[k] - l.offsets[k - 1];
+  assert.ok(Math.abs(gap(short, 2) - gap(slow, 2) / 2) < 0.01, "a 16th instead of an 8th");
+  assert.ok(short.offsets[short.syllables - 1] < slow.offsets[slow.syllables - 1]);
+  // a long linked run: the whole line is sung in less time
+  assert.ok(linked.offsets[linked.syllables - 1] < plain.offsets[plain.syllables - 1]);
+  // linked on the chips: kept while the words keep their syllable count
+  const chips = relayout({ ...plain, fast: [1, 2] }, bar);
+  assert.deepEqual(lineFromText("tu questa vita che mi danza", "it", bar, chips).fast, [1, 2]);
+  // the lyrics: the words, unlinked
+  assert.equal(unlinked("questa-vita-che mi_manca"), "questa vita che mi manca");
+  assert.equal(unlinked("e - poi"), "e - poi");
 });

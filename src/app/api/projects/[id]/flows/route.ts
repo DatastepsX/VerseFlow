@@ -51,6 +51,7 @@ function cleanPattern(v: unknown): FlowPattern | null {
       stress: ints(l.stress),
       long: ints(l.long),
       pauses: ints(l.pauses),
+      ...(ints(l.fast).length ? { fast: ints(l.fast) } : {}),
       offsets: (Array.isArray(l.offsets) ? l.offsets.filter(num) : []).slice(0, 64) as number[],
       ...(l.sung ? { sung: true } : {}),
       ...(l.commaPauses ? { commaPauses: true } : {}),
