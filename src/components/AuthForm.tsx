@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { loadAccount } from "@/lib/client/account";
+import { keepDeviceSignIn, loadAccount } from "@/lib/client/account";
 
 /**
  * Sign in, or make an account — with the access code (the studio's own people) or with a song's invitation
@@ -42,12 +42,13 @@ export function AuthForm({ invite, next, startWith = "signin" }: { invite?: stri
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ action: mode, name, email, password, code: invite ? undefined : code, invite }),
     });
-    const data = (await res.json().catch(() => ({}))) as { error?: string };
+    const data = (await res.json().catch(() => ({}))) as { error?: string; device?: string };
     if (!res.ok) {
       setError(data.error ?? "Couldn't sign in");
       setBusy(false);
       return;
     }
+    keepDeviceSignIn(data.device);
     let to = next;
     // signing in with an invitation: the song is joined too
     if (invite && mode === "signin") {
@@ -90,10 +91,11 @@ export function AuthForm({ invite, next, startWith = "signin" }: { invite?: stri
         ))}
       </div>
       {signup && <input className="input" autoComplete="name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Your name (the others see it)" />}
-      <input className="input" type="email" autoComplete="email" autoFocus value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" />
+      <input className="input" type="email" name="username" autoComplete="username" autoCapitalize="none" inputMode="email" autoFocus value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" />
       <input
         className="input"
         type="password"
+        name="password"
         autoComplete={signup ? "new-password" : "current-password"}
         value={password}
         onChange={(e) => setPassword(e.target.value)}

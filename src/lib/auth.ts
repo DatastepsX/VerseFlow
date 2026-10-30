@@ -6,8 +6,10 @@
  * WebCrypto only: runs in the proxy and in route handlers alike.
  */
 export const SESSION_COOKIE = "vf_session";
-/** how long a sign-in lasts */
-export const SESSION_DAYS = 90;
+/** how long a sign-in lasts without using the app (it renews itself while you do) */
+export const SESSION_DAYS = 365;
+/** a sign-in older than this is renewed on the next visit */
+export const RENEW_AFTER_DAYS = 1;
 
 export function authEnabled() {
   return !!process.env.APP_PASSWORD;
@@ -28,11 +30,28 @@ export async function signSession(userId: string) {
 
 /** the user a cookie belongs to — null when it is missing, forged, old-style or expired */
 export async function verifySession(cookie: string | undefined | null): Promise<string | null> {
+  return (await readSession(cookie))?.userId ?? null;
+}
+
+/** a valid sign-in: whose, and when it was issued (ms) */
+export async function readSession(cookie: string | undefined | null): Promise<{ userId: string; issued: number } | null> {
   const m = /^v2\.([0-9a-f-]{36})\.(\d{10,16})\.([0-9a-f]{64})$/.exec(cookie ?? "");
   if (!m) return null;
-  if (Date.now() - Number(m[2]) > SESSION_DAYS * 86400_000) return null;
-  return safeEqual(m[3], await hmac(`v2.${m[1]}.${m[2]}`)) ? m[1] : null;
+  const issued = Number(m[2]);
+  if (Date.now() - issued > SESSION_DAYS * 86400_000) return null;
+  return safeEqual(m[3], await hmac(`v2.${m[1]}.${m[2]}`)) ? { userId: m[1], issued } : null;
 }
+
+/** how the sign-in cookie is set (the same everywhere: signing in, renewing) */
+export const sessionCookie = (value: string) => ({
+  name: SESSION_COOKIE,
+  value,
+  httpOnly: true,
+  secure: process.env.NODE_ENV === "production",
+  sameSite: "lax" as const,
+  path: "/",
+  maxAge: 60 * 60 * 24 * SESSION_DAYS,
+});
 
 export function safeEqual(a: string, b: string) {
   if (a.length !== b.length) return false;

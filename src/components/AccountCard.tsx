@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { loadAccount, useAccount } from "@/lib/client/account";
+import { forgetDeviceSignIn, loadAccount, useAccount } from "@/lib/client/account";
 
 /** Settings → You: your name (shown on your notes and to the people you work with), signing out */
 export function AccountCard({ card }: { card: string }) {
@@ -30,6 +30,7 @@ export function AccountCard({ card }: { card: string }) {
           className="btn w-full justify-center rounded-xl py-2.5 text-sm"
           onClick={async () => {
             await fetch("/api/auth", { method: "DELETE" });
+            forgetDeviceSignIn();
             window.location.assign("/login");
           }}
         >
