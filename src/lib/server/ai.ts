@@ -227,7 +227,7 @@ Each option's "lines" array must contain exactly ${targetIdx.length} line${targe
 }
 
 /** how long a call may think before it is asked again, quicker — within BUDGET_S in all (a request is stopped after 300 s) */
-const CALL_DEADLINE_S = { high: 170, medium: 170, low: 100 } as const;
+const CALL_DEADLINE_S = { high: 170, medium: 170, low: 240 } as const;
 const BUDGET_S = 280;
 /** the quicker try when a call runs out of time */
 const QUICKER = { high: "medium", medium: "low", low: null } as const;
@@ -284,7 +284,7 @@ async function callJson<T>(
   }
   await recordAiCall(projectId, kind, response.model, response.usage).catch(() => {});
   const u = response.usage;
-  console.info(`[ai] ${kind} ${effort}: ${u.input_tokens} in (+${u.cache_read_input_tokens ?? 0} from cache, ${u.cache_creation_input_tokens ?? 0} to cache), ${u.output_tokens} out`);
+  console.info(`[ai] ${kind} ${effort} ${Math.round((Date.now() - started) / 1000)} s: ${u.input_tokens} in (+${u.cache_read_input_tokens ?? 0} from cache, ${u.cache_creation_input_tokens ?? 0} to cache), ${u.output_tokens} out`);
   if (response.stop_reason === "refusal") throw new Error("The AI declined this request. Try rephrasing the direction.");
   if (response.stop_reason === "max_tokens") throw new Error("The AI response was cut off — try again.");
   const text = response.content.find((b) => b.type === "text");
@@ -494,9 +494,10 @@ const NEEDS = new Set(["DECLINED", "NEEDS_NEW_OPTIONS"]);
  */
 /** bars written per call — keeps each call short; a section's chunks run in parallel */
 export const DRAFT_CHUNK = 8;
-// writing a part: it plans the part first (DRAFT_SCHEMA) and follows the craft rules — "medium" thinking keeps a
-// call to a minute or two; "high" can think for 5 minutes and more, longer than a request may run
-const DRAFT_EFFORT = (process.env.AI_DRAFT_EFFORT || "medium") as "low" | "medium" | "high";
+// writing a part: it plans the part first, in its answer (DRAFT_SCHEMA), and follows the craft rules — so "low"
+// thinking is enough and keeps a group of ~8 lines well under a minute (and cheaper); "medium" took about 2 minutes,
+// "high" 5 and more. AI_DRAFT_EFFORT=medium / high for more depth at that cost.
+const DRAFT_EFFORT = (process.env.AI_DRAFT_EFFORT || "low") as "low" | "medium" | "high";
 
 /**
  * Which bars a fill/replace writes: `n` = bar count of the section,

@@ -300,7 +300,7 @@ together"); `users`, `project_members`, `invites`, `line_notes`, `shares`.
 | `TTS_MODEL` | optional, ElevenLabs voice model for the guide vocal (default `eleven_multilingual_v2`) |
 | `AI_MODEL` | Claude model (default `claude-opus-5-5`; e.g. `claude-sonnet-5-5` / `claude-haiku-5-5` cost less) |
 | `AI_EFFORT` | `low` / `medium` (default) / `high` — lower = fewer thinking tokens |
-| `AI_DRAFT_EFFORT` | effort for writing parts (Fill / Replace / a flow's lyrics): `low` / `medium` (default) / `high` — a call that thinks too long is asked again with less effort |
+| `AI_DRAFT_EFFORT` | effort for writing parts (Fill / Replace / a flow's lyrics): `low` (default, fastest) / `medium` / `high` — a call that thinks too long is asked again with less effort |
 
 ## Development
 
