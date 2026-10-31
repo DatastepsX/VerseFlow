@@ -867,7 +867,7 @@ export function SongApp({
   /** the line whose notes are open */
   const [notesFor, setNotesFor] = useState<string | null>(null);
   /** double-tapped word: its rhymes */
-  const [rhymeWord, setRhymeWord] = useState<string | null>(null);
+  const [rhymeWord, setRhymeWord] = useState<{ word: string; lineId: string } | null>(null);
   /** notes new to you: shown in the lyrics until opened */
   const notesSeen = useNotesSeen(tree.project.id);
   /** the part merges into the one before it: its lines move there (one undo step) */
@@ -2012,7 +2012,7 @@ export function SongApp({
                             noteList={notesOf(tree, l.id)}
                             isNewNote={notesSeen.isNew}
                             onNotes={() => setNotesFor(l.id)}
-                            onRhymes={setRhymeWord}
+                            onRhymes={(word) => setRhymeWord({ word, lineId: l.id })}
                             onNewPart={
                               s.lines.findIndex((x) => x.id === l.id) > 0
                                 ? () => {
@@ -2228,7 +2228,45 @@ export function SongApp({
             />
           );
         })()}
-      {rhymeWord && <RhymeSheet word={rhymeWord} lang={lang} onClose={() => setRhymeWord(null)} />}
+      {rhymeWord &&
+        (() => {
+          // the line the word was tapped in, and the line it rhymes with (a couplet)
+          const sec = tree.sections.find((x) => x.lines.some((l) => l.id === rhymeWord.lineId));
+          const lyric = (sec?.lines.filter((l) => l.kind === "lyric") ?? []) as LyricLine[];
+          const line = lyric.find((l) => l.id === rhymeWord.lineId);
+          const pr = rhymeGroups(lyric)
+            .flatMap((g) => g.pairs)
+            .find(([a, b]) => a.id === rhymeWord.lineId || b.id === rhymeWord.lineId);
+          const partner = pr ? (pr[0].id === rhymeWord.lineId ? pr[1] : pr[0]) : null;
+          const lineOf = (id: string) => lyric.find((l) => l.id === id);
+          return (
+            <RhymeSheet
+              word={rhymeWord.word}
+              lang={lang}
+              onClose={() => setRhymeWord(null)}
+              write={
+                line
+                  ? {
+                      targets: [
+                        ...(partner ? [{ id: partner.id, label: "The rhyming line", text: partner.text }] : []),
+                        { id: line.id, label: "This line", text: line.text },
+                      ],
+                      busy: (id) => busyLine === id,
+                      // 3 lines on the line's flow, ending on the chosen word (1 call)
+                      run: (id, end) =>
+                        lineAction(id, () => call(`/api/projects/${pid}/flow`, { action: "suggest", lineIds: [id], endWith: end }), `Lines on “${end}”`),
+                      options: (id) => {
+                        const l = lineOf(id);
+                        return l ? { current: l.text, kept: isKept(l), alts: l.alternatives.map((a) => ({ id: a.id, text: a.text })) } : null;
+                      },
+                      pick: (id, altId) => lineAction(id, () => call(`/api/alternatives/${altId}`, { action: "swap" }), "Pick option"),
+                      keep: (id) => lineAction(id, () => call(`/api/lines/${id}`, { status: "APPROVED", action: "approve" }, "PATCH"), "Keep"),
+                    }
+                  : undefined
+              }
+            />
+          );
+        })()}
       {notesFor &&
         (() => {
           const line = tree.sections.flatMap((x) => x.lines).find((x) => x.id === notesFor);

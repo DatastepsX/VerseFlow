@@ -161,7 +161,9 @@ browser for a fast start (`src/lib/client/profile.ts`, `usePref`). The timing is
 (`vf.studio.latency[.vp].iPhone`, `.Mac`…): each has its own delay. The microphone choice stays on the device.
 
 **Rhymes for a word** (Lyrics: double-tap or double-click a word): its rhymes and near rhymes from the rhyme
-dictionary (`/api/rhymes`, no AI call), by syllable count — tap one to copy it (`RhymeWords.tsx`). A single tap still
+dictionary (`/api/rhymes`, no AI call), by syllable count (`RhymeWords.tsx`). Tap one: "Write 3 lines ending on «word» · 1 call" — for the rhyming line of the
+couplet (default) or this line, on the line's flow (`flowSuggest` with `endWith`); the 3 options show in the sheet to
+pick and keep. Or copy the word. A single tap still
 opens the line (it waits a moment for a second tap).
 
 **Undo / redo** (top bar, ⌘Z): one step per action (`undo_steps`; a multi-request action sends one `x-undo-step`).

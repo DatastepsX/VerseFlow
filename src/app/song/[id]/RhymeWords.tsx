@@ -5,8 +5,23 @@ import type { RhymeResult, RhymeWord } from "@/lib/rhyme/types";
 
 /**
  * Words that rhyme with a word of the lyrics: double-tap (or double-click) a word, a sheet lists its rhymes and
- * near rhymes from the rhyme dictionary — no AI call. Tap one to copy it.
+ * near rhymes from the rhyme dictionary — no AI call. Tap one: the AI writes 3 lines ending on it, on the line's flow
+ * (1 call), to choose from right there — or copy it.
  */
+
+/** writing lines that end on the chosen rhyme: the lines it can be for, and what to do with the options */
+export interface RhymeWrite {
+  /** the line the word was tapped in, and (in a couplet) the line it rhymes with — first: the default */
+  targets: { id: string; label: string; text: string }[];
+  busy: (lineId: string) => boolean;
+  run: (lineId: string, word: string) => Promise<unknown>;
+  options: (lineId: string) => { current: string; kept: boolean; alts: { id: string; text: string }[] } | null;
+  pick: (lineId: string, altId: string) => Promise<unknown>;
+  keep: (lineId: string) => Promise<unknown>;
+}
+
+const norm = (w: string) => w.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+const endsOn = (line: string, word: string) => norm(line.trim().split(/\s+/).pop()?.replace(/[^\p{L}\p{N}'’]+/gu, "") ?? "") === norm(word);
 
 const WORD = /[\p{L}\p{N}'’]/u;
 
@@ -73,10 +88,14 @@ export function useWordTaps(onWord: (word: string) => void) {
   };
 }
 
-export function RhymeSheet({ word, lang, onClose }: { word: string; lang: string; onClose: () => void }) {
+export function RhymeSheet({ word, lang, onClose, write }: { word: string; lang: string; onClose: () => void; write?: RhymeWrite }) {
   const key = `${word}|${lang}`;
   const [state, setState] = useState<{ key: string; r: RhymeResult | null } | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
+  /** the rhyme chosen, the line to write, and the line written (its options shown) */
+  const [chosen, setChosen] = useState<string | null>(null);
+  const [target, setTarget] = useState(write?.targets[0]?.id ?? null);
+  const [written, setWritten] = useState<{ lineId: string; word: string } | null>(null);
   useEffect(() => {
     let gone = false;
     void fetch(`/api/rhymes?q=${encodeURIComponent(word)}&lang=${encodeURIComponent(lang)}`)
@@ -113,8 +132,9 @@ export function RhymeSheet({ word, lang, onClose }: { word: string; lang: string
                 {ws.map((w) => (
                   <button
                     key={w}
-                    className={`rounded-full px-2.5 py-1 text-sm font-semibold ${copied === w ? "bg-ok text-white" : "bg-panel-2 text-fg active:bg-accent-soft"}`}
-                    onClick={() => copy(w)}
+                    className={`rounded-full px-2.5 py-1 text-sm font-semibold ${chosen === w ? "bg-accent text-white" : copied === w ? "bg-ok text-white" : "bg-panel-2 text-fg active:bg-accent-soft"}`}
+                    onClick={() => (write ? setChosen(chosen === w ? null : w) : copy(w))}
+                    aria-pressed={chosen === w}
                   >
                     {w}
                   </button>
@@ -137,9 +157,12 @@ export function RhymeSheet({ word, lang, onClose }: { word: string; lang: string
         <div>
           <h2 className="text-xl font-bold">Rhymes with “{word}”</h2>
           <p className="text-xs text-muted">
-            {result?.rhymeKey ? `Sound -${result.rhymeKey} · ` : ""}tap a word to copy it{copied ? ` — “${copied}” copied` : ""}
+            {result?.rhymeKey ? `Sound -${result.rhymeKey} · ` : ""}
+            {write ? "tap a word: 3 lines ending on it, on the line's flow" : "tap a word to copy it"}
+            {copied ? ` — “${copied}” copied` : ""}
           </p>
         </div>
+        {written && write && <WrittenOptions write={write} lineId={written.lineId} word={written.word} />}
         {result === undefined ? (
           <p className="py-6 text-center text-sm text-muted">Looking for rhymes…</p>
         ) : result === null ? (
@@ -151,7 +174,85 @@ export function RhymeSheet({ word, lang, onClose }: { word: string; lang: string
             {result.source && <p className="text-[10px] text-muted">Source: {result.source}</p>}
           </>
         )}
+        {/* a rhyme chosen: write lines ending on it (1 call), or copy it */}
+        {chosen && write && target && (
+          <div className="sticky bottom-0 -mx-4 space-y-2 border-t border-line/60 bg-panel px-4 pb-1 pt-3">
+            {write.targets.length > 1 && (
+              <div className="flex rounded-full bg-panel-2 p-1" role="radiogroup" aria-label="Which line">
+                {write.targets.map((t) => (
+                  <button
+                    key={t.id}
+                    role="radio"
+                    aria-checked={target === t.id}
+                    className={`min-w-0 flex-1 truncate rounded-full px-2 py-1.5 text-[12px] font-semibold ${target === t.id ? "bg-panel text-fg shadow-sm" : "text-muted"}`}
+                    onClick={() => setTarget(t.id)}
+                    title={t.text}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+            )}
+            <p className="truncate px-1 text-xs text-muted">Now: “{write.targets.find((t) => t.id === target)?.text || "…"}”</p>
+            <div className="flex gap-2">
+              <button className="btn rounded-xl px-3 text-sm" onClick={() => copy(chosen)}>
+                Copy
+              </button>
+              <button
+                className="btn-primary flex-1 justify-center rounded-xl text-sm"
+                disabled={write.busy(target)}
+                onClick={async () => {
+                  const [id, w] = [target, chosen];
+                  await write.run(id, w);
+                  setWritten({ lineId: id, word: w });
+                  setChosen(null);
+                }}
+              >
+                {write.busy(target) ? "Writing…" : `Write 3 lines ending on “${chosen}” · 1 call`}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
+    </div>
+  );
+}
+
+/** the lines just written on the chosen rhyme: tap one to put it in, then keep it */
+function WrittenOptions({ write, lineId, word }: { write: RhymeWrite; lineId: string; word: string }) {
+  const o = write.options(lineId);
+  if (!o) return null;
+  const all = [{ id: null as string | null, text: o.current }, ...o.alts];
+  // the ones ending on the chosen word; the line as it was stays to go back to
+  const shown = [...all.filter((x) => endsOn(x.text, word)), ...all.filter((x) => x.id === null && !endsOn(x.text, word))];
+  const busy = write.busy(lineId);
+  return (
+    <div className="space-y-1.5 rounded-2xl bg-accent-soft/50 p-2.5">
+      <p className="px-1 text-xs font-semibold text-accent">Lines ending on “{word}” · tap one, then keep it</p>
+      {shown.map((x, i) => {
+        const on = x.id === null;
+        return (
+          <button
+            key={x.id ?? "current"}
+            className={`flex w-full items-start gap-2 rounded-xl px-2.5 py-2 text-left text-sm ring-1 disabled:opacity-60 ${on ? "bg-panel ring-accent" : "bg-panel ring-line/60 active:bg-panel-2"}`}
+            disabled={busy || on}
+            onClick={() => x.id && void write.pick(lineId, x.id)}
+            aria-pressed={on}
+          >
+            <span className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${on ? "bg-accent text-white" : "bg-panel-2 text-muted"}`}>
+              {on ? "✓" : i + 1}
+            </span>
+            <span className="min-w-0 flex-1">{x.text}</span>
+          </button>
+        );
+      })}
+      <button
+        className="flex h-9 w-full items-center justify-center rounded-xl bg-ok-soft text-sm font-semibold text-ok disabled:opacity-50"
+        disabled={busy || (o.kept && !endsOn(o.current, word))}
+        onClick={() => void write.keep(lineId)}
+      >
+        {o.kept ? "Kept" : "Keep this line"}
+      </button>
     </div>
   );
 }

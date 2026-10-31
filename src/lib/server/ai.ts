@@ -642,6 +642,12 @@ Return one entry per ${refit ? "[REFIT]" : polish ? "[IMPROVE]" : "[OPEN]"} line
   return { slots: drafted, remaining: later.size };
 }
 
+/** the line ends on this word (accents and punctuation aside) */
+const endsOn = (line: string, word: string) => {
+  const norm = (w: string) => w.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+  return norm(line.trim().split(/\s+/).pop()?.replace(/[^\p{L}\p{N}'’]+/gu, "") ?? "") === norm(word);
+};
+
 /** an option as lyrics: the rhythm's marks the AI sometimes copies (| breaks, [ ] fast runs, ~ held) taken out */
 export const cleanLyric = (o: string) =>
   o
@@ -660,7 +666,7 @@ export const cleanLyric = (o: string) =>
  * in couplets. Every option is checked with the syllable counter and nudged
  * onto the target length; the best fitting comes first.
  */
-export async function flowSuggest(tree: ProjectTree, lineIds: string[], call: { more?: boolean } = {}) {
+export async function flowSuggest(tree: ProjectTree, lineIds: string[], call: { more?: boolean; endWith?: string } = {}) {
   if (!aiConfigured()) throw new AiUnavailable("AI is not configured yet (ANTHROPIC_API_KEY missing).");
   const { project } = tree;
   const lang = project.language;
@@ -762,6 +768,11 @@ Write 3 options for every [WRITE] line, following HOW TO WRITE.${
       ? `\nLines marked "recorded" are the writer's own lyrics from the vocals in the song — they stay. For those, write 3 ALTERNATIVE lines: same rhythm and rhyme sound, same meaning direction, different wording — never the recorded line itself.`
       : ""
   }
+${
+    call.endWith
+      ? `\nThe writer chose the rhyme: every option of ${targets.map((x) => `line ${num.get(x.l.id)}`).join(" and ")} must END on the word “${call.endWith}” — a natural line that leads to it, on the line's rhythm (the word's stress on the line's last DUM). This word decides the rhyme.`
+      : ""
+  }
 Return one entry per [WRITE] line, "line" = its number.`;
 
   // more groups follow: the stable part is written to the cache (the next calls read it at a twentieth of the price)
@@ -780,8 +791,8 @@ Return one entry per [WRITE] line, "line" = its number.`;
       .slice(0, 3)
       .map((o, i) => {
         let text = o;
-        // nudge a near miss onto the sung length (fillers / small cuts)
-        if (target) {
+        // nudge a near miss onto the sung length (fillers / small cuts) — never past the word the writer chose to end on
+        if (target && !(call.endWith && endsOn(o, call.endWith))) {
           for (let step = 0; step < 3; step++) {
             const d = prosody(text, lang).syllables - target;
             if (Math.abs(d) <= 1) break;
