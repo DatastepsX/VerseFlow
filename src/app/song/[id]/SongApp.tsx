@@ -1172,7 +1172,7 @@ export function SongApp({
     // "flow only, write later": the lines stay empty (✨ Write them any time — the brief is kept)
     if (todo.length && opts.write) {
       await lineAction(flowSheet.sectionId, async () => {
-        for (const ids of chunkLines(todo)) await call(`/api/projects/${pid}/flow`, { action: "suggest", lineIds: ids });
+        await writeInGroups(todo);
       });
     }
   };
@@ -1186,6 +1186,19 @@ export function SongApp({
       await undoStep(label, fn);
     } finally {
       setBusyLine(null);
+    }
+  };
+  /** lines written a group at a time (1 call per ~8 lines, one after the other: each sees the ones before) — with how far it is */
+  const [writing, setWriting] = useState<{ done: number; total: number; since: number } | null>(null);
+  const writeInGroups = async (lines: Pick<Line, "id" | "flow">[]) => {
+    const groups = chunkLines(lines);
+    try {
+      for (const [k, ids] of groups.entries()) {
+        setWriting({ done: k, total: groups.length, since: Date.now() });
+        await call(`/api/projects/${pid}/flow`, { action: "suggest", lineIds: ids });
+      }
+    } finally {
+      setWriting(null);
     }
   };
   // empty lines outside the empty parts (those have their own buttons)
@@ -1770,7 +1783,7 @@ export function SongApp({
                 disabled={busyLine === "missing"}
                 onClick={() =>
                   void lineAction("missing", async () => {
-                    for (const ids of chunkLines(lyricLines.filter((l) => missing.includes(l.id)))) await call(`/api/projects/${pid}/flow`, { action: "suggest", lineIds: ids });
+                    await writeInGroups(lyricLines.filter((l) => missing.includes(l.id)));
                   }, "Missing lines written")
                 }
               >
@@ -1822,7 +1835,7 @@ export function SongApp({
                           disabled={busyLine === s.id}
                           onClick={() =>
                             void lineAction(s.id, async () => {
-                              for (const ids of chunkLines(lines)) await call(`/api/projects/${pid}/flow`, { action: "suggest", lineIds: ids });
+                              await writeInGroups(lines);
                             }, `Lines for ${s.name}`)
                           }
                           title="Write the lines without a flow (free rhythm, fitting the song around them)"
@@ -1849,7 +1862,9 @@ export function SongApp({
                     <PartLength range={partRange(s)} bar={beatGrid ? bar : null} />
                     {busyLine === s.id && (
                       <span className="flex shrink-0 items-center gap-1 text-xs font-semibold text-accent">
-                        <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-accent border-r-transparent" /> Writing lyrics…
+                        <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-accent border-r-transparent" /> Writing lyrics
+                        {writing && writing.total > 1 ? ` · ${writing.done + 1} of ${writing.total}` : "…"}
+                        {writing && <Elapsed since={writing.since} />}
                       </span>
                     )}
                     {tree.audio && <PartVocals off={partVocalsOff(s.id)} busy={separating} onToggle={() => void togglePartVocals(s.id)} />}
@@ -3093,4 +3108,15 @@ function PartMenu(props: {
       </div>
     </div>
   );
+}
+
+/** "· 1:20" — how long the current step has been running (each group of lines takes a minute or two) */
+function Elapsed({ since }: { since: number }) {
+  const [now, setNow] = useState(since);
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const s = Math.max(0, Math.round((now - since) / 1000));
+  return <span className="font-normal tabular-nums text-muted"> · {Math.floor(s / 60)}:{String(s % 60).padStart(2, "0")}</span>;
 }

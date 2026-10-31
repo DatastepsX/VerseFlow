@@ -226,19 +226,42 @@ Each option's "lines" array must contain exactly ${targetIdx.length} line${targe
   return { targetIds: targetIdx.map((k) => lines[k].id), options };
 }
 
-async function callJson<T>(projectId: string, kind: string, prompt: string, schema: object, system = SYSTEM, effort = EFFORT): Promise<T> {
+/** how long a call may think before it is asked again, quicker — within BUDGET_S in all (a request is stopped after 300 s) */
+const CALL_DEADLINE_S = { high: 170, medium: 170, low: 100 } as const;
+const BUDGET_S = 280;
+/** the quicker try when a call runs out of time */
+const QUICKER = { high: "medium", medium: "low", low: null } as const;
+
+async function callJson<T>(projectId: string, kind: string, prompt: string, schema: object, system = SYSTEM, effort = EFFORT, started = Date.now()): Promise<T> {
   const client = new Anthropic();
   // streamed: thinking hard (a part written in depth) can take longer than an unstreamed request may
-  const response = await client.beta.messages
-    .stream({
-      model: MODEL,
-      max_tokens: effort === "high" ? 32000 : 16000,
-      ...(FALLBACKS ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const } : {}),
-      output_config: { effort, format: { type: "json_schema", schema: schema as Record<string, unknown> } },
-      system,
-      messages: [{ role: "user", content: prompt }],
-    })
-    .finalMessage();
+  let response;
+  try {
+    response = await client.beta.messages
+      .stream(
+        {
+          model: MODEL,
+          max_tokens: effort === "high" ? 32000 : 16000,
+          ...(FALLBACKS ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const } : {}),
+          output_config: { effort, format: { type: "json_schema", schema: schema as Record<string, unknown> } },
+          system,
+          messages: [{ role: "user", content: prompt }],
+        },
+        { signal: AbortSignal.timeout(Math.max(5_000, Math.min(CALL_DEADLINE_S[effort] * 1000, BUDGET_S * 1000 - (Date.now() - started)))) },
+      )
+      .finalMessage();
+  } catch (e) {
+    // thinking too long: asked again with less thinking (once there's time left for it), never left to be cut off
+    const quicker = QUICKER[effort];
+    const timedOut = e instanceof Anthropic.APIUserAbortError || (e instanceof Error && (e.name === "TimeoutError" || e.name === "AbortError"));
+    // a quicker try needs a minute or so
+    if (timedOut && quicker && BUDGET_S * 1000 - (Date.now() - started) > 60_000) {
+      console.warn(`[ai] ${kind}: no answer in time at ${effort} effort — asking again at ${quicker}`);
+      return callJson<T>(projectId, kind, prompt, schema, system, quicker, started);
+    }
+    if (timedOut) throw new Error("The AI took too long to answer — try again.");
+    throw e;
+  }
   await recordAiCall(projectId, kind, response.model, response.usage).catch(() => {});
   if (response.stop_reason === "refusal") throw new Error("The AI declined this request. Try rephrasing the direction.");
   if (response.stop_reason === "max_tokens") throw new Error("The AI response was cut off — try again.");
@@ -447,9 +470,9 @@ const NEEDS = new Set(["DECLINED", "NEEDS_NEW_OPTIONS"]);
  */
 /** bars written per call — keeps each call short; a section's chunks run in parallel */
 export const DRAFT_CHUNK = 8;
-/** drafts think less than single-line options: much faster, the writer reviews them anyway */
-// writing a part is where depth matters: it thinks it through (still one call per ~8 lines)
-const DRAFT_EFFORT = (process.env.AI_DRAFT_EFFORT || "high") as "low" | "medium" | "high";
+// writing a part: it plans the part first (DRAFT_SCHEMA) and follows the craft rules — "medium" thinking keeps a
+// call to a minute or two; "high" can think for 5 minutes and more, longer than a request may run
+const DRAFT_EFFORT = (process.env.AI_DRAFT_EFFORT || "medium") as "low" | "medium" | "high";
 
 /**
  * Which bars a fill/replace writes: `n` = bar count of the section,
