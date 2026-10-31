@@ -637,10 +637,19 @@ Return one entry per ${refit ? "[REFIT]" : polish ? "[IMPROVE]" : "[OPEN]"} line
 
   const parsed = await callJson<{ slots: { line: number; options: string[] }[] }>(project.id, `section_${mode}`, prompt, DRAFT_SCHEMA, SYSTEM, DRAFT_EFFORT);
   const drafted = parsed.slots
-    .map((x) => ({ index: x.line - 1, options: x.options.map((o) => o.trim()).filter(Boolean).slice(0, 3) }))
+    .map((x) => ({ index: x.line - 1, options: x.options.map(cleanLyric).filter(Boolean).slice(0, 3) }))
     .filter((x) => slotSet.has(x.index) && x.options.length);
   return { slots: drafted, remaining: later.size };
 }
+
+/** an option as lyrics: the rhythm's marks the AI sometimes copies (| breaks, [ ] fast runs, ~ held) taken out */
+export const cleanLyric = (o: string) =>
+  o
+    .replace(/\s*\|\s*/g, " ")
+    .replace(/[[\]]/g, "")
+    .replace(/~/g, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
 
 /* ---------- flow: suggestions from the writer's sung rhythm ---------- */
 
@@ -729,7 +738,7 @@ For every [WRITE] line you write 3 options. Each option must:
 - have exactly the line's number of syllables (sung syllables, ±1) with the stressed syllables on the DUM positions — it must fit the rhythm the writer sang;
 - end on an open, singable vowel when the last note is held (~);
 - in a fast run ([ ]), pack short, quick words that run together with no break inside — light syllables, few consonant clusters, easy to rap double-time (e.g. "da-DUM [da-da-da-da-DUM-da] | DUM" → "Io lo so [che mi manca la vita] stai");
-- follow the breaks (|): a word, and a phrase, ends at every break, and the words between two breaks are one connected group sung together (e.g. "da-DUM-da-da-DUM | DUM-da-DUM-da | da-da-DUM-da-da-DUM" → "Voglio il silenzio, ogni giorno, sento l'amore con te");
+- follow the breaks (|): a word, and a phrase, ends at every break (the marks |, [ ] and ~ only describe the rhythm — never write them in a line), and the words between two breaks are one connected group sung together (e.g. "da-DUM-da-da-DUM | DUM-da-DUM-da | da-da-DUM-da-da-DUM" → "Voglio il silenzio, ogni giorno, sento l'amore con te");
 - respect its rhyme rule and continue the lines around it, so the song reads as one coherent text about the writer's topic;
 - say something: the rhythm decides the shape of a line, never its content (see the craft rules — no filler, no clichés, concrete images, a part that develops and turns).
 Lines with an "earlier version" got a new rhythm: rewrite that version to it — keep its meaning and its key words, shorten or lengthen it to the new syllable count (e.g. "Ti scrivo piano senza chiedere perché" → 6 syllables: "Ti scrivo dentro me"); the FIRST option stays closest to the earlier version. Neighbouring earlier versions may be merged or split.
@@ -766,7 +775,7 @@ Return one entry per [WRITE] line, "line" = its number.`;
     if (!line || !want.has(line.id)) continue;
     const target = line.flow?.syllables ?? null;
     const fitted = slot.options
-      .map((o) => o.trim())
+      .map(cleanLyric)
       .filter(Boolean)
       .slice(0, 3)
       .map((o, i) => {

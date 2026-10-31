@@ -2060,6 +2060,28 @@ export function SongApp({
                             </button>
                           </div>
                         )}
+                        {/* written lines not kept yet: their options side by side — a rhyming pair for a couplet — tap one, then keep it */}
+                        {(pairs.length ? pairs : group.length === 1 ? [[group[0], null] as const] : []).map(([a, b]) => {
+                          const x = a as LyricLine;
+                          const y = b as LyricLine | null;
+                          if (isKept(x) || (y && isKept(y)) || !x.text.trim()) return null;
+                          const moves: RhymeMove[] = y ? pairMoves(x, y, lang) : x.alternatives.map((alt) => ({ alt }));
+                          if (!moves.length) return null;
+                          const busy = busyLine === x.id || (!!y && busyLine === y.id);
+                          return (
+                            <OptionPicker
+                              key={x.id}
+                              current={[x.text, y?.text ?? null]}
+                              options={moves.map((m) => ({ texts: [m.alt.text, m.partnerAlt?.text ?? null] as [string, string | null], pick: () => void applyMove(x, m) }))}
+                              busy={busy}
+                              onKeep={() =>
+                                void lineAction(x.id, async () => {
+                                  for (const l of y ? [x, y] : [x]) await call(`/api/lines/${l.id}`, { status: "APPROVED", action: "approve" }, "PATCH");
+                                }, y ? "Keep couplet" : "Keep")
+                              }
+                            />
+                          );
+                        })}
                       </div>
                       </div>
                       );
@@ -3125,4 +3147,56 @@ function Elapsed({ since }: { since: number }) {
   }, []);
   const s = Math.max(0, Math.round((now - since) / 1000));
   return <span className="font-normal tabular-nums text-muted"> · {Math.floor(s / 60)}:{String(s % 60).padStart(2, "0")}</span>;
+}
+
+/**
+ * The options of written lines, side by side under them: for a couplet, its rhyming pairs (option 1 of the first
+ * line with option 1 of the second…). Each stays in its place, the one in the lyrics now is marked; tap one to put
+ * it in, "Keep" to keep it. No AI call — they came with the writing.
+ */
+function OptionPicker({
+  current,
+  options,
+  busy,
+  onKeep,
+}: {
+  current: [string, string | null];
+  options: { texts: [string, string | null]; pick: () => void }[];
+  busy: boolean;
+  onKeep: () => void;
+}) {
+  const all = [{ texts: current, pick: null as (() => void) | null }, ...options];
+  // a fixed order, so an option stays where it was when another one is picked
+  const shown = [...all].sort((p, q) => p.texts[0].localeCompare(q.texts[0]));
+  return (
+    <div className="mx-1 mt-1.5 space-y-1.5 rounded-2xl bg-panel-2/60 p-2">
+      <p className="px-1 text-[11px] font-semibold text-muted">
+        {all.length} options · tap one, then keep it
+      </p>
+      {shown.map((o, i) => {
+        const on = o.pick === null;
+        return (
+          <button
+            key={i}
+            className={`flex w-full items-start gap-2 rounded-xl px-2.5 py-2 text-left text-[13px] leading-snug ring-1 transition-colors disabled:opacity-60 ${on ? "bg-accent-soft ring-accent" : "bg-panel ring-line/60 active:bg-panel-2"}`}
+            disabled={busy || on}
+            onClick={() => o.pick?.()}
+            aria-pressed={on}
+          >
+            <span className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${on ? "bg-accent text-white" : "bg-panel-2 text-muted"}`}>
+              {on ? <Check className="h-3 w-3" /> : i + 1}
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block">{o.texts[0]}</span>
+              {o.texts[1] !== null && <span className="block text-fg/80">{o.texts[1]}</span>}
+            </span>
+          </button>
+        );
+      })}
+      <button className="flex h-9 w-full items-center justify-center gap-1.5 rounded-xl bg-ok-soft text-sm font-semibold text-ok disabled:opacity-50" disabled={busy} onClick={onKeep}>
+        {busy ? <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-ok border-r-transparent" /> : <Check className="h-4 w-4" />}
+        Keep {current[1] !== null ? "this couplet" : "this line"}
+      </button>
+    </div>
+  );
 }
