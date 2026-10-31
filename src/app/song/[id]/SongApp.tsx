@@ -1180,11 +1180,16 @@ export function SongApp({
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   /** a change to a line (or a part): busy while it runs, one undo step with this label */
+  /** actions running now: a second tap (before the button shows it's busy) doesn't start — and pay for — it again */
+  const running = useRef(new Set<string>());
   const lineAction = async (id: string, fn: () => Promise<unknown>, label = "Change") => {
+    if (running.current.has(id)) return;
+    running.current.add(id);
     setBusyLine(id);
     try {
       await undoStep(label, fn);
     } finally {
+      running.current.delete(id);
       setBusyLine(null);
     }
   };
@@ -1195,7 +1200,8 @@ export function SongApp({
     try {
       for (const [k, ids] of groups.entries()) {
         setWriting({ done: k, total: groups.length, since: Date.now() });
-        await call(`/api/projects/${pid}/flow`, { action: "suggest", lineIds: ids });
+        // several groups: the song's stable part is cached for the ones after the first
+        await call(`/api/projects/${pid}/flow`, { action: "suggest", lineIds: ids, more: groups.length > 1 });
       }
     } finally {
       setWriting(null);

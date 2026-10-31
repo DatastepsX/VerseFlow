@@ -232,7 +232,15 @@ const BUDGET_S = 280;
 /** the quicker try when a call runs out of time */
 const QUICKER = { high: "medium", medium: "low", low: null } as const;
 
-async function callJson<T>(projectId: string, kind: string, prompt: string, schema: object, system = SYSTEM, effort = EFFORT, started = Date.now()): Promise<T> {
+async function callJson<T>(
+  projectId: string,
+  kind: string,
+  prompt: string | { cached: string; rest: string },
+  schema: object,
+  system = SYSTEM,
+  effort = EFFORT,
+  started = Date.now(),
+): Promise<T> {
   const client = new Anthropic();
   // streamed: thinking hard (a part written in depth) can take longer than an unstreamed request may
   let response;
@@ -244,8 +252,20 @@ async function callJson<T>(projectId: string, kind: string, prompt: string, sche
           max_tokens: effort === "high" ? 32000 : 16000,
           ...(FALLBACKS ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const } : {}),
           output_config: { effort, format: { type: "json_schema", schema: schema as Record<string, unknown> } },
-          system,
-          messages: [{ role: "user", content: prompt }],
+          // the rules (the same in every call): cached, re-read at a twentieth of the price within 5 minutes
+          system: [{ type: "text", text: system, cache_control: { type: "ephemeral" } }],
+          messages: [
+            {
+              role: "user",
+              content:
+                typeof prompt === "string"
+                  ? prompt
+                  : [
+                      { type: "text", text: prompt.cached, cache_control: { type: "ephemeral" } },
+                      { type: "text", text: prompt.rest },
+                    ],
+            },
+          ],
         },
         { signal: AbortSignal.timeout(Math.max(5_000, Math.min(CALL_DEADLINE_S[effort] * 1000, BUDGET_S * 1000 - (Date.now() - started)))) },
       )
@@ -263,6 +283,8 @@ async function callJson<T>(projectId: string, kind: string, prompt: string, sche
     throw e;
   }
   await recordAiCall(projectId, kind, response.model, response.usage).catch(() => {});
+  const u = response.usage;
+  console.info(`[ai] ${kind} ${effort}: ${u.input_tokens} in (+${u.cache_read_input_tokens ?? 0} from cache, ${u.cache_creation_input_tokens ?? 0} to cache), ${u.output_tokens} out`);
   if (response.stop_reason === "refusal") throw new Error("The AI declined this request. Try rephrasing the direction.");
   if (response.stop_reason === "max_tokens") throw new Error("The AI response was cut off — try again.");
   const text = response.content.find((b) => b.type === "text");
@@ -369,7 +391,8 @@ ${available.length ? `Already in the bank — do not repeat:\n${available.map((t
 ${rejected.length ? `Rejected by the writer — avoid similar lines:\n${rejected.map((t) => `- ${t}`).join("\n")}` : ""}
 Do not repeat lines that already exist in the song. "rhyme" is a short label of the shared ending (e.g. "-ore").`;
 
-  const parsed = await callJson<{ families: { rhyme: string; lines: string[] }[] }>(project.id, "bank", prompt, BANK_SCHEMA);
+  // a bank of short candidate lines: little thinking needed
+  const parsed = await callJson<{ families: { rhyme: string; lines: string[] }[] }>(project.id, "bank", prompt, BANK_SCHEMA, SYSTEM, "low");
   const existing = new Set(lines.map((l) => l.text.trim().toLowerCase()));
   return parsed.families
     .map((f) => ({ rhyme: f.rhyme.slice(0, 20), lines: f.lines.map((l) => l.trim()).filter((l) => l && !existing.has(l.toLowerCase())) }))
@@ -404,7 +427,8 @@ Line to fit: “${text}” → ${cur.syllables} syllables
 Rewrite the line to fit the template: exactly ${ref.syllables} sung syllables (count vowel merges between words), stresses in the same places, same ending type.
 Keep its meaning and image, keep the final word “${end}” (it carries the rhyme), sound natural and performable — no filler padding.
 Return ${opts.count ?? 3} different versions.`;
-  const parsed = await callJson<{ lines: string[] }>(tree.project.id, "fit_line", prompt, FIT_SCHEMA);
+  // a line fitted to a rhythm it is given: little thinking needed
+  const parsed = await callJson<{ lines: string[] }>(tree.project.id, "fit_line", prompt, FIT_SCHEMA, SYSTEM, "low");
   return parsed.lines
     .map((l) => l.trim())
     .filter(Boolean)
@@ -626,7 +650,7 @@ Return one entry per ${refit ? "[REFIT]" : polish ? "[IMPROVE]" : "[OPEN]"} line
  * in couplets. Every option is checked with the syllable counter and nudged
  * onto the target length; the best fitting comes first.
  */
-export async function flowSuggest(tree: ProjectTree, lineIds: string[]) {
+export async function flowSuggest(tree: ProjectTree, lineIds: string[], call: { more?: boolean } = {}) {
   if (!aiConfigured()) throw new AiUnavailable("AI is not configured yet (ANTHROPIC_API_KEY missing).");
   const { project } = tree;
   const lang = project.language;
@@ -640,7 +664,8 @@ export async function flowSuggest(tree: ProjectTree, lineIds: string[]) {
   // from the vocals in the uploaded song: the recorded words are the lyrics and stay — options are alternatives
   const recorded = (l: Line) => l.flow?.source === "vocals" && !!l.text.trim();
   const vocals = targets.some((x) => recorded(x.l));
-  const listing = tree.sections
+  const firstTarget = tree.sections.findIndex((x) => x.id === targets[0].s.id);
+  const listingOf = (sections: ProjectTree["sections"]) => sections
     .map((s) => {
       const lyric = s.lines.filter((l) => l.kind === "lyric");
       const rows = lyric.map((l) => {
@@ -660,6 +685,9 @@ export async function flowSuggest(tree: ProjectTree, lineIds: string[]) {
       return `${s.name}${performedBy(tree, s)}:\n${rows.join("\n")}`;
     })
     .join("\n\n");
+  // the parts before the one being written stay the same from one group of lines to the next: cached
+  const listingBefore = listingOf(tree.sections.slice(0, firstTarget));
+  const listingFrom = listingOf(tree.sections.slice(firstTarget));
   // couplets: as sung (a line ends on its rhyme — flow.pair), else lines 1+2, 3+4… of each section
   const rhymes: string[] = [];
   /** every couplet with a line being written, to keep its options rhyming pairwise */
@@ -690,21 +718,13 @@ export async function flowSuggest(tree: ProjectTree, lineIds: string[]) {
     })
     .filter(Boolean)
     .join("\n\n");
-  const prompt = `PROJECT
+  // stable first — the rules, what was sung, the parts before — so a part written in groups re-reads it from the cache
+  const stable = `PROJECT
 Title: ${project.title}
 Language: ${langName(lang)}
 ${st.genre ? `Genre: ${st.genre}\n` : ""}${st.style ? `Style: ${st.style}\n` : ""}${project.concept ? `Story / concept: ${project.concept}\n` : ""}
-WHAT THE WRITER SANG over the beat to find the flow (recognised words per line; "(na-na)" = sounds without words):
-${sang}
-
-These were sung only to find the rhythm — placeholder words, NOT lyrics. Don't copy or paraphrase them; at most they hint at the mood. The topic comes from the brief, the concept and the rest of the song.
-
-THE SONG (rhythm per line: DUM = stressed syllable, ~ = the last note is held, | = a short break in the singing, [ ] = a fast run — rapped double-time)
-${listing}
-
-${rhymes.length ? `RHYMES\n${rhymes.join("\n")}\n` : ""}${briefs ? `\n${briefs}\n` : ""}
-TASK
-For every [WRITE] line write 3 options. Each option must:
+HOW TO WRITE
+For every [WRITE] line you write 3 options. Each option must:
 - have exactly the line's number of syllables (sung syllables, ±1) with the stressed syllables on the DUM positions — it must fit the rhythm the writer sang;
 - end on an open, singable vowel when the last note is held (~);
 - in a fast run ([ ]), pack short, quick words that run together with no break inside — light syllables, few consonant clusters, easy to rap double-time (e.g. "da-DUM [da-da-da-da-DUM-da] | DUM" → "Io lo so [che mi manca la vita] stai");
@@ -714,13 +734,28 @@ For every [WRITE] line write 3 options. Each option must:
 Lines with an "earlier version" got a new rhythm: rewrite that version to it — keep its meaning and its key words, shorten or lengthen it to the new syllable count (e.g. "Ti scrivo piano senza chiedere perché" → 6 syllables: "Ti scrivo dentro me"); the FIRST option stays closest to the earlier version. Neighbouring earlier versions may be merged or split.
 The rhyme matters most: the last words of a couplet must truly rhyme — the same ending from the stressed vowel on (cuore / amore, notte / forte), not just one shared vowel, and never the same word as the line it rhymes with (sei / sei, te / te is no rhyme) — and the 3 options end on 3 different words; in a couplet that is written together, option 1 rhymes with option 1, option 2 with option 2, option 3 with option 3.
 Make the 3 options clearly different — in image or angle, not just in wording — while each stays true to the plan.
-${PLAN_FIRST}${
+${PLAN_FIRST}
+
+WHAT THE WRITER SANG over the beat to find the flow (recognised words per line; "(na-na)" = sounds without words):
+${sang}
+
+These were sung only to find the rhythm — placeholder words, NOT lyrics. Don't copy or paraphrase them; at most they hint at the mood. The topic comes from the brief, the concept and the rest of the song.
+
+THE SONG (rhythm per line: DUM = stressed syllable, ~ = the last note is held, | = a short break in the singing, [ ] = a fast run — rapped double-time)
+${listingBefore}`;
+  const rest = `${listingFrom}
+
+${rhymes.length ? `RHYMES\n${rhymes.join("\n")}\n` : ""}${briefs ? `\n${briefs}\n` : ""}
+TASK
+Write 3 options for every [WRITE] line, following HOW TO WRITE.${
     vocals
       ? `\nLines marked "recorded" are the writer's own lyrics from the vocals in the song — they stay. For those, write 3 ALTERNATIVE lines: same rhythm and rhyme sound, same meaning direction, different wording — never the recorded line itself.`
       : ""
   }
 Return one entry per [WRITE] line, "line" = its number.`;
 
+  // more groups follow: the stable part is written to the cache (the next calls read it at a twentieth of the price)
+  const prompt = call.more ? { cached: stable, rest } : `${stable}\n\n${rest}`;
   const parsed = await callJson<{ slots: { line: number; options: string[] }[] }>(project.id, "flow_suggest", prompt, DRAFT_SCHEMA, SYSTEM, DRAFT_EFFORT);
   const byNum = new Map(all.map((x, i) => [i + 1, x.l]));
   type Opt = { text: string; off: number; i: number };

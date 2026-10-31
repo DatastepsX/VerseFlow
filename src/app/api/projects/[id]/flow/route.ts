@@ -6,6 +6,9 @@ import { access } from "@/lib/server/users";
 
 export const maxDuration = 300;
 
+/** lines being written right now (per song and lines) */
+const writingNow = new Map<string, Promise<unknown>>();
+
 /**
  * The song from the writer's flow:
  *  transcribe {takeId}  → {words}  1 ElevenLabs call: the words sung in the flow take
@@ -20,6 +23,7 @@ export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]/f
     await access((await ctx.params).id, "edit");
     const { id } = await ctx.params;
     const b = await body<{
+      more?: unknown;
       action: string;
       takeId?: string;
       lines?: { start: number; sungAt: number; end?: number; syllables: number; stress: number[]; held: boolean; words: string; times?: number[]; pair?: number }[];
@@ -70,7 +74,15 @@ export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]/f
     }
     if (b.action === "suggest") {
       const ids = (b.lineIds ?? []).filter((x) => typeof x === "string").slice(0, 16);
-      await applyFlowOptions(id, await flowSuggest(await getTree(id), ids));
+      // the same lines asked for twice at once (a double tap, two devices): written once, both get the result
+      const key = `${id}:${[...ids].sort().join(",")}`;
+      let job = writingNow.get(key);
+      if (!job) {
+        // more: other groups of the same part follow (its stable part is cached for them)
+        job = (async () => applyFlowOptions(id, await flowSuggest(await getTree(id), ids, { more: b.more === true })))().finally(() => writingNow.delete(key));
+        writingNow.set(key, job);
+      }
+      await job;
       return treeResponse(id);
     }
     return Response.json({ error: "Unknown action" }, { status: 400 });
