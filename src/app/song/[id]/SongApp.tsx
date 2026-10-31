@@ -3257,11 +3257,29 @@ function OptionPicker({
   const all = [{ texts: current, pick: null as (() => void) | null }, ...options];
   // a fixed order, so an option stays where it was when another one is picked
   const shown = [...all].sort((p, q) => p.texts[0].localeCompare(q.texts[0]));
+  // closed until asked for: the lyrics read clean
+  const [open, setOpen] = useState(false);
+  if (!open)
+    return (
+      <div className="mx-1 mt-1 flex justify-end">
+        <button
+          className="inline-flex items-center gap-1 rounded-full bg-panel-2/70 px-2.5 py-1 text-[11px] font-semibold text-accent active:bg-accent-soft"
+          onClick={() => setOpen(true)}
+          aria-expanded={false}
+        >
+          <Shuffle className="h-3 w-3" />
+          {all.length} options
+        </button>
+      </div>
+    );
   return (
     <div className="mx-1 mt-1.5 space-y-1.5 rounded-2xl bg-panel-2/60 p-2">
-      <p className="px-1 text-[11px] font-semibold text-muted">
-        {all.length} options · tap one, then keep it
-      </p>
+      <div className="flex items-center px-1">
+        <p className="flex-1 text-[11px] font-semibold text-muted">{all.length} options · tap one, then keep it</p>
+        <button className="text-[11px] font-semibold text-accent" onClick={() => setOpen(false)} aria-expanded>
+          Hide
+        </button>
+      </div>
       {shown.map((o, i) => {
         const on = o.pick === null;
         return (
