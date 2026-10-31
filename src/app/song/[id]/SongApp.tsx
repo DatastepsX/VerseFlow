@@ -25,6 +25,7 @@ import { download, fullText } from "@/components/writer/util";
 import { VoiceSheet, type VoiceInfo } from "./VoiceSheet";
 import { RecordView } from "./Record";
 import { Mixer, type ExportOptions } from "./Mixer";
+import { RhymeSheet, useWordTaps } from "./RhymeWords";
 import { NewNotesBanner, NotePreview, NotesSheet, notesOf, useNotesSeen } from "./Notes";
 import { encodeMp3, exportStems as exportStemsZip, logicNote, renderAll, safeName, type Stem } from "@/lib/studio/export";
 import { encodeWav } from "@/lib/studio/wav";
@@ -865,6 +866,8 @@ export function SongApp({
   const [partMenu, setPartMenu] = useState<string | null>(null);
   /** the line whose notes are open */
   const [notesFor, setNotesFor] = useState<string | null>(null);
+  /** double-tapped word: its rhymes */
+  const [rhymeWord, setRhymeWord] = useState<string | null>(null);
   /** notes new to you: shown in the lyrics until opened */
   const notesSeen = useNotesSeen(tree.project.id);
   /** the part merges into the one before it: its lines move there (one undo step) */
@@ -2009,6 +2012,7 @@ export function SongApp({
                             noteList={notesOf(tree, l.id)}
                             isNewNote={notesSeen.isNew}
                             onNotes={() => setNotesFor(l.id)}
+                            onRhymes={setRhymeWord}
                             onNewPart={
                               s.lines.findIndex((x) => x.id === l.id) > 0
                                 ? () => {
@@ -2224,6 +2228,7 @@ export function SongApp({
             />
           );
         })()}
+      {rhymeWord && <RhymeSheet word={rhymeWord} lang={lang} onClose={() => setRhymeWord(null)} />}
       {notesFor &&
         (() => {
           const line = tree.sections.flatMap((x) => x.lines).find((x) => x.id === notesFor);
@@ -2318,6 +2323,8 @@ function LineCard(props: {
   /** notes on the line (comments, voice messages): how many, and open them */
   notes: number;
   onNotes: () => void;
+  /** a word double-tapped: its rhymes */
+  onRhymes: (word: string) => void;
   /** the line's notes (shown under it) and which are new to you */
   noteList: LineNote[];
   isNewNote: (n: LineNote) => boolean;
@@ -2370,6 +2377,8 @@ function LineCard(props: {
   const target = l.flow?.syllables ?? null;
   const syl = l.text.trim() ? prosody(l.text, lang).syllables : 0;
   const fits = target !== null && syl > 0 ? Math.abs(syl - target) <= 1 : null;
+  // one tap opens / closes the line; two on a word: its rhymes
+  const taps = useWordTaps(props.onRhymes);
   const lineText = (
     <span className={`text-[17px] leading-snug ${l.text.trim() ? "" : "italic text-muted"}`}>
       {l.text.trim() ? (
@@ -2393,7 +2402,7 @@ function LineCard(props: {
       <div>
       <button
         id={`line-${l.id}`}
-        onClick={props.onToggle}
+        onClick={(e) => taps(e, props.onToggle)}
         className={`flex w-full items-start gap-2 rounded-2xl px-3 py-1 text-left transition-colors ${props.live ? "bg-accent-soft" : "active:bg-panel-2"}`}
       >
         <span className="min-w-0 flex-1">{lineText}</span>
@@ -2453,7 +2462,7 @@ function LineCard(props: {
         </div>
       ) : (
         <>
-          <button className="block w-full text-left" onClick={props.onToggle} title="Close">
+          <button className="block w-full text-left" onClick={(e) => taps(e, props.onToggle)} title="Close · double-tap a word: its rhymes">
             {lineText}
           </button>
           {props.beatGrid && (l.flow || l.audio_at !== null) ? (

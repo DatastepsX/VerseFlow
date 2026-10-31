@@ -160,6 +160,10 @@ song and on every device. Kept with the profile (table `user_settings`, one row;
 browser for a fast start (`src/lib/client/profile.ts`, `usePref`). The timing is kept per kind of device
 (`vf.studio.latency[.vp].iPhone`, `.Mac`…): each has its own delay. The microphone choice stays on the device.
 
+**Rhymes for a word** (Lyrics: double-tap or double-click a word): its rhymes and near rhymes from the rhyme
+dictionary (`/api/rhymes`, no AI call), by syllable count — tap one to copy it (`RhymeWords.tsx`). A single tap still
+opens the line (it waits a moment for a second tap).
+
 **Undo / redo** (top bar, ⌘Z): one step per action (`undo_steps`; a multi-request action sends one `x-undo-step`).
 A rebuilt song is undone by restoring the version saved before it.
 
