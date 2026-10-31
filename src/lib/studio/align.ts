@@ -360,27 +360,82 @@ export function onsets(x: Float32Array, sr: number): number[] {
   return out;
 }
 
+/** where the grid's steps fall: every `step` from `origin`; with swing, every second step comes up to a third of a step later */
+export interface Grid {
+  origin: number;
+  step: number;
+  /** 0 (straight) … 1 (a full shuffle: the off-step a third of a step late) */
+  swing?: number;
+}
+
+/** the grid step nearest to a song time */
+export function nearestStep(song: number, grid: Grid) {
+  const k0 = Math.round((song - grid.origin) / grid.step);
+  let best = Infinity;
+  for (const k of [k0 - 1, k0, k0 + 1]) {
+    const g = grid.origin + k * grid.step + (grid.swing && Math.abs(k) % 2 === 1 ? (grid.swing * grid.step) / 3 : 0);
+    if (Math.abs(g - song) < Math.abs(best - song)) best = g;
+  }
+  return best;
+}
+
 /**
  * The take's syllables onto the beat grid. `start`: the take's place in the song (s); the grid: its first
- * step (s, e.g. bar 1) and its step (s, a 16th = a beat / 4). Each onset within `reach` of a step (as a part
- * of a step) moves `strength` of the way to it.
+ * step (s, e.g. bar 1), its step (s, a 16th = a beat / 4) and its swing. Each onset within `reach` of a step
+ * (as a part of a step) moves `strength` of the way to it.
  */
-export function toGrid(take: Float32Array, sr: number, start: number, grid: { origin: number; step: number }, strength = 1, reach = 0.45): SyncResult {
+export function toGrid(take: Float32Array, sr: number, start: number, grid: Grid, strength = 1, reach = 0.45): SyncResult {
+  return toTargets(take, sr, start, (song) => nearestStep(song, grid), reach * grid.step, strength);
+}
+
+/**
+ * The take's syllables onto given song times (the flow written for its lines): each onset moves `strength` of
+ * the way to the nearest one within `reach` (s).
+ */
+export function toTimes(take: Float32Array, sr: number, start: number, times: number[], strength = 1, reach = 0.12): SyncResult {
+  const sorted = [...times].sort((a, b) => a - b);
+  const nearest = (song: number) => {
+    let best = Infinity;
+    for (const t of sorted) if (Math.abs(t - song) < Math.abs(best - song)) best = t;
+    return best;
+  };
+  return toTargets(take, sr, start, nearest, reach, strength);
+}
+
+function toTargets(take: Float32Array, sr: number, start: number, target: (song: number) => number, reach: number, strength: number): SyncResult {
   const on = onsets(take, sr);
   const points: { out: number; src: number }[] = [];
   let moved = 0;
   for (const t of on) {
     const song = start + t;
-    const k = Math.round((song - grid.origin) / grid.step);
-    const g = grid.origin + k * grid.step;
-    const d = g - song;
-    if (Math.abs(d) > reach * grid.step) continue;
-    const to = t + strength * d;
-    points.push({ out: to, src: t });
+    const d = target(song) - song;
+    if (!Number.isFinite(d) || Math.abs(d) > reach) continue;
+    points.push({ out: t + strength * d, src: t });
     moved += Math.abs(strength * d);
   }
   const end = take.length / sr;
   const kept = steady([{ out: 0, src: 0 }, ...points, { out: end, src: end }]);
   const count = kept.length - 2;
   return { samples: warpAudio(take, sr, mapFrom(kept)), moved: points.length ? moved / points.length : 0, count: Math.max(0, count) };
+}
+
+/**
+ * The whole take moved, not bent: the shift (s, within half a step either way) that puts its syllables
+ * nearest the grid overall — the sound stays exactly as sung.
+ */
+export function bestShift(take: Float32Array, sr: number, start: number, grid: Grid): { shift: number; count: number } {
+  const on = onsets(take, sr);
+  if (!on.length) return { shift: 0, count: 0 };
+  const half = grid.step / 2;
+  let best = { shift: 0, cost: Infinity };
+  for (let d = -half; d <= half + 1e-9; d += 0.002) {
+    let cost = 0;
+    for (const t of on) {
+      const song = start + t + d;
+      cost += Math.min(half, Math.abs(nearestStep(song, grid) - song)) ** 2;
+    }
+    // ties: the smaller move
+    if (cost < best.cost - 1e-9 || (Math.abs(cost - best.cost) < 1e-9 && Math.abs(d) < Math.abs(best.shift))) best = { shift: d, cost };
+  }
+  return { shift: Math.round(best.shift * 1000) / 1000, count: on.length };
 }

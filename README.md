@@ -127,6 +127,12 @@ ElevenLabs stem-separation call (`two_stems_v1`) splits the uploaded song into i
 both are stored next to the song (`audio_tracks.instrumental_path` / `vocals_path`), which stays as uploaded. Then
 "Music only" / "With the vocals" chooses what plays, records and flows use (saved per song on the device).
 
+**In time** (Record → ⇄ Sync on a take or the whole part; `src/lib/studio/sync.ts`, `align.ts`, no AI call): each take
+gets a way — **Beat** (syllables pulled toward a grid: 1/4, 1/8, 1/16, 1/8T, 1/16T, with swing and a strength of
+25–100%), **Flow** (onto the timing of the flow written for the lines), **Shift** (the whole take moved earlier or later,
+the sound untouched) or **Lead** (a double stretched onto the Lead). Each sync makes a new take; the sheet then plays
+the new and the original (▶), switches between them, and syncs again from the originals with other settings.
+
 **Sync words to a take** (Record → a take → "Sync words · 1 call"; `alignTake` in `src/lib/server/transcribe.ts`,
 `src/lib/flow/align.ts`): one ElevenLabs forced-alignment call with the take and the written lines it sings (those
 starting inside it, else its part's). Every sung syllable gets the time it was rapped: the lines' `flow.times` (karaoke,

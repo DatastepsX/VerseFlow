@@ -1,7 +1,7 @@
 "use client";
 
 import type { ProjectTree, Take } from "@/lib/types";
-import { toGrid, toGuide } from "./align";
+import { bestShift, toGrid, toGuide, toTimes } from "./align";
 import { encodeWav, peaksOf } from "./wav";
 
 /**
@@ -13,7 +13,28 @@ import { encodeWav, peaksOf } from "./wav";
 /** below this, a take doesn't sing what the Lead sings (lib/studio/align: toGuide's match) */
 const MIN_MATCH = 0.2;
 
-export type SyncMode = { to: "beat"; grid: 4 | 2; strength: number } | { to: "lead" };
+/**
+ * How a take is brought in time:
+ *  beat  — each syllable toward the grid (`grid`: steps per beat — 1 quarter, 2 eighth, 4 16th, 3 / 6 triplets),
+ *          `strength` of the way, with `swing` (0 straight … 1 shuffle)
+ *  flow  — each syllable toward the timing of the flow written for its lines
+ *  shift — the whole take moved (not bent) to sit best on the grid
+ *  lead  — stretched to follow the part's Lead (doubles, ad-libs on the same words)
+ */
+export type SyncMode =
+  | { to: "beat"; grid: number; strength: number; swing?: number }
+  | { to: "flow"; strength: number }
+  | { to: "shift"; grid: number; swing?: number }
+  | { to: "lead" };
+
+export const GRIDS: { steps: number; label: string }[] = [
+  { steps: 1, label: "1/4" },
+  { steps: 2, label: "1/8" },
+  { steps: 4, label: "1/16" },
+  { steps: 3, label: "1/8T" },
+  { steps: 6, label: "1/16T" },
+];
+const gridName = (steps: number) => GRIDS.find((g) => g.steps === steps)?.label ?? `1/${steps * 4}`;
 
 export interface SyncJob {
   take: Take;
@@ -66,16 +87,33 @@ async function post<T>(url: string, body: unknown, method = "POST"): Promise<{ d
 }
 
 export const noteOf = (mode: SyncMode, lead: Take | null) =>
-  mode.to === "lead" ? `follows Lead ${lead?.take_no ?? ""}`.trim() : `on the beat · 1/${mode.grid === 4 ? 16 : 8}${mode.strength < 1 ? ` · ${Math.round(mode.strength * 100)}%` : ""}`;
+  mode.to === "lead"
+    ? `follows Lead ${lead?.take_no ?? ""}`.trim()
+    : mode.to === "flow"
+      ? `on the flow${mode.strength < 1 ? ` · ${Math.round(mode.strength * 100)}%` : ""}`
+      : mode.to === "shift"
+        ? `moved onto ${gridName(mode.grid)}${mode.swing ? ` · swing ${Math.round(mode.swing * 100)}%` : ""}`
+        : `on the beat · ${gridName(mode.grid)}${mode.strength < 1 ? ` · ${Math.round(mode.strength * 100)}%` : ""}${mode.swing ? ` · swing ${Math.round(mode.swing * 100)}%` : ""}`;
+
+/** the song times of the flow written for a part's lines (each syllable's place) */
+export function flowTimes(tree: ProjectTree, sectionId: string | null) {
+  const s = tree.sections.find((x) => x.id === sectionId);
+  return s ? s.lines.flatMap((l) => l.flow?.times ?? []) : [];
+}
 
 /**
  * Runs the jobs one after the other; each makes a new take. Returns the song as it is after the last one,
  * and what moved (for the message).
  */
-export async function syncTakes(tree: ProjectTree, jobs: SyncJob[], progress: (text: string) => void): Promise<{ tree: ProjectTree; done: string[] }> {
+export async function syncTakes(
+  tree: ProjectTree,
+  jobs: SyncJob[],
+  progress: (text: string) => void,
+): Promise<{ tree: ProjectTree; done: string[]; made: { from: Take; id: string; label: string }[] }> {
   const pid = tree.project.id;
   const bpm = tree.audio?.bpm;
   const done: string[] = [];
+  const made: { from: Take; id: string; label: string }[] = [];
   let latest = tree;
   for (const [n, job] of jobs.entries()) {
     const t = job.take;
@@ -102,10 +140,22 @@ export async function syncTakes(tree: ProjectTree, jobs: SyncJob[], progress: (t
         why = " (it doesn't sing the Lead's words, so it went onto the beat)";
       }
     }
-    if (mode.to === "beat") {
+    let startAt = t.start_at;
+    if (mode.to === "beat" || mode.to === "shift") {
       if (!bpm) throw new Error("The song's tempo isn't known: set it in More → The beat.");
-      const step = 60 / bpm / mode.grid;
-      result = toGrid(take.x, take.sr, t.start_at, { origin: tree.audio?.beat_offset ?? 0, step }, mode.strength);
+      const grid = { origin: tree.audio?.beat_offset ?? 0, step: 60 / bpm / mode.grid, swing: mode.swing ?? 0 };
+      if (mode.to === "beat") result = toGrid(take.x, take.sr, t.start_at, grid, mode.strength);
+      else {
+        // the sound as sung, only its place changes
+        const b = bestShift(take.x, take.sr, t.start_at, grid);
+        startAt = Math.round((t.start_at + b.shift) * 1000) / 1000;
+        result = { samples: take.x, moved: Math.abs(b.shift), count: b.count ? 1 : 0 };
+      }
+    }
+    if (mode.to === "flow") {
+      const times = flowTimes(latest, t.section_id);
+      if (!times.length) throw new Error(`${label}: this part has no flow yet — set one in Flow, or sync on the beat.`);
+      result = toTimes(take.x, take.sr, t.start_at, times, mode.strength);
     }
     if (!result) continue;
     progress(`${label} · ${n + 1}/${jobs.length} · saving`);
@@ -121,7 +171,7 @@ export async function syncTakes(tree: ProjectTree, jobs: SyncJob[], progress: (t
       path: up.path,
       section_id: t.section_id,
       lane: t.lane,
-      start_at: t.start_at,
+      start_at: startAt,
       duration: result.samples.length / take.sr,
       sample_rate: take.sr,
       peaks: peaksOf(result.samples, 160),
@@ -132,7 +182,16 @@ export async function syncTakes(tree: ProjectTree, jobs: SyncJob[], progress: (t
     // the same cut, volume and pan as the take it came from
     if (id && (t.trim_in > 0 || t.trim_out !== null)) latest = (await post<ProjectTree>(`/api/takes/${id}`, { trim: { from: t.trim_in, to: t.trim_out } }, "PATCH")).data;
     if (id && ((t.gain ?? 1) !== 1 || (t.pan ?? 0) !== 0)) latest = (await post<ProjectTree>(`/api/takes/${id}`, { gain: t.gain ?? 1, pan: t.pan ?? 0 }, "PATCH")).data;
-    done.push(`${t.lane}: ${result.count ? `moved ${Math.round(result.moved * 1000)} ms on average` : "already in time"}${why}`);
+    const how =
+      mode.to === "shift"
+        ? startAt === t.start_at
+          ? "already in time"
+          : `moved ${Math.round(Math.abs(startAt - t.start_at) * 1000)} ms ${startAt < t.start_at ? "earlier" : "later"} as a whole`
+        : result.count
+          ? `moved ${Math.round(result.moved * 1000)} ms on average`
+          : "already in time";
+    done.push(`${t.lane}: ${how}${why}`);
+    if (id) made.push({ from: t, id, label: `${t.lane} · ${noteOf(mode, lead)}` });
   }
-  return { tree: latest, done };
+  return { tree: latest, done, made };
 }

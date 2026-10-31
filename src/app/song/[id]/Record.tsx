@@ -12,7 +12,7 @@ import { keyName, NOTE_NAMES } from "@/lib/fx/tune";
 import { followTo } from "@/components/writer/follow";
 import { fmtTime } from "@/lib/audio/song-map";
 import { louderGain, pct, TAKE_MAX } from "@/lib/studio/mix";
-import { leadOf, partJobs, syncTakes, type SyncJob, type SyncMode } from "@/lib/studio/sync";
+import { flowTimes, GRIDS, leadOf, partJobs, syncTakes, type SyncJob, type SyncMode } from "@/lib/studio/sync";
 import { NotesBadge, NotesSheet, notesOf, useNotesSeen } from "./Notes";
 import { VolumeSlider } from "@/components/VolumeSlider";
 import { undoHeaders, undoStep } from "@/lib/undo-group";
@@ -179,6 +179,12 @@ function RecordScreen({ r, tree, setTree, rangeOf, bar, timeline, onBusy, host, 
   useEffect(() => {
     if (live) followTo(document.getElementById(`rec-${live}`));
   }, [live]);
+  // a take starts, or one ends: back to the part's first line (even after scrolling by hand) — ready for the next take
+  const firstLine = lines[0]?.id ?? null;
+  const taking = recording || r.status === "saving";
+  useEffect(() => {
+    if (firstLine) followTo(document.getElementById(`rec-${firstLine}`), true);
+  }, [taking, firstLine]);
   // a computer: space = play / stop, R = record
   useEffect(() => {
     if (r.remote) return;
@@ -300,7 +306,8 @@ function RecordScreen({ r, tree, setTree, rangeOf, bar, timeline, onBusy, host, 
           <div className="mt-2 space-y-1" style={{ fontSize: SIZES[size] ?? SIZES.M, lineHeight: 1.35 }}>
             {lines.length === 0 && <p className="text-sm text-muted">No lyrics in this part yet — record anyway (ad-libs, a hook…), or write them in Lyrics.</p>}
             {lines.map((l, k) => {
-              const isLive = l.id === live;
+              // the count-in: the first line is the one coming
+              const isLive = l.id === live || (r.status === "countin" && !live && k === 0);
               const liveAt = live ? lines.findIndex((x) => x.id === live) : -1;
               // when each line starts on the beat, and when the next one does (its syllables share that time)
               const starts = timeline.get(section.id)?.starts ?? [];
@@ -605,6 +612,7 @@ function RecordScreen({ r, tree, setTree, rangeOf, bar, timeline, onBusy, host, 
                 })()
           }
           title={"part" in timing ? `Sync ${section?.name ?? "the part"}` : "Sync this take"}
+          r={r}
           onDone={(t) => setTree(t)}
           onClose={() => setTiming(null)}
         />
@@ -1321,99 +1329,169 @@ function MicSheet({ r, onClose }: { r: Recorder; onClose: () => void }) {
  * Takes in time: each one onto the beat (its syllables pulled onto the grid) or following the part's Lead
  * (a double, ad-libs: syllable by syllable). Every take synced becomes a new take — the one it came from stays.
  */
-function SyncSheet({ tree, jobs: initial, title, onDone, onClose }: { tree: ProjectTree; jobs: SyncJob[]; title: string; onDone: (t: ProjectTree) => void; onClose: () => void }) {
-  const [jobs, setJobs] = useState(initial);
+function SyncSheet({
+  tree,
+  jobs: initial,
+  title,
+  r,
+  onDone,
+  onClose,
+}: {
+  tree: ProjectTree;
+  jobs: SyncJob[];
+  title: string;
+  r: Recorder;
+  onDone: (t: ProjectTree) => void;
+  onClose: () => void;
+}) {
+  type How = "beat" | "flow" | "shift" | "lead";
+  // the takes as the sheet opened: syncing again starts from them (not from the takes the last sync made)
+  const [jobs] = useState(initial);
+  // each take's way in time; the settings are shared by all
+  const [hows, setHows] = useState<How[]>(jobs.map((j) => j.mode.to));
+  const first = jobs.find((j) => j.mode.to === "beat")?.mode as Extract<SyncMode, { to: "beat" }> | undefined;
+  const [grid, setGrid] = useState(first?.grid ?? 4);
+  const [strength, setStrength] = useState(first?.strength ?? 0.75);
+  const [swing, setSwing] = useState(0);
   const [busy, setBusy] = useState<string | null>(null);
-  const [result, setResult] = useState<string[] | null>(null);
+  const [result, setResult] = useState<{ done: string[]; made: { from: SyncJob["take"]; id: string; label: string }[] } | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const seg = (on: boolean) => `flex-1 rounded-full px-2 py-1.5 text-xs font-semibold ${on ? "bg-panel text-fg shadow-sm" : "text-muted"}`;
-  const set = (i: number, mode: SyncMode) => setJobs(jobs.map((j, k) => (k === i ? { ...j, mode } : j)));
-  const beat = jobs.find((j) => j.mode.to === "beat")?.mode as Extract<SyncMode, { to: "beat" }> | undefined;
-  const setBeat = (patch: Partial<Extract<SyncMode, { to: "beat" }>>) => setJobs(jobs.map((j) => (j.mode.to === "beat" ? { ...j, mode: { ...j.mode, ...patch } } : j)));
+  const seg = (on: boolean) => `flex-1 rounded-full px-1.5 py-1.5 text-xs font-semibold ${on ? "bg-panel text-fg shadow-sm" : "text-muted"}`;
+  const hasFlow = (sectionId: string | null) => flowTimes(tree, sectionId).length > 0;
+  const modeOf = (how: How): SyncMode =>
+    how === "lead" ? { to: "lead" } : how === "flow" ? { to: "flow", strength } : how === "shift" ? { to: "shift", grid, swing } : { to: "beat", grid, strength, swing };
+  const uses = (h: How) => hows.includes(h);
+  const row = (label: string, body: ReactNode) => (
+    <div className="flex items-center gap-2 text-xs">
+      <span className="w-16 shrink-0 text-muted">{label}</span>
+      <div className="flex flex-1 rounded-full bg-panel-2 p-1">{body}</div>
+    </div>
+  );
+  const HOW_HINT: Record<How, string> = {
+    beat: "each syllable pulled toward the grid",
+    flow: "each syllable onto the flow written for the lines",
+    shift: "the whole take moved earlier or later — the sound stays exactly as sung",
+    lead: "stretched to land on the Lead's syllables (doubles, ad-libs)",
+  };
   return (
     <div className="fixed inset-0 z-40 flex items-end justify-center bg-black/40" onClick={() => !busy && onClose()}>
       <div onClick={(e) => e.stopPropagation()} className="max-h-[92dvh] w-full max-w-lg space-y-4 overflow-auto rounded-t-3xl bg-panel px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-3">
         <div className="mx-auto h-1.5 w-10 rounded-full bg-line" />
         <div>
           <h2 className="text-xl font-bold">{title}</h2>
-          <p className="text-xs text-muted">Each take synced becomes a new take (pitch kept) — the one it came from stays, to choose again. No AI call.</p>
+          <p className="text-xs text-muted">Each sync makes a new take (pitch kept) — the one it came from stays: listen to both, keep the better, or try other settings. No AI call.</p>
         </div>
         {!jobs.length && <p className="text-sm text-muted">No take to sync here yet.</p>}
         <div className="space-y-2">
           {jobs.map((j, i) => {
             const lead = leadOf(tree, j.take.section_id);
             const canFollow = j.take.lane !== "Lead" && !!lead && lead.id !== j.take.id;
+            const choices: [How, string, boolean][] = [
+              ["beat", "Beat", true],
+              ["flow", "Flow", hasFlow(j.take.section_id)],
+              ["shift", "Shift", true],
+              ["lead", canFollow ? `Lead ${lead!.take_no}` : "Lead", canFollow],
+            ];
             return (
               <div key={j.take.id} className="rounded-2xl bg-panel-2/70 px-3.5 py-2.5">
                 <p className="text-sm font-semibold">
                   {j.take.lane} · take {j.take.take_no}
                 </p>
                 <div className="mt-1.5 flex rounded-full bg-panel-2 p-1">
-                  <button className={seg(j.mode.to === "beat")} onClick={() => set(i, { to: "beat", grid: beat?.grid ?? 4, strength: beat?.strength ?? 0.75 })}>
-                    On the beat
-                  </button>
-                  <button className={seg(j.mode.to === "lead")} disabled={!canFollow} onClick={() => canFollow && set(i, { to: "lead" })}>
-                    {canFollow ? `Follow Lead ${lead!.take_no}` : "Follow the Lead"}
-                  </button>
+                  {choices.map(([h, label, ok]) => (
+                    <button key={h} className={`${seg(hows[i] === h)} disabled:opacity-40`} disabled={!ok} onClick={() => setHows(hows.map((x, k) => (k === i ? h : x)))}>
+                      {label}
+                    </button>
+                  ))}
                 </div>
+                <p className="mt-1 px-1 text-[11px] text-muted">{HOW_HINT[hows[i]]}</p>
               </div>
             );
           })}
         </div>
-        {beat && (
+        {(uses("beat") || uses("shift")) && (
           <div className="space-y-2">
-            <p className="label">On the beat</p>
-            <div className="flex items-center gap-2 text-xs">
-              <span className="w-16 text-muted">Grid</span>
-              <div className="flex flex-1 rounded-full bg-panel-2 p-1">
-                <button className={seg(beat.grid === 4)} onClick={() => setBeat({ grid: 4 })}>
-                  1/16
+            <p className="label">The grid</p>
+            {row(
+              "Grid",
+              GRIDS.map((g) => (
+                <button key={g.steps} className={seg(grid === g.steps)} onClick={() => setGrid(g.steps)}>
+                  {g.label}
                 </button>
-                <button className={seg(beat.grid === 2)} onClick={() => setBeat({ grid: 2 })}>
-                  1/8
+              )),
+            )}
+            {row(
+              "Swing",
+              [0, 0.25, 0.5, 0.75].map((v) => (
+                <button key={v} className={seg(swing === v)} onClick={() => setSwing(v)}>
+                  {v === 0 ? "Straight" : `${v * 100}%`}
                 </button>
-              </div>
-            </div>
-            <div className="flex items-center gap-2 text-xs">
-              <span className="w-16 text-muted">Strength</span>
-              <div className="flex flex-1 rounded-full bg-panel-2 p-1">
-                {[0.5, 0.75, 1].map((v) => (
-                  <button key={v} className={seg(beat.strength === v)} onClick={() => setBeat({ strength: v })}>
-                    {v === 1 ? "Tight" : v === 0.75 ? "Natural" : "Light"} · {v * 100}%
-                  </button>
-                ))}
-              </div>
-            </div>
-            <p className="text-[11px] text-muted">Each syllable moves that part of the way to the nearest {beat.grid === 4 ? "16th" : "8th"} — 100% is exactly on it, less keeps some of your feel.</p>
+              )),
+            )}
+            <p className="text-[11px] text-muted">1/8T and 1/16T are triplets; swing puts every second step a little later (a shuffled feel).</p>
           </div>
         )}
-        {jobs.some((j) => j.mode.to === "lead") && <p className="text-[11px] text-muted">Follow the Lead: the take is stretched and squeezed so each syllable lands on the Lead&apos;s — for doubles and ad-libs that say the same words.</p>}
+        {(uses("beat") || uses("flow")) &&
+          row(
+            "Strength",
+            [0.25, 0.5, 0.75, 1].map((v) => (
+              <button key={v} className={seg(strength === v)} onClick={() => setStrength(v)}>
+                {v === 1 ? "Tight" : `${v * 100}%`}
+              </button>
+            )),
+          )}
+        {(uses("beat") || uses("flow")) && <p className="-mt-2 text-[11px] text-muted">How far each syllable moves to its place — 100% exactly on it, less keeps some of your feel.</p>}
         {err && <p className="rounded-xl bg-bad-soft px-3 py-2 text-sm text-bad">{err}</p>}
-        {result ? (
-          <>
-            <div className="rounded-xl bg-ok-soft px-3 py-2 text-sm text-ok">
-              <p className="font-semibold">In time — the new takes play now.</p>
-              {result.map((x) => (
-                <p key={x} className="text-xs">
-                  {x}
-                </p>
-              ))}
-            </div>
-            <button className="btn-primary w-full justify-center rounded-2xl py-3" onClick={onClose}>
+        {result && (
+          <div className="space-y-2 rounded-2xl bg-ok-soft px-3 py-2.5">
+            <p className="text-sm font-semibold text-ok">In time — the new takes play now.</p>
+            {result.done.map((x) => (
+              <p key={x} className="text-xs text-ok">
+                {x}
+              </p>
+            ))}
+            {/* compare: the new take and the one it came from */}
+            {result.made.map((m) => {
+              const now = tree.takes.find((t) => t.id === m.id);
+              const usingNew = !!now?.chosen;
+              return (
+                <div key={m.id} className="space-y-1.5 rounded-xl bg-panel px-2.5 py-2">
+                  <p className="truncate text-xs font-semibold">{m.label}</p>
+                  <div className="flex gap-1.5">
+                    <button className="btn flex-1 justify-center rounded-lg py-1.5 text-xs" disabled={!(r.status === "idle" || r.status === "playing")} onClick={() => r.playTake(m.id)}>
+                      ▶ New
+                    </button>
+                    <button className="btn flex-1 justify-center rounded-lg py-1.5 text-xs" disabled={!(r.status === "idle" || r.status === "playing")} onClick={() => r.playTake(m.from.id)}>
+                      ▶ Original
+                    </button>
+                    <button
+                      className={`flex-1 rounded-lg py-1.5 text-xs font-semibold ${usingNew ? "bg-panel-2 text-fg/80" : "bg-accent-soft text-accent"}`}
+                      onClick={() => r.choose(usingNew ? m.from.id : m.id)}
+                    >
+                      {usingNew ? "Use original" : "Use new"}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        <div className="flex gap-2">
+          {result && (
+            <button className="btn flex-1 justify-center rounded-2xl py-3" onClick={onClose}>
               Done
             </button>
-          </>
-        ) : (
+          )}
           <button
-            className="btn-primary w-full justify-center rounded-2xl py-3 disabled:opacity-60"
+            className="btn-primary flex-[2] justify-center rounded-2xl py-3 disabled:opacity-60"
             disabled={!!busy || !jobs.length}
             onClick={async () => {
               setErr(null);
               setBusy("Starting…");
               try {
-                const r = await syncTakes(tree, jobs, setBusy);
-                onDone(r.tree);
-                setResult(r.done);
+                const out = await syncTakes(tree, jobs.map((j, i) => ({ ...j, mode: modeOf(hows[i]) })), setBusy);
+                onDone(out.tree);
+                setResult({ done: out.done, made: out.made });
               } catch (e) {
                 setErr(e instanceof Error ? e.message : "Syncing failed.");
               } finally {
@@ -1421,9 +1499,9 @@ function SyncSheet({ tree, jobs: initial, title, onDone, onClose }: { tree: Proj
               }
             }}
           >
-            ⇄ {busy ?? `Sync ${jobs.length} take${jobs.length === 1 ? "" : "s"}`}
+            ⇄ {busy ?? (result ? "Sync again with these settings" : `Sync ${jobs.length} take${jobs.length === 1 ? "" : "s"}`)}
           </button>
-        )}
+        </div>
       </div>
     </div>
   );
