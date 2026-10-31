@@ -204,6 +204,8 @@ export function SongApp({
   const beat = useRef<AudioBuffer | null>(null);
   const flowBufs = useRef(new Map<string, AudioBuffer>());
   const [beatReady, setBeatReady] = useState(false);
+  /** the song's sound coming down: how far (%; null: size unknown), then being prepared */
+  const [soundLoad, setSoundLoad] = useState<{ pct: number | null; decoding: boolean } | null>(null);
   useEffect(() => {
     const e = new StudioEngine();
     engine.current = e;
@@ -244,17 +246,45 @@ export function SongApp({
       try {
         const { url, instrumentalUrl } = (await fetch(`/api/projects/${pid}/audio`).then((r) => r.json())) as { url: string | null; instrumentalUrl: string | null };
         if (!url || cancelled) return;
-        const [buf, music] = await Promise.all([
-          engine.current!.decode(await fetch(url).then((r) => r.arrayBuffer())),
-          instrumentalUrl ? fetch(instrumentalUrl).then((r) => r.arrayBuffer()).then((d) => engine.current!.decode(d)) : null,
+        // the files come down with their progress shown (the song, and the music without vocals)
+        const got = [0, 0];
+        const size = [0, 0];
+        // redrawn only when the percentage changes (not for every piece that arrives)
+        let shown = -1;
+        const show = () => {
+          const pct = size[0] + size[1] ? Math.round(((got[0] + got[1]) / (size[0] + size[1])) * 100) : null;
+          if (cancelled || pct === shown) return;
+          shown = pct ?? -2;
+          setSoundLoad({ pct, decoding: false });
+        };
+        setSoundLoad({ pct: 0, decoding: false });
+        const [data, musicData] = await Promise.all([
+          fetchWithProgress(url, (n, total) => {
+            got[0] = n;
+            size[0] = total;
+            show();
+          }),
+          instrumentalUrl
+            ? fetchWithProgress(instrumentalUrl, (n, total) => {
+                got[1] = n;
+                size[1] = total;
+                show();
+              })
+            : null,
         ]);
+        if (!cancelled) setSoundLoad({ pct: 100, decoding: true });
+        const [buf, music] = await Promise.all([engine.current!.decode(data), musicData ? engine.current!.decode(musicData) : null]);
         if (!cancelled) {
           songBufs.current = { full: buf, music };
           setBufsLoaded((n) => n + 1);
           setBeatReady(true);
+          setSoundLoad(null);
         }
       } catch {
-        if (!cancelled) setError("Could not load the beat.");
+        if (!cancelled) {
+          setSoundLoad(null);
+          setError("Could not load the beat.");
+        }
       }
     })();
     return () => {
@@ -1429,6 +1459,18 @@ export function SongApp({
                   </button>
                 );
               })}
+          </div>
+        )}
+        {/* the sound is loading: it can't play (or record) until it's here */}
+        {soundLoad && (
+          <div className="flex items-center gap-2.5 border-t border-line/50 px-4 py-1.5 text-xs font-semibold text-accent" role="status" aria-live="polite">
+            <span className="inline-block h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-accent border-r-transparent" />
+            <span className="shrink-0">
+              {soundLoad.decoding ? "Preparing the sound…" : `Loading the sound${soundLoad.pct !== null ? ` · ${soundLoad.pct}%` : "…"}`}
+            </span>
+            <span className="h-1 flex-1 overflow-hidden rounded-full bg-panel-2">
+              <span className={`block h-full rounded-full bg-accent transition-[width] ${soundLoad.pct === null ? "w-1/3 animate-pulse" : ""}`} style={soundLoad.pct !== null ? { width: `${soundLoad.decoding ? 100 : soundLoad.pct}%` } : undefined} />
+            </span>
           </div>
         )}
       </header>
@@ -3246,4 +3288,29 @@ function OptionPicker({
       </button>
     </div>
   );
+}
+
+/** a file downloaded with its progress (bytes so far, total — 0 when the server doesn't say) */
+async function fetchWithProgress(url: string, onProgress: (n: number, total: number) => void): Promise<ArrayBuffer> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Download failed (${res.status})`);
+  const total = Number(res.headers.get("content-length")) || 0;
+  if (!res.body) return res.arrayBuffer();
+  const reader = res.body.getReader();
+  const parts: Uint8Array[] = [];
+  let n = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    parts.push(value);
+    n += value.length;
+    onProgress(n, total);
+  }
+  const out = new Uint8Array(n);
+  let o = 0;
+  for (const p of parts) {
+    out.set(p, o);
+    o += p.length;
+  }
+  return out.buffer;
 }

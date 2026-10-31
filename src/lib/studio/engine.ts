@@ -290,14 +290,30 @@ export class StudioEngine {
     return this.ctx.currentTime - this.base;
   }
 
-  private click(when: number, accent: boolean) {
+  /** the metronome during a take: its own level, so it can be switched on and off while the take runs */
+  private takeClickBus: GainNode | null = null;
+  private takeClicksOn = false;
+  setTakeClicks(on: boolean) {
+    this.takeClicksOn = on;
+    if (this.takeClickBus) this.takeClickBus.gain.setTargetAtTime(on ? 1 : 0, this.ctx.currentTime, 0.01);
+  }
+  private takeClicks() {
+    if (!this.takeClickBus) {
+      this.takeClickBus = this.ctx.createGain();
+      this.takeClickBus.gain.value = this.takeClicksOn ? 1 : 0;
+      this.takeClickBus.connect(this.ctx.destination);
+    }
+    return this.takeClickBus;
+  }
+
+  private click(when: number, accent: boolean, take = false) {
     const o = this.ctx.createOscillator();
     const g = this.ctx.createGain();
     o.frequency.value = accent ? 1600 : 1000;
     g.gain.setValueAtTime(0.0001, when);
     g.gain.exponentialRampToValueAtTime(0.6, when + 0.002);
     g.gain.exponentialRampToValueAtTime(0.0001, when + 0.05);
-    o.connect(g).connect(this.ctx.destination);
+    o.connect(g).connect(take ? this.takeClicks() : this.ctx.destination);
     o.start(when);
     o.stop(when + 0.06);
     this.playing.push(o);
@@ -308,7 +324,7 @@ export class StudioEngine {
    * starts), plus metronome clicks at the given song positions. Returns the
    * clock base (song position s plays at base + s).
    */
-  play(from: number, opts: { beat: AudioBuffer | null; layers?: PlayLayer[]; clicks?: { at: number; accent: boolean }[]; beatGain?: number }) {
+  play(from: number, opts: { beat: AudioBuffer | null; layers?: PlayLayer[]; clicks?: { at: number; accent: boolean; take?: boolean }[]; beatGain?: number }) {
     this.stop();
     const start = this.ctx.currentTime + 0.12;
     this.base = start - from;
@@ -361,7 +377,7 @@ export class StudioEngine {
     };
     if (opts.beat) schedule(opts.beat, 0, opts.beatGain ?? 1, undefined, undefined, "beat");
     for (const l of opts.layers ?? []) schedule(l.buffer, l.at, l.gain ?? 1, l.fx, l.clip, l.bus, l.id, l.pan ?? 0);
-    for (const c of opts.clicks ?? []) if (c.at >= from) this.click(this.base + c.at, c.accent);
+    for (const c of opts.clicks ?? []) if (c.at >= from) this.click(this.base + c.at, c.accent, c.take);
     return this.base;
   }
 

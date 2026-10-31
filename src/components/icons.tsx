@@ -250,3 +250,11 @@ export const LineBreak = (p: P) => (
     <path d="M20 4v7a4 4 0 0 1-4 4H4" />
   </Icon>
 );
+/** a metronome (Lucide "metronome" style: the body, the pendulum, its weight) */
+export const Metronome = (p: P) => (
+  <Icon {...p}>
+    <path d="M9 2h6l4 19H5L9 2z" />
+    <path d="M12 15l5-9" />
+    <path d="M5 17h14" />
+  </Icon>
+);

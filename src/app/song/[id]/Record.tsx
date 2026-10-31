@@ -6,7 +6,7 @@ import { syllableParts } from "@/lib/rhyme/syllabify";
 import { marksFor } from "@/lib/marks";
 import { slotsWithMarks, untyped } from "@/lib/flow/notation";
 import { MarkedText } from "@/components/Marks";
-import { Check, ChevronRight, Headphones, Laptop, Mic, Pause, Phone, Play, Plus, Restart, Sliders, Trash, Wand } from "@/components/icons";
+import { Check, ChevronRight, Headphones, Laptop, Metronome, Mic, Pause, Phone, Play, Plus, Restart, Sliders, Trash, Wand } from "@/components/icons";
 import { FX_CATEGORIES, FX_PRESETS, hasPartSound, layerPreset } from "@/lib/fx/presets";
 import { keyName, NOTE_NAMES } from "@/lib/fx/tune";
 import { followTo } from "@/components/writer/follow";
@@ -556,7 +556,7 @@ function RecordScreen({ r, tree, setTree, rangeOf, bar, timeline, onBusy, host, 
 
       {/* transport, above the tabs */}
       <div className="fixed inset-x-0 bottom-0 z-20 mx-auto max-w-lg border-t border-line/70 bg-bg/95 pb-[calc(env(safe-area-inset-bottom)+4.3rem)] backdrop-blur-xl">
-        <div className="flex items-center justify-between px-8 pt-3">
+        <div className="flex items-center justify-between px-5 pt-3">
           {recording ? (
             <DockButton label="Again" onClick={r.restart}>
               <Restart className="h-5 w-5" />
@@ -567,6 +567,10 @@ function RecordScreen({ r, tree, setTree, rangeOf, bar, timeline, onBusy, host, 
             </DockButton>
           )}
           <BigButton r={r} canRecord={canRecord} />
+          {/* the metronome during the take: on / off at any time, even while recording */}
+          <DockButton label={r.clicks ? "Click on" : "Click off"} onClick={() => r.setClicks(!r.clicks)} active={r.clicks}>
+            <Metronome className="h-5 w-5" />
+          </DockButton>
           <DockButton label="Settings" onClick={() => setSheet(true)} disabled={recording}>
             <Sliders className="h-5 w-5" />
           </DockButton>
@@ -688,10 +692,15 @@ function Karaoke({ line, lang, from, until, clock }: { line: Line; lang: string;
   return <FlowText text={line.text.trim()} lang={lang} flow={line.flow} marks={marks} lit={(i) => now >= (times[i] ?? Infinity) - 0.03} />;
 }
 
-function DockButton({ label, disabled, onClick, children }: { label: string; disabled?: boolean; onClick: () => void; children: ReactNode }) {
+function DockButton({ label, disabled, onClick, children, active }: { label: string; disabled?: boolean; onClick: () => void; children: ReactNode; active?: boolean }) {
   return (
-    <button className="flex w-16 flex-col items-center gap-1 text-[11px] font-semibold text-muted disabled:opacity-40" disabled={disabled} onClick={onClick}>
-      <span className="flex h-12 w-12 items-center justify-center rounded-full bg-panel-2 text-fg">{children}</span>
+    <button
+      className={`flex w-16 flex-col items-center gap-1 text-[11px] font-semibold disabled:opacity-40 ${active ? "text-accent" : "text-muted"}`}
+      disabled={disabled}
+      onClick={onClick}
+      aria-pressed={active}
+    >
+      <span className={`flex h-12 w-12 items-center justify-center rounded-full ${active ? "bg-accent text-white" : "bg-panel-2 text-fg"}`}>{children}</span>
       {label}
     </button>
   );
@@ -889,6 +898,24 @@ function RecordSettings({ r, size, setSize, onClose, onMic }: { r: Recorder; siz
             <label className="flex items-center justify-between gap-3 px-1 py-1 text-sm">
               Click during the count-in
               <Toggle on={s.metronome} onChange={s.setMetronome} />
+            </label>
+          )}
+          {s && (
+            <label className="flex items-center justify-between gap-3 px-1 py-1 text-sm">
+              <span>
+                Click during the take
+                <span className="block text-[11px] text-muted">Also the metronome button next to record — with headphones, so the mic doesn&apos;t hear it.</span>
+              </span>
+              <Toggle on={r.clicks} onChange={r.setClicks} />
+            </label>
+          )}
+          {s && (
+            <label className="flex items-center justify-between gap-3 px-1 py-1 text-sm">
+              <span>
+                Doubles follow the Lead
+                <span className="block text-[11px] text-muted">A Double or Ad-lib take is synced to the part&apos;s Lead as soon as it&apos;s saved — the take as sung stays in Takes.</span>
+              </span>
+              <Toggle on={s.followLead} onChange={s.setFollowLead} />
             </label>
           )}
         </div>

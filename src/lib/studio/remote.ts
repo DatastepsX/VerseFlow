@@ -17,6 +17,7 @@ export type RemoteCmd =
   | { t: "stop" }
   | { t: "addLane"; name: string }
   | { t: "countIn"; bars: number }
+  | { t: "clicks"; on: boolean }
   | { t: "sound"; lane: string; preset: string; part?: boolean }
   | { t: "key"; key: "chromatic" | { root: number; minor: boolean } }
   // the phone drives the whole song on the Mac (the Mac is the main device): what it shows, what it plays
@@ -52,6 +53,8 @@ export interface RemoteState {
   /** takes of the current section */
   takes: RemoteTake[];
   countIn: number;
+  /** the metronome during the take */
+  clicks?: boolean;
   error: string | null;
   /** which page publishes (a phone ignores a state that isn't from the recording device) */
   host?: string;

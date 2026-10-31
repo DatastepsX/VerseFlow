@@ -6,6 +6,7 @@ import { useEffect, useRef, useState, useSyncExternalStore, type RefObject } fro
 import { positionIn, type Timeline } from "@/lib/audio/timeline";
 import type { PlayLayer, StudioEngine } from "@/lib/studio/engine";
 import { lastTake, type RemoteCmd, type RemoteState, type RemoteTake } from "@/lib/studio/remote";
+import { leadOf, syncTakes } from "@/lib/studio/sync";
 import { takeWindow } from "@/lib/studio/timing";
 import { encodeWav, peaksOf } from "@/lib/studio/wav";
 import type { ProjectSettings, ProjectTree, Take } from "@/lib/types";
@@ -60,6 +61,9 @@ export interface Recorder {
   takeCount: (sectionId: string) => number;
   countIn: number;
   setCountIn: (bars: number) => void;
+  /** the metronome during the take (on or off at any time, even while recording) */
+  clicks: boolean;
+  setClicks: (on: boolean) => void;
   error: string | null;
   clearError: () => void;
   /** what the phone just asked this device to do */
@@ -106,6 +110,9 @@ export interface LocalSettings {
   setChannel: (c: number) => void;
   metronome: boolean;
   setMetronome: (on: boolean) => void;
+  /** a double / ad-lib take follows the part's Lead by itself once saved (a synced copy; the take stays) */
+  followLead: boolean;
+  setFollowLead: (on: boolean) => void;
   headphones: boolean;
   setHeadphones: (on: boolean) => void;
   latencyMs: number;
@@ -203,7 +210,17 @@ export function useLocalRecorder(o: {
   const [deviceId, setDeviceId] = usePref("vf.studio.device", "");
   const [channel, setChannel] = usePref("vf.studio.channel", 0);
   const [countIn, setCountIn] = usePref("vf.studio.countin", 1);
+  const [clicks, setClicksPref] = usePref("vf.studio.clicks", false);
+  // the engine follows the setting at once — even in the middle of a take
+  useEffect(() => {
+    engine.current?.setTakeClicks(clicks);
+  }, [clicks, engine]);
+  const setClicks = (on: boolean) => {
+    setClicksPref(on);
+    engine.current?.setTakeClicks(on);
+  };
   const [metronome, setMetronome] = usePref("vf.studio.metronome", true);
+  const [followLead, setFollowLead] = usePref("vf.studio.followLead", true);
   const [headphones, setHeadphones] = usePref("vf.studio.headphones", true);
   // the microphone's gain: each microphone of this device its own (a USB microphone often comes in quiet)
   const [gains, setGains] = usePref<Record<string, number>>("vf.studio.ingains", {});
@@ -248,6 +265,8 @@ export function useLocalRecorder(o: {
   const holdRef = useRef({ v: 0, at: 0 });
   const clipAt = useRef(-1e9);
   const [lineIndex, setLineIndex] = useState<number | null>(null);
+  /** a short message (the phone's commands, a double synced…) */
+  const [note, setNote] = useState<string | null>(null);
   const [beatsLeft, setBeatsLeft] = useState<number | null>(null);
   /** the microphone is being switched on for the first take */
   const [starting, setStarting] = useState(false);
@@ -414,11 +433,16 @@ export function useLocalRecorder(o: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deviceId, headphones, armed]);
 
-  const clicksFor = (from: number, to: number) => {
-    if (!metronome) return [];
+  /** the count-in's clicks (when the metronome is on for it), then the take's (heard while `clicks` is on) */
+  const clicksFor = (from: number, to: number, takeTo?: number) => {
     const perBar = Math.max(1, Math.round(bar / o.beatLength));
-    const out: { at: number; accent: boolean }[] = [];
-    for (let k = 0; from + k * o.beatLength < to - 0.01; k++) out.push({ at: from + k * o.beatLength, accent: k % perBar === 0 });
+    const out: { at: number; accent: boolean; take?: boolean }[] = [];
+    const end = takeTo ?? to;
+    for (let k = 0; from + k * o.beatLength < end - 0.01; k++) {
+      const at = from + k * o.beatLength;
+      const take = at >= to - 0.01;
+      if (take || metronome) out.push({ at, accent: k % perBar === 0, ...(take ? { take: true } : {}) });
+    }
     return out;
   };
 
@@ -450,7 +474,8 @@ export function useLocalRecorder(o: {
     maxLevel.current = 0;
     const w = takeWindow(range, bar, countIn);
     const layers = await layersFor(w.from, w.to, l);
-    e.play(Math.max(0, w.from), { beat: beat.current, layers, clicks: clicksFor(w.from, range.start) });
+    e.setTakeClicks(clicks);
+    e.play(Math.max(0, w.from), { beat: beat.current, layers, clicks: clicksFor(w.from, range.start, w.to) });
     e.startRecording();
     recLane.current = l;
     stopAt.current = w.to;
@@ -501,7 +526,7 @@ export function useLocalRecorder(o: {
       fd.append("", new Blob([wav.buffer as ArrayBuffer], { type: "audio/wav" }), "take.wav");
       const put = await fetch(signedUrl, { method: "PUT", body: fd, headers: { "x-upsert": "false" } });
       if (!put.ok) throw new Error(`Upload failed (${put.status})`);
-      const { res } = await api(`/api/projects/${pid}/takes`, {
+      const { res, data: saved } = await api(`/api/projects/${pid}/takes`, {
         action: "save",
         path,
         section_id: sectionId,
@@ -520,6 +545,23 @@ export function useLocalRecorder(o: {
         const buf = e.ctx.createBuffer(1, rec.samples.length, rec.sampleRate);
         buf.copyToChannel(rec.samples as Float32Array<ArrayBuffer>, 0);
         buffers.current.set(id, buf);
+      }
+      // a double sung along with the Lead lands a little late (you follow what you hear): it follows the Lead by itself
+      const fresh = saved as unknown as ProjectTree;
+      const lead = leadOf(fresh, sectionId);
+      const take = fresh.takes?.find((t) => t.id === id);
+      if (followLead && id && take && lead && lead.id !== id && l !== "Lead" && l !== "Flow") {
+        setNote(`${l}: following Lead ${lead.take_no}…`);
+        void syncTakes(fresh, [{ take, mode: { to: "lead" } }], () => {})
+          .then((out) => {
+            setTree(out.tree);
+            setNote(`${l} ${take.take_no}: ${out.done[0]?.replace(/^[^:]+:\s*/, "") ?? "in time"} — the take as sung stays (Takes)`);
+            setTimeout(() => setNote(null), 5000);
+          })
+          .catch((err) => {
+            setNote(null);
+            failed(err);
+          });
       }
     } catch (err) {
       failed(err);
@@ -687,11 +729,10 @@ export function useLocalRecorder(o: {
   };
 
   // ---- the phone as remote: run its commands, publish this device's state ----
-  const [note, setNote] = useState<string | null>(null);
   const run = useRef<(c: RemoteCmd) => Promise<void>>(async () => {});
   useEffect(() => {
     run.current = async (c: RemoteCmd) => {
-      const label: Partial<Record<RemoteCmd["t"], string>> = { select: "Part", record: "Record", retake: "Again", stop: "Stop", play: "Play", playTake: "Play take", choose: "Use take", delete: "Delete take", addLane: "New layer", countIn: "Count-in", sound: "Sound", key: "Key" };
+      const label: Partial<Record<RemoteCmd["t"], string>> = { select: "Part", record: "Record", retake: "Again", stop: "Stop", play: "Play", playTake: "Play take", choose: "Use take", delete: "Delete take", addLane: "New layer", countIn: "Count-in", clicks: "Metronome", sound: "Sound", key: "Key" };
       setNote(`Phone: ${label[c.t] ?? c.t}`);
       setTimeout(() => setNote(null), 2500);
       switch (c.t) {
@@ -739,6 +780,9 @@ export function useLocalRecorder(o: {
         case "key":
           setKey(c.key);
           break;
+        case "clicks":
+          setClicks(!!c.on);
+          break;
         case "countIn":
           setCountIn(Math.max(0, Math.min(2, Math.round(c.bars))));
           break;
@@ -778,6 +822,7 @@ export function useLocalRecorder(o: {
     lanes,
     takes: sectionTakes.map((t) => ({ id: t.id, lane: t.lane, take_no: t.take_no, chosen: t.chosen, duration: t.duration, peaks: small(t.peaks) })),
     countIn,
+    clicks,
     error,
     mic,
     playingTake: status.kind === "playing" ? status.take : null,
@@ -827,6 +872,8 @@ export function useLocalRecorder(o: {
     takeCount: (id) => tree.takes.filter((t) => t.section_id === id && lanes.includes(t.lane)).length,
     countIn,
     setCountIn,
+    clicks,
+    setClicks,
     error,
     clearError: () => setError(null),
     note,
@@ -863,6 +910,8 @@ export function useLocalRecorder(o: {
       setChannel,
       metronome,
       setMetronome,
+      followLead,
+      setFollowLead,
       headphones,
       setHeadphones,
       latencyMs: Math.round(latency * 1000 * 10) / 10,
@@ -957,6 +1006,8 @@ export function useRemoteRecorder(o: { tree: ProjectTree; section: [string | nul
     takeCount: (id) => (connected ? (state.sections.find((s) => s.id === id)?.takes ?? 0) : 0),
     countIn: connected ? state.countIn : 1,
     setCountIn: (bars) => send({ t: "countIn", bars }),
+    clicks: connected ? !!state.clicks : false,
+    setClicks: (on) => send({ t: "clicks", on }),
     error: connected ? state.error : null,
     clearError: () => {},
     note: null,
