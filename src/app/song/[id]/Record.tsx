@@ -132,10 +132,18 @@ function RecordScreen({ r, tree, setTree, rangeOf, bar, timeline, onBusy, host, 
     } catch {}
   };
   /** record — the first time in a session, after a quick check of the microphone's level */
-  const recordChecked = () => {
-    if (r.settings && checkFirst && !checked()) setMicCheck({ then: () => r.record(r.lane) });
-    else r.record(r.lane);
+  const recordChecked = (go: () => void = () => r.record(r.lane)) => {
+    if (r.settings && checkFirst && !checked()) setMicCheck({ then: go });
+    else go();
   };
+  /** a take of this layer that stops before the part's end: the record button continues it (you hear it first) */
+  const continuing = r.continueAt !== null;
+  const continueFrom = () => {
+    const line = fromLine ? lines.find((x) => x.id === fromLine) : null;
+    const lineAt = line && section ? (timeline.get(section.id)?.starts ?? [])[section.lines.indexOf(line as (typeof section.lines)[number])] : undefined;
+    return line && lineAt !== undefined && Number.isFinite(lineAt) ? lineAt : (r.continueAt ?? 0);
+  };
+  const continueTake = r.takes.filter((t) => t.lane === r.lane).find((t) => t.chosen) ?? null;
   /** a line tapped: the take continues from its start (instead of from where it stopped) */
   const [fromLine, setFromLine] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
@@ -218,7 +226,11 @@ function RecordScreen({ r, tree, setTree, rangeOf, bar, timeline, onBusy, host, 
         ev.preventDefault();
         if (idle) r.play();
         else r.stop();
-      } else if ((ev.key === "r" || ev.key === "R") && canRecord) r.record(r.lane);
+      } else if ((ev.key === "r" || ev.key === "R") && canRecord) {
+        // like the record button: a take in pieces goes on
+        if (continuing) r.recordFrom(r.lane, continueFrom());
+        else r.record(r.lane);
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -246,7 +258,9 @@ function RecordScreen({ r, tree, setTree, rangeOf, bar, timeline, onBusy, host, 
                   ? "Allow the microphone on your Mac"
                   : !r.beatReady
                     ? "Loading the beat…"
-                    : `Record ${r.lane} · take ${nextTake}`;
+                    : continuing && idle
+                      ? `Continue ${r.lane} take ${continueTake?.take_no ?? ""} · from ${fmtTime(continueFrom())}`
+                      : `Record ${r.lane} · take ${nextTake}`;
 
   return (
     <>
@@ -630,23 +644,27 @@ function RecordScreen({ r, tree, setTree, rangeOf, bar, timeline, onBusy, host, 
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <button
-                className="flex h-10 flex-1 items-center justify-center gap-2 rounded-2xl bg-bad-soft text-sm font-semibold text-bad active:opacity-80 disabled:opacity-50"
-                disabled={!canRecord}
-                onClick={() => {
-                  r.recordFrom(r.lane, at);
-                  setFromLine(null);
-                }}
-              >
-                <span className="h-2.5 w-2.5 rounded-full bg-[#dc2626]" />
-                {line ? `Record from “${line.text.trim().split(/\s+/).slice(0, 3).join(" ")}…”` : `Continue ${r.lane}${take ? ` take ${take.take_no}` : ""}`}
-                <span className="font-mono text-[11px] font-normal opacity-70">{fmtTime(at)}</span>
-              </button>
+              {/* the record button goes on with this take (you hear it first); a fresh take: "New take" */}
+              <p className="min-w-0 flex-1 text-[11px] leading-tight text-muted">
+                <span className="font-semibold text-bad">● </span>
+                {line ? (
+                  <>
+                    The record button records from “{line.text.trim().split(/\s+/).slice(0, 3).join(" ")}…” ({fmtTime(at)}) — the rest of take {take?.take_no} is replaced.
+                  </>
+                ) : (
+                  <>
+                    The record button continues take {take?.take_no} from {fmtTime(at)} — or tap a line to record from it.
+                  </>
+                )}
+              </p>
               {line && (
-                <button className="h-10 rounded-2xl bg-panel-2 px-3 text-xs font-semibold text-muted" onClick={() => setFromLine(null)}>
+                <button className="h-9 shrink-0 rounded-2xl bg-panel-2 px-3 text-xs font-semibold text-muted" onClick={() => setFromLine(null)}>
                   From the end
                 </button>
               )}
+              <button className="h-9 shrink-0 rounded-2xl bg-panel-2 px-3 text-xs font-semibold text-fg/80 disabled:opacity-50" disabled={!canRecord} onClick={() => recordChecked()}>
+                New take
+              </button>
             </div>
             </div>
           );
@@ -661,7 +679,18 @@ function RecordScreen({ r, tree, setTree, rangeOf, bar, timeline, onBusy, host, 
               {r.status === "playing" && !r.playingTake ? <Pause className="h-5 w-5" /> : <Play className="ml-0.5 h-5 w-5" />}
             </DockButton>
           )}
-          <BigButton r={r} canRecord={canRecord} onRecord={recordChecked} />
+          <BigButton
+            r={r}
+            canRecord={canRecord}
+            onRecord={() =>
+              continuing
+                ? recordChecked(() => {
+                    r.recordFrom(r.lane, continueFrom());
+                    setFromLine(null);
+                  })
+                : recordChecked()
+            }
+          />
           {/* the metronome during the take: on / off at any time, even while recording */}
           <DockButton label={r.clicks ? "Click on" : "Click off"} onClick={() => r.setClicks(!r.clicks)} active={r.clicks}>
             <Metronome className="h-5 w-5" />

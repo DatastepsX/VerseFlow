@@ -340,7 +340,16 @@ export function useLocalRecorder(o: {
     const t = takesOf(lane).find((x) => x.chosen);
     if (!t || !range) return null;
     const end = t.start_at + Math.min(t.duration, t.trim_out ?? t.duration);
-    return end < range.end - 0.25 ? Math.round(end * 1000) / 1000 : null;
+    // just after the last sung word (the take's level), not the silence before stop was pressed
+    const pk = t.peaks ?? [];
+    const top = pk.reduce((m, v) => Math.max(m, v), 0);
+    let at = end;
+    if (pk.length && top > 0) {
+      let i = pk.length - 1;
+      while (i > 0 && pk[i] < top * 0.12) i--;
+      at = Math.min(end, Math.max(t.start_at + (t.trim_in ?? 0) + 0.3, t.start_at + ((i + 1) / pk.length) * t.duration + 0.25));
+    }
+    return at < range.end - 0.25 ? Math.round(at * 1000) / 1000 : null;
   })();
 
   /** decoded audio of takes (downloaded once) */
