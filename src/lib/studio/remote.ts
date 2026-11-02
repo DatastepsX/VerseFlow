@@ -6,14 +6,14 @@
 
 export type RemoteCmd =
   | { t: "select"; sectionId: string }
-  | { t: "record"; lane: string }
+  | { t: "record"; lane: string; from?: number }
   | { t: "retake"; lane: string }
   | { t: "discardLast"; lane: string }
   | { t: "choose"; takeId: string }
   | { t: "delete"; takeId: string }
   | { t: "shift"; takeId: string; by: number }
   | { t: "play" }
-  | { t: "playTake"; takeId: string; clip?: { from: number; to: number | null } | null; gain?: number }
+  | { t: "playTake"; takeId: string; clip?: { from: number; to: number | null; fadeIn?: number; fadeOut?: number } | null; gain?: number }
   | { t: "stop" }
   | { t: "addLane"; name: string }
   | { t: "countIn"; bars: number }
@@ -55,6 +55,8 @@ export interface RemoteState {
   countIn: number;
   /** the metronome during the take */
   clicks?: boolean;
+  /** where "Continue" goes on from (the current layer's take ends there) */
+  continueAt?: number | null;
   error: string | null;
   /** which page publishes (a phone ignores a state that isn't from the recording device) */
   host?: string;

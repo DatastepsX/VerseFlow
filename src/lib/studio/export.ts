@@ -46,10 +46,13 @@ export async function renderStem(stem: Stem, seconds: number, sampleRate: number
     const g = ctx.createGain();
     const t0 = l.at + c0;
     const t1 = l.at + c1;
-    if (l.clip && (c0 > 0 || c1 < l.buffer.duration)) {
-      g.gain.setValueAtTime(0, Math.max(0, t0));
-      g.gain.linearRampToValueAtTime(1, Math.max(0, t0) + 0.008);
-      g.gain.setValueAtTime(1, Math.max(t0 + 0.008, t1 - 0.012));
+    if (l.clip && (c0 > 0 || c1 < l.buffer.duration || l.clip.fadeIn || l.clip.fadeOut)) {
+      // its fades (at least a few milliseconds: no click)
+      const fin = Math.max(0.008, l.clip.fadeIn ?? 0);
+      const fout = Math.min(Math.max(0.012, l.clip.fadeOut ?? 0), Math.max(0.012, t1 - Math.max(0, t0) - fin));
+      g.gain.setValueAtTime(0.0001, Math.max(0, t0));
+      g.gain.linearRampToValueAtTime(1, Math.max(0, t0) + fin);
+      g.gain.setValueAtTime(1, Math.max(t0 + fin, t1 - fout));
       g.gain.linearRampToValueAtTime(0, t1);
     }
     const level = ctx.createGain();

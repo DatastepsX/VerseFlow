@@ -1,4 +1,4 @@
-import { chooseTake, deleteTake, getTree, setLineTimes, setTakeMix, shiftTake, takeProject, trimTake, updateLine } from "@/lib/server/repo";
+import { chooseTake, deleteTake, getTree, setLineTimes, setTakeFade, setTakeMix, shiftTake, takeProject, trimTake, updateLine } from "@/lib/server/repo";
 import { alignTake } from "@/lib/server/transcribe";
 import { alignmentText, alignTakeLines } from "@/lib/flow/align";
 import { body, handle, treeResponse } from "@/lib/server/http";
@@ -12,11 +12,14 @@ export async function PATCH(req: Request, ctx: RouteContext<"/api/takes/[id]">) 
   return handle(async () => {
     await accessVia("takes", (await ctx.params).id, "edit");
     const { id } = await ctx.params;
-    const b = await body<{ shift?: unknown; gain?: unknown; pan?: unknown; trim?: { from?: unknown; to?: unknown } }>(req);
+    const b = await body<{ shift?: unknown; gain?: unknown; pan?: unknown; trim?: { from?: unknown; to?: unknown }; fade?: { in?: unknown; out?: unknown } }>(req);
     if (typeof b.shift === "number" && Number.isFinite(b.shift)) return treeResponse(await shiftTake(id, Math.max(-0.5, Math.min(0.5, b.shift))));
     // its volume and pan in the mix
     const fin = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
     if (fin(b.gain) || fin(b.pan)) return treeResponse(await setTakeMix(id, { gain: fin(b.gain) ? b.gain : undefined, pan: fin(b.pan) ? b.pan : undefined }));
+    // its fades: {fade: {in, out}} (s; both 0: none)
+    if (b.fade && (fin(b.fade.in) || fin(b.fade.out)))
+      return treeResponse(await setTakeFade(id, { in: fin(b.fade.in) ? b.fade.in : 0, out: fin(b.fade.out) ? b.fade.out : 0 }));
     // cut: {trim: {from, to}} (to null: to the end; {from: 0, to: null}: the whole take again)
     if (b.trim && typeof b.trim.from === "number" && Number.isFinite(b.trim.from))
       return treeResponse(await trimTake(id, b.trim.from, typeof b.trim.to === "number" && Number.isFinite(b.trim.to) ? b.trim.to : null));

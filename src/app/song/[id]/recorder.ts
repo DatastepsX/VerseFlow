@@ -7,6 +7,7 @@ import { positionIn, type Timeline } from "@/lib/audio/timeline";
 import type { PlayLayer, StudioEngine } from "@/lib/studio/engine";
 import { lastTake, type RemoteCmd, type RemoteState, type RemoteTake } from "@/lib/studio/remote";
 import { leadOf, syncTakes } from "@/lib/studio/sync";
+import { joinTakes, partsOf } from "@/lib/studio/join";
 import { takeWindow } from "@/lib/studio/timing";
 import { encodeWav, peaksOf } from "@/lib/studio/wav";
 import type { ProjectSettings, ProjectTree, Take } from "@/lib/types";
@@ -73,13 +74,20 @@ export interface Recorder {
   /** the microphone recording (its name), once on */
   mic: string | null;
   record: (lane: string) => void;
+  /**
+   * Continue the layer's take from `at` (song time): a bar of run-up with the take so far, then it records on
+   * — joined into one take when stopped (a take sung in pieces)
+   */
+  recordFrom: (lane: string, at: number) => void;
+  /** where the current layer's take in this part ends — "Continue" goes on from there (null: no take yet) */
+  continueAt: number | null;
   stop: () => void;
   /** throw the take being recorded away and start it again */
   restart: () => void;
   play: () => void;
   playTake: (id: string) => void;
   /** hear a take on its own stretch of the beat: the whole recording (clip null) or a cut not saved yet */
-  previewTake: (id: string, clip: { from: number; to: number | null } | null, gain?: number) => void;
+  previewTake: (id: string, clip: { from: number; to: number | null; fadeIn?: number; fadeOut?: number } | null, gain?: number) => void;
   /** a take's volume, heard at once (on the device that plays) */
   takeGain: (id: string, gain: number) => void;
   choose: (id: string) => void;
@@ -271,6 +279,8 @@ export function useLocalRecorder(o: {
   /** the microphone is being switched on for the first take */
   const [starting, setStarting] = useState(false);
   const stopAt = useRef<number | null>(null);
+  /** a take being continued: where the new piece joins it, and the take so far */
+  const punch = useRef<{ at: number; base: Take } | null>(null);
   /** the loudest the level meter showed during the take */
   const maxLevel = useRef(0);
   const recLane = useRef<string | null>(null);
@@ -307,6 +317,13 @@ export function useLocalRecorder(o: {
 
   const sectionTakes = tree.takes.filter((t) => t.section_id === sectionId && lanes.includes(t.lane));
   const takesOf = (l: string) => sectionTakes.filter((t) => t.lane === l);
+  /** where the current layer's take in this part ends: "Continue" goes on from there (a take reaching the part's end: none) */
+  const continueAt = (() => {
+    const t = takesOf(lane).find((x) => x.chosen);
+    if (!t || !range) return null;
+    const end = t.start_at + Math.min(t.duration, t.trim_out ?? t.duration);
+    return end < range.end - 0.25 ? Math.round(end * 1000) / 1000 : null;
+  })();
 
   /** decoded audio of takes (downloaded once) */
   const loadTakes = async (takes: Take[]) => {
@@ -381,7 +398,7 @@ export function useLocalRecorder(o: {
       const buffer = await voiced(t, p);
       // the take played on its own is heard even when its layer is off
       const bus = t === only && off.includes(t.lane) ? undefined : laneBus(t.lane);
-      if (buffer) out.push({ buffer, at: t.start_at, gain: t.gain ?? 1, pan: t.pan ?? 0, bus, id: t.id, fx: p.id === "raw" ? undefined : (ctx) => buildChain(ctx, p, bpm), clip: clipOf(t) });
+      if (buffer) out.push({ buffer, at: t.start_at, gain: t.gain ?? 1, pan: t.pan ?? 0, bus, id: t.id, fx: p.id === "raw" ? undefined : (ctx) => buildChain(ctx, p, bpm), clip: clipOf(t, tree.project.settings?.takeFades) });
     }
     return out;
   };
@@ -447,20 +464,23 @@ export function useLocalRecorder(o: {
   };
 
   /** again: right after a take was thrown away (this render still sees it recording) */
-  const record = async (l: string, again = false) => {
+  const record = async (l: string, again = false, from?: number) => {
     const e = engine.current;
     if (!e || !beat.current || !range || !sectionId || (busy && !again) || starting) return;
     setStarting(true);
     try {
       // a microphone the browser ended or muted meanwhile: switched on again first
       if (!e.inputAlive && !(await arm())) return;
-      await start(e, l);
+      await start(e, l, from);
     } finally {
       setStarting(false);
     }
   };
-  const start = async (e: StudioEngine, l: string) => {
+  const start = async (e: StudioEngine, l: string, from?: number) => {
     if (!range) return;
+    // continuing: the layer's take in this part so far, and where the new piece joins it
+    const base = from !== undefined ? (takesOf(l).find((t) => t.chosen) ?? null) : null;
+    punch.current = base && from !== undefined ? { at: Math.max(range.start - countIn * bar, from), base } : null;
     setError(null);
     // the sound must run (the beat to sing on, and the recorder): a browser starts it only after a click on the page
     if (!(await e.readyToRecord())) {
@@ -472,15 +492,23 @@ export function useLocalRecorder(o: {
       return;
     }
     maxLevel.current = 0;
-    const w = takeWindow(range, bar, countIn);
+    const p = punch.current;
+    const full = takeWindow(range, bar, countIn);
+    // continuing: a bar (or the count-in) of run-up before the joint, with the take so far heard up to it
+    const w = p ? { from: Math.max(0, p.at - Math.max(1, countIn) * bar), to: full.to } : full;
     const layers = await layersFor(w.from, w.to, l);
+    if (p) {
+      const own = (await layersFor(w.from, w.to, undefined, p.base)).find((x) => x.id === p.base.id);
+      if (own) layers.push({ ...own, clip: { from: own.clip?.from ?? 0, to: Math.max(0, Math.min(own.clip?.to ?? Infinity, p.at - p.base.start_at)) } });
+    }
+    const goes = p ? p.at : range.start;
     e.setTakeClicks(clicks);
-    e.play(Math.max(0, w.from), { beat: beat.current, layers, clicks: clicksFor(w.from, range.start, w.to) });
+    e.play(Math.max(0, w.from), { beat: beat.current, layers, clicks: clicksFor(w.from, goes, w.to) });
     e.startRecording();
     recLane.current = l;
     stopAt.current = w.to;
     setLaneState(l);
-    setStatus(countIn > 0 && range.start > 0.05 ? { kind: "countin", lane: l } : { kind: "recording", lane: l, take: takesOf(l).length + 1 });
+    setStatus((p ? goes - w.from > 0.05 : countIn > 0 && range.start > 0.05) ? { kind: "countin", lane: l } : { kind: "recording", lane: l, take: takesOf(l).length + 1 });
   };
 
   /** stops; a take being recorded is saved (or thrown away) */
@@ -493,6 +521,8 @@ export function useLocalRecorder(o: {
     const l = recLane.current;
     recLane.current = null;
     // a stop during the count-in: nothing to keep
+    const joint = punch.current;
+    punch.current = null;
     if (l && (opts.discard || status.kind === "countin")) {
       await e.stopRecording(latency, channel, 0);
       setStatus({ kind: "idle" });
@@ -506,7 +536,7 @@ export function useLocalRecorder(o: {
     setStatus({ kind: "saving", lane: l });
     let peak = -1;
     try {
-      const w = takeWindow(range, bar, countIn);
+      const w = joint ? { from: Math.max(0, joint.at - Math.max(1, countIn) * bar) } : takeWindow(range, bar, countIn);
       const rec = await e.stopRecording(latency, channel, w.from);
       if (rec) for (const v of rec.samples) peak = Math.max(peak, Math.abs(v));
       if (!rec || rec.samples.length < rec.sampleRate * 0.3) throw new Error("Nothing was recorded.");
@@ -518,7 +548,17 @@ export function useLocalRecorder(o: {
           `The ${deviceName()}'s microphone sent no sound, so the take wasn't kept. It is being switched on again — record once more.${o.host ? " Keep the VerseFlow tab open (not in the background) on it." : ""}${!headphones ? " With a USB microphone, turn “I wear headphones” on: the phone's voice processing can silence it." : ""}`,
         );
       }
-      const wav = encodeWav([rec.samples], rec.sampleRate, 24);
+      // a take continued: the take so far up to the joint, the new piece from it — one take
+      let out = { samples: rec.samples, sampleRate: rec.sampleRate, at: rec.startAt };
+      let note: string | null = null;
+      if (joint) {
+        await loadTakes([joint.base]);
+        const before = buffers.current.get(joint.base.id);
+        if (!before) throw new Error("The take so far couldn't be loaded — record the piece again.");
+        out = joinTakes({ samples: before.getChannelData(0), sampleRate: before.sampleRate, at: joint.base.start_at, clip: clipOf(joint.base) }, out, joint.at);
+        note = `${partsOf(joint.base.note) + 1} parts`;
+      }
+      const wav = encodeWav([out.samples], out.sampleRate, 24);
       const { data: up } = await api(`/api/projects/${pid}/takes`, { action: "uploadUrl" });
       const { path, signedUrl } = up as unknown as { path: string; signedUrl: string };
       const fd = new FormData();
@@ -531,10 +571,11 @@ export function useLocalRecorder(o: {
         path,
         section_id: sectionId,
         lane: l,
-        start_at: Math.round(rec.startAt * 100000) / 100000,
-        duration: rec.samples.length / rec.sampleRate,
-        sample_rate: rec.sampleRate,
-        peaks: peaksOf(rec.samples, 160),
+        start_at: Math.round(out.at * 100000) / 100000,
+        duration: out.samples.length / out.sampleRate,
+        sample_rate: out.sampleRate,
+        peaks: peaksOf(out.samples, 160),
+        ...(note ? { note } : {}),
       });
       // kept, but hardly a voice in it: most likely another microphone than the one sung into
       if (peak < 0.05)
@@ -542,10 +583,13 @@ export function useLocalRecorder(o: {
       // kept for playing it back at once
       const id = res.headers.get("x-take-id");
       if (id) {
-        const buf = e.ctx.createBuffer(1, rec.samples.length, rec.sampleRate);
-        buf.copyToChannel(rec.samples as Float32Array<ArrayBuffer>, 0);
+        const buf = e.ctx.createBuffer(1, out.samples.length, out.sampleRate);
+        buf.copyToChannel(out.samples as Float32Array<ArrayBuffer>, 0);
         buffers.current.set(id, buf);
       }
+      // the joined take keeps the volume and pan the take had
+      if (id && joint && ((joint.base.gain ?? 1) !== 1 || (joint.base.pan ?? 0) !== 0))
+        await api(`/api/takes/${id}`, { gain: joint.base.gain ?? 1, pan: joint.base.pan ?? 0 }, "PATCH").catch(() => {});
       // a double sung along with the Lead lands a little late (you follow what you hear): it follows the Lead by itself
       const fresh = saved as unknown as ProjectTree;
       const lead = leadOf(fresh, sectionId);
@@ -583,7 +627,7 @@ export function useLocalRecorder(o: {
   };
 
   /** `clip`: the take on its own stretch, the whole recording (null) or this cut (not saved yet) */
-  const play = async (take?: Take, trying?: { lane: string; preset: string }, clip?: { from: number; to: number | null } | null, gain?: number) => {
+  const play = async (take?: Take, trying?: { lane: string; preset: string }, clip?: { from: number; to: number | null; fadeIn?: number; fadeOut?: number } | null, gain?: number) => {
     const e = engine.current;
     // playing already: starts again (another take)
     if (!e || !beat.current || (!range && clip === undefined) || (busy && status.kind !== "playing")) return;
@@ -638,9 +682,10 @@ export function useLocalRecorder(o: {
         const pos = positionIn(o.timeline, p - outDelay(e));
         setLineIndex(pos && pos.sectionId === sectionId ? pos.lineIndex : null);
         if (status.kind === "countin" && range) {
-          const left = Math.ceil((range.start - p) / o.beatLength - 0.05);
+          const goes = punch.current?.at ?? range.start;
+          const left = Math.ceil((goes - p) / o.beatLength - 0.05);
           setBeatsLeft(left > 0 ? left : null);
-          if (p >= range.start - 0.02) setStatus({ kind: "recording", lane: status.lane, take: takesOf(status.lane).length + 1 });
+          if (p >= goes - 0.02) setStatus({ kind: "recording", lane: status.lane, take: takesOf(status.lane).length + 1 });
         }
         if (stopAt.current !== null && p >= stopAt.current) {
           stopAt.current = null;
@@ -740,7 +785,7 @@ export function useLocalRecorder(o: {
           if (tree.sections.some((s) => s.id === c.sectionId)) select(c.sectionId);
           break;
         case "record":
-          await record(c.lane);
+          await record(c.lane, false, c.from);
           break;
         case "retake":
           if (recLane.current) await restart();
@@ -823,6 +868,7 @@ export function useLocalRecorder(o: {
     takes: sectionTakes.map((t) => ({ id: t.id, lane: t.lane, take_no: t.take_no, chosen: t.chosen, duration: t.duration, peaks: small(t.peaks) })),
     countIn,
     clicks,
+    continueAt,
     error,
     mic,
     playingTake: status.kind === "playing" ? status.take : null,
@@ -880,6 +926,8 @@ export function useLocalRecorder(o: {
     device: null,
     mic,
     record: (l) => void record(l),
+    recordFrom: (l, at) => void record(l, false, at),
+    continueAt,
     stop: () => void stop(),
     restart: () => void restart(),
     play: () => void play(),
@@ -1017,6 +1065,11 @@ export function useRemoteRecorder(o: { tree: ProjectTree; section: [string | nul
       setLane(l);
       send({ t: "record", lane: l });
     },
+    recordFrom: (l, at) => {
+      setLane(l);
+      send({ t: "record", lane: l, from: at });
+    },
+    continueAt: connected ? (state.continueAt ?? null) : null,
     stop: () => send({ t: "stop" }),
     restart: () => send({ t: "retake", lane: state?.statusLane ?? lane }),
     play: () => send({ t: "play" }),

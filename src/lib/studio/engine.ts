@@ -20,8 +20,9 @@ export interface PlayLayer {
   gain?: number;
   /** its sound: an effect chain built for this playback (see lib/fx) */
   fx?: (ctx: BaseAudioContext) => { input: AudioNode; output: AudioNode };
-  /** a cut take: only this part of the buffer plays (seconds of the buffer; `at` stays where the buffer starts) */
-  clip?: { from: number; to: number | null };
+  /** a cut take: only this part of the buffer plays (seconds of the buffer; `at` stays where the buffer starts),
+   * faded in / out over these seconds (none: a few milliseconds, no click) */
+  clip?: { from: number; to: number | null; fadeIn?: number; fadeOut?: number };
   /** its mixer channel ("lane:Lead", "flow"…): turned up / down live with setVolume */
   bus?: string;
   /** a take's id: its own volume and pan can change while it plays (setLayerGain / setLayerPan) */
@@ -363,13 +364,16 @@ export class StudioEngine {
         chain.output.connect(out);
         this.chains.push(chain.output);
       } else last.connect(out);
-      // a short fade at a cut's edges: no click
-      if (clip && (c0 > 0 || c1 < buffer.duration)) {
+      // the cut's edges: its fades (at least a few milliseconds, no click)
+      if (clip && (c0 > 0 || c1 < buffer.duration || clip.fadeIn || clip.fadeOut)) {
         const t0 = this.base + Math.max(at + c0, from);
         const t1 = t0 + (c1 - offset);
-        g.gain.setValueAtTime(0, t0);
-        g.gain.linearRampToValueAtTime(1, t0 + 0.008);
-        g.gain.setValueAtTime(1, Math.max(t0 + 0.008, t1 - 0.012));
+        // started in the middle of the cut: the fade in is over (only the no-click ramp)
+        const fin = offset > c0 + 0.001 ? 0.008 : Math.max(0.008, clip.fadeIn ?? 0);
+        const fout = Math.min(Math.max(0.012, clip.fadeOut ?? 0), Math.max(0.012, t1 - t0 - fin));
+        g.gain.setValueAtTime(0.0001, t0);
+        g.gain.linearRampToValueAtTime(1, t0 + fin);
+        g.gain.setValueAtTime(1, Math.max(t0 + fin, t1 - fout));
         g.gain.linearRampToValueAtTime(0, t1);
       }
       src.start(this.base + Math.max(at + c0, from), offset, c1 - offset);

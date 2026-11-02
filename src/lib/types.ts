@@ -63,6 +63,8 @@ export interface ProjectSettings {
   briefs?: Record<string, import("./brief").LyricsBrief>;
   /** bars added to parts (a part made longer): applied in order to the uploaded song when it loads (lib/audio/arrange) */
   extensions?: { at: number; from: number; to?: number; len: number; vocals?: boolean }[];
+  /** each take's fade in / out (s), set in Record → ✂ Cut — they shape how it plays, the recording stays */
+  takeFades?: Record<string, { in: number; out: number }>;
   /** the song's key for autotune (found in the beat, or chosen); "chromatic": every semitone is a note */
   songKey?: { root: number; minor: boolean } | "chromatic";
   /** the performers; sections list the ids of who performs them */

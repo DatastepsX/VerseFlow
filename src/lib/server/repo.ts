@@ -1481,6 +1481,18 @@ export async function trimTake(id: string, from: number, to: number | null) {
   return t.project_id;
 }
 
+/** a take's fade in / out (s; both 0: none) — kept with the song (settings.takeFades), the recording stays */
+export async function setTakeFade(id: string, fade: { in: number; out: number }) {
+  const t = await getTake(id);
+  const settings = await projectSettings(t.project_id);
+  const fades = { ...(settings.takeFades ?? {}) };
+  const f = { in: Math.round(Math.max(0, Math.min(5, fade.in)) * 100) / 100, out: Math.round(Math.max(0, Math.min(5, fade.out)) * 100) / 100 };
+  if (f.in || f.out) fades[id] = f;
+  else delete fades[id];
+  await updateProject(t.project_id, { settings: { ...settings, takeFades: fades } });
+  return t.project_id;
+}
+
 /** a take moved on the beat (seconds, + later / − earlier): to fix its timing by ear */
 export async function shiftTake(id: string, by: number) {
   const t = await getTake(id);
@@ -1495,6 +1507,13 @@ export async function deleteTake(id: string) {
   const t = await getTake(id);
   check(await db().from("takes").delete().eq("id", id));
   await db().storage.from(BUCKET).remove([t.path]);
+  // its fades go with it
+  const settings = await projectSettings(t.project_id);
+  if (settings.takeFades?.[id]) {
+    const fades = { ...settings.takeFades };
+    delete fades[id];
+    await updateProject(t.project_id, { settings: { ...settings, takeFades: fades } });
+  }
   if (t.chosen) {
     let q = db().from("takes").select("id").eq("project_id", t.project_id).eq("lane", t.lane);
     q = t.section_id ? q.eq("section_id", t.section_id) : q.is("section_id", null);

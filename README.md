@@ -157,8 +157,14 @@ in Record — `vf.studio.main`, kept with the profile): with the Mac as the main
 whole song — the tab and part opened on the phone open on the Mac, play / stop / Hear play there (remote commands
 `nav`, `songPlay`, `songStop`).
 
-**Cutting a take** (Record → a take → ✂ Cut): its start and end (`takes.trim_in` / `trim_out`); the recording stays
-whole, only the cut plays (`PlayLayer.clip`), and "The whole take again" undoes it.
+**Cutting a take** (Record → a take → ✂ Cut): its start and end (`takes.trim_in` / `trim_out`) and its fade in / out
+(`settings.takeFades`); the recording stays whole, only the cut plays (`PlayLayer.clip`, with its fades — also in the
+mix and the exports), and "The whole take again" undoes it.
+
+**A take in pieces** (Record → "Continue Lead take 1", or tap a line → "Record from …"): a bar of run-up with the take
+so far heard up to the joint, then it records on; when stopped, the take so far (up to the joint) and the new piece
+(from it) are joined into one new take with a short crossfade (`src/lib/studio/join.ts`), noted "2 parts", "3 parts"…
+— the earlier take stays.
 
 **Your settings** (`/settings`: the slider button on Home, More → Your settings, Record → Settings): recording
 (count-in, click, lyrics size, headphones), timing, your voice, the ElevenLabs account, appearance — the same in every

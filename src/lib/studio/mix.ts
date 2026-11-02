@@ -61,7 +61,11 @@ export function withChannel(s: ProjectSettings | undefined, key: string, patch: 
 }
 
 /** a take's clip (cut), for the engine */
-export const clipOf = (t: { trim_in: number; trim_out: number | null }) => (t.trim_in > 0 || t.trim_out !== null ? { from: t.trim_in ?? 0, to: t.trim_out } : undefined);
+/** the part of a take that plays (its cut), with its fades (`fades`: the song's, settings.takeFades) */
+export const clipOf = (t: { id?: string; trim_in: number; trim_out: number | null }, fades?: Record<string, { in: number; out: number }>) => {
+  const f = t.id ? fades?.[t.id] : undefined;
+  return t.trim_in > 0 || t.trim_out !== null || f ? { from: t.trim_in ?? 0, to: t.trim_out, ...(f ? { fadeIn: f.in, fadeOut: f.out } : {}) } : undefined;
+};
 
 export const pct = (v: number) => `${Math.round(v * 100)}%`;
 

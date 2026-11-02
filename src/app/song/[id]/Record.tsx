@@ -115,6 +115,8 @@ function RecordScreen({ r, tree, setTree, rangeOf, bar, timeline, onBusy, host, 
   const [soundFor, setSoundFor] = useState<string | null>(null);
   /** "Copy this part's sound" open */
   const [copying, setCopying] = useState(false);
+  /** a line tapped: the take continues from its start (instead of from where it stopped) */
+  const [fromLine, setFromLine] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   /** how far each take was moved here (shown next to its timing buttons) */
   const [moved, setMoved] = useState<Record<string, number>>({});
@@ -318,7 +320,12 @@ function RecordScreen({ r, tree, setTree, rangeOf, bar, timeline, onBusy, host, 
                 <div
                   key={l.id}
                   id={`rec-${l.id}`}
-                  className={`-mx-2 flex items-start gap-1 rounded-xl px-2 py-0.5 transition-colors ${isLive ? "bg-accent-soft font-semibold text-fg" : liveAt >= 0 && k < liveAt ? "text-muted" : "text-fg/90"}`}
+                  className={`-mx-2 flex items-start gap-1 rounded-xl px-2 py-0.5 transition-colors ${isLive ? "bg-accent-soft font-semibold text-fg" : fromLine === l.id ? "bg-bad-soft text-fg ring-1 ring-bad/40" : liveAt >= 0 && k < liveAt ? "text-muted" : "text-fg/90"}`}
+                  // with a take on this layer: tap a line to go on recording from it (tap again: from where it stopped)
+                  onClick={() => {
+                    if (!idle || r.continueAt === null || !Number.isFinite(from)) return;
+                    setFromLine(fromLine === l.id ? null : l.id);
+                  }}
                 >
                   <div className="min-w-0 flex-1">
                   {isLive && r.clock && Number.isFinite(from) ? (
@@ -518,7 +525,7 @@ function RecordScreen({ r, tree, setTree, rangeOf, bar, timeline, onBusy, host, 
                             onClick={() => setCutting(t.id)}
                             aria-label={`Cut take ${t.take_no} and set its volume`}
                           >
-                            ✂ {cut ? `Cut · ${fmtTime((full!.trim_out ?? full!.duration) - full!.trim_in)}` : "Cut"} · {full && (full.gain ?? 1) !== 1 ? pct(full.gain) : "Volume"}
+                            ✂ {cut ? `Cut · ${fmtTime((full!.trim_out ?? full!.duration) - full!.trim_in)}` : "Cut"}{full && tree.project.settings?.takeFades?.[full.id] ? " · Fades" : ""} · {full && (full.gain ?? 1) !== 1 ? pct(full.gain) : "Volume"}
                           </button>
                         );
                       })()}
@@ -556,6 +563,33 @@ function RecordScreen({ r, tree, setTree, rangeOf, bar, timeline, onBusy, host, 
 
       {/* transport, above the tabs */}
       <div className="fixed inset-x-0 bottom-0 z-20 mx-auto max-w-lg border-t border-line/70 bg-bg/95 pb-[calc(env(safe-area-inset-bottom)+4.3rem)] backdrop-blur-xl">
+        {/* a take in pieces: go on from where it stopped (or from a tapped line) — joined into the same take */}
+        {idle && r.continueAt !== null && canRecord && (() => {
+          const line = fromLine ? lines.find((x) => x.id === fromLine) : null;
+          const lineAt = line && section ? (timeline.get(section.id)?.starts ?? [])[section.lines.indexOf(line as (typeof section.lines)[number])] : undefined;
+          const at = line && lineAt !== undefined && Number.isFinite(lineAt) ? lineAt : r.continueAt;
+          const take = r.takes.filter((t) => t.lane === r.lane).find((t) => t.chosen);
+          return (
+            <div className="flex items-center gap-2 px-5 pt-2.5">
+              <button
+                className="flex h-10 flex-1 items-center justify-center gap-2 rounded-2xl bg-bad-soft text-sm font-semibold text-bad active:opacity-80"
+                onClick={() => {
+                  r.recordFrom(r.lane, at);
+                  setFromLine(null);
+                }}
+              >
+                <span className="h-2.5 w-2.5 rounded-full bg-[#dc2626]" />
+                {line ? `Record from “${line.text.trim().split(/\s+/).slice(0, 3).join(" ")}…”` : `Continue ${r.lane}${take ? ` take ${take.take_no}` : ""}`}
+                <span className="font-mono text-[11px] font-normal opacity-70">{fmtTime(at)}</span>
+              </button>
+              {line && (
+                <button className="h-10 rounded-2xl bg-panel-2 px-3 text-xs font-semibold text-muted" onClick={() => setFromLine(null)}>
+                  From the end
+                </button>
+              )}
+            </div>
+          );
+        })()}
         <div className="flex items-center justify-between px-5 pt-3">
           {recording ? (
             <DockButton label="Again" onClick={r.restart}>
@@ -632,6 +666,11 @@ function RecordScreen({ r, tree, setTree, rangeOf, bar, timeline, onBusy, host, 
               peaks={rt?.peaks ?? full.peaks ?? []}
               onSave={async (from, to) => {
                 const res = await fetch(`/api/takes/${full.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ trim: { from, to } }) });
+                if (res.ok) setTree((await res.json()) as ProjectTree);
+              }}
+              fade={tree.project.settings?.takeFades?.[full.id] ?? { in: 0, out: 0 }}
+              onSaveFade={async (fade) => {
+                const res = await fetch(`/api/takes/${full.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ fade }) });
                 if (res.ok) setTree((await res.json()) as ProjectTree);
               }}
               onPreview={(clip, gain) => r.previewTake(full.id, clip, gain)}
@@ -1047,8 +1086,11 @@ function TakeCut(props: {
   take: { id: string; take_no: number; lane: string; duration: number; start_at: number; trim_in: number; trim_out: number | null; gain: number };
   peaks: number[];
   onSave: (from: number, to: number | null) => Promise<void>;
+  /** its fade in / out (s) as saved, and saving them */
+  fade: { in: number; out: number };
+  onSaveFade: (fade: { in: number; out: number }) => Promise<void>;
   /** hear the whole recording (null) or the cut as set now (saved or not) */
-  onPreview: (clip: { from: number; to: number | null } | null, gain: number) => void;
+  onPreview: (clip: { from: number; to: number | null; fadeIn?: number; fadeOut?: number } | null, gain: number) => void;
   onStop: () => void;
   playing: boolean;
   /** the song position being heard (on this device) */
@@ -1062,11 +1104,14 @@ function TakeCut(props: {
   const [from, setFrom] = useState(props.take.trim_in);
   const [to, setTo] = useState(props.take.trim_out ?? d);
   const [gain, setGain] = useState(props.take.gain ?? 1);
+  const [fadeIn, setFadeIn] = useState(props.fade.in);
+  const [fadeOut, setFadeOut] = useState(props.fade.out);
   const [busy, setBusy] = useState(false);
   /** what is playing: the whole take or the cut */
   const [hearing, setHearing] = useState<"whole" | "cut" | null>(null);
   const changed = Math.abs(from - props.take.trim_in) > 0.005 || Math.abs(to - (props.take.trim_out ?? d)) > 0.005;
   const gainChanged = Math.abs(gain - (props.take.gain ?? 1)) > 0.005;
+  const fadeChanged = Math.abs(fadeIn - props.fade.in) > 0.005 || Math.abs(fadeOut - props.fade.out) > 0.005;
   const save = async (a: number, b: number) => {
     setBusy(true);
     try {
@@ -1080,6 +1125,7 @@ function TakeCut(props: {
     try {
       if (changed) await props.onSave(from, to >= d - 0.01 ? null : to);
       if (gainChanged) await props.onSaveGain(gain);
+      if (fadeChanged) await props.onSaveFade({ in: fadeIn, out: fadeOut });
     } finally {
       setBusy(false);
     }
@@ -1091,7 +1137,7 @@ function TakeCut(props: {
       return props.onStop();
     }
     setHearing(what);
-    props.onPreview(what === "whole" ? { from: 0, to: null } : { from, to: to >= d - 0.01 ? null : to }, gain);
+    props.onPreview(what === "whole" ? { from: 0, to: null } : { from, to: to >= d - 0.01 ? null : to, fadeIn, fadeOut }, gain);
   };
   const now = props.playing ? hearing : null;
   // where it is in the recording (a line over the waveform)
@@ -1143,6 +1189,9 @@ function TakeCut(props: {
           </svg>
           <div className="absolute inset-y-0 left-0 bg-bg/70" style={{ width: at(from) }} />
           <div className="absolute inset-y-0 right-0 bg-bg/70" style={{ width: `calc(100% - ${at(to)})` }} />
+          {/* the fades: a ramp over the start and the end of the cut */}
+          {fadeIn > 0 && <div className="absolute inset-y-0 bg-gradient-to-r from-bg/80 to-transparent" style={{ left: at(from), width: at(Math.min(fadeIn, to - from)) }} />}
+          {fadeOut > 0 && <div className="absolute inset-y-0 bg-gradient-to-l from-bg/80 to-transparent" style={{ left: at(Math.max(from, to - fadeOut)), width: at(Math.min(fadeOut, to - from)) }} />}
           <div className="absolute inset-y-0 w-0.5 bg-fg" style={{ left: at(from) }} />
           <div className="absolute inset-y-0 w-0.5 bg-fg" style={{ left: `calc(${at(to)} - 2px)` }} />
           {head !== null && head >= 0 && head <= d && <div className="absolute inset-y-0 w-0.5 bg-[#dc2626]" style={{ left: at(head) }} />}
@@ -1161,6 +1210,22 @@ function TakeCut(props: {
           </span>
           <input type="range" className="w-full accent-[var(--accent)]" min={0} max={d} step={0.01} value={to} onChange={(e) => setTo(Math.max(Number(e.target.value), from + 0.2))} aria-label="End of the cut" />
         </label>
+        <div className="grid grid-cols-2 gap-3">
+          <label className="block space-y-1 text-sm">
+            <span className="flex justify-between">
+              <span className="font-semibold">Fade in</span>
+              <span className="font-mono text-xs text-muted">{fadeIn ? `${fadeIn.toFixed(2)} s` : "off"}</span>
+            </span>
+            <input type="range" className="w-full accent-[var(--accent)]" min={0} max={Math.min(3, Math.max(0.1, (to - from) / 2))} step={0.01} value={fadeIn} onChange={(e) => setFadeIn(Number(e.target.value))} aria-label="Fade in" />
+          </label>
+          <label className="block space-y-1 text-sm">
+            <span className="flex justify-between">
+              <span className="font-semibold">Fade out</span>
+              <span className="font-mono text-xs text-muted">{fadeOut ? `${fadeOut.toFixed(2)} s` : "off"}</span>
+            </span>
+            <input type="range" className="w-full accent-[var(--accent)]" min={0} max={Math.min(3, Math.max(0.1, (to - from) / 2))} step={0.01} value={fadeOut} onChange={(e) => setFadeOut(Number(e.target.value))} aria-label="Fade out" />
+          </label>
+        </div>
         <div className="flex gap-2">
           {heardBtn("whole", "Whole take")}
           {heardBtn("cut", "The cut")}
@@ -1192,7 +1257,7 @@ function TakeCut(props: {
           <p className="text-[11px] text-muted">The whole {props.take.lane} layer: the Mixer.</p>
         </div>
         <button className="btn-primary w-full justify-center rounded-2xl py-3 text-sm disabled:opacity-50" disabled={busy} onClick={() => void finish()}>
-          <Check className="h-4 w-4" /> {changed || gainChanged ? "Save" : "Done"}
+          <Check className="h-4 w-4" /> {changed || gainChanged || fadeChanged ? "Save" : "Done"}
         </button>
         {(props.take.trim_in > 0 || props.take.trim_out !== null) && (
           <button

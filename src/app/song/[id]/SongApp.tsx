@@ -374,7 +374,7 @@ export function SongApp({
       const buffer = flowBufs.current.get(t.id);
       const p = layerPreset(tree.project.settings?.fx, t.lane, t.section_id);
       return buffer
-        ? [{ buffer, at: t.start_at, gain: t.gain ?? 1, pan: t.pan ?? 0, bus: laneBus(t.lane), id: t.id, fx: p.id === "raw" ? undefined : (ctx: BaseAudioContext) => buildChain(ctx, p, bpm), clip: clipOf(t) }]
+        ? [{ buffer, at: t.start_at, gain: t.gain ?? 1, pan: t.pan ?? 0, bus: laneBus(t.lane), id: t.id, fx: p.id === "raw" ? undefined : (ctx: BaseAudioContext) => buildChain(ctx, p, bpm), clip: clipOf(t, tree.project.settings?.takeFades) }]
         : [];
     });
   };
