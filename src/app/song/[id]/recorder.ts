@@ -81,6 +81,9 @@ export interface Recorder {
   recordFrom: (lane: string, at: number) => void;
   /** where the current layer's take in this part ends — "Continue" goes on from there (null: no take yet) */
   continueAt: number | null;
+  /** how much of the take so far is heard before it goes on: bars (1, 2, 4), or 0 — the whole take from its start */
+  runUp: number;
+  setRunUp: (bars: number) => void;
   stop: () => void;
   /** throw the take being recorded away and start it again */
   restart: () => void;
@@ -108,6 +111,18 @@ export interface Recorder {
   arm: () => void;
   /** on this device only */
   settings: LocalSettings | null;
+}
+
+/** a microphone check: what came in while you sang, and the gain that puts your loudest at about −6 dB */
+export interface MicCheck {
+  verdict: "silent" | "quiet" | "good" | "loud" | "clipping";
+  /** the loudest moment and the average, in dB (0: the top) */
+  peakDb: number;
+  rmsDb: number;
+  /** the gain that would put it right */
+  suggestDb: number;
+  /** the input the voice came in on, when it isn't the one used */
+  channel: number | null;
 }
 
 export interface LocalSettings {
@@ -140,6 +155,8 @@ export interface LocalSettings {
   setMonitor: (on: boolean) => void;
   /** sing for a few seconds: the gain (and the input the microphone is on) set by itself */
   autoLevel: () => void;
+  /** sing your loudest for a few seconds: how the level is (nothing changed — `fix` applies the suggestion) */
+  checkMic: () => Promise<MicCheck | null>;
   /** seconds left while it listens; null: not listening */
   leveling: number | null;
   /** what the last auto level found */
@@ -219,6 +236,7 @@ export function useLocalRecorder(o: {
   const [channel, setChannel] = usePref("vf.studio.channel", 0);
   const [countIn, setCountIn] = usePref("vf.studio.countin", 1);
   const [clicks, setClicksPref] = usePref("vf.studio.clicks", false);
+  const [runUp, setRunUp] = usePref("vf.studio.runup", 2);
   // the engine follows the setting at once — even in the middle of a take
   useEffect(() => {
     engine.current?.setTakeClicks(clicks);
@@ -280,7 +298,7 @@ export function useLocalRecorder(o: {
   const [starting, setStarting] = useState(false);
   const stopAt = useRef<number | null>(null);
   /** a take being continued: where the new piece joins it, and the take so far */
-  const punch = useRef<{ at: number; base: Take } | null>(null);
+  const punch = useRef<{ at: number; base: Take; from: number } | null>(null);
   /** the loudest the level meter showed during the take */
   const maxLevel = useRef(0);
   const recLane = useRef<string | null>(null);
@@ -480,7 +498,13 @@ export function useLocalRecorder(o: {
     if (!range) return;
     // continuing: the layer's take in this part so far, and where the new piece joins it
     const base = from !== undefined ? (takesOf(l).find((t) => t.chosen) ?? null) : null;
-    punch.current = base && from !== undefined ? { at: Math.max(range.start - countIn * bar, from), base } : null;
+    if (base && from !== undefined) {
+      const at = Math.max(range.start - countIn * bar, from);
+      // what is heard first: the whole take so far from where it starts to play, or a few bars before the joint
+      const takeStart = base.start_at + (base.trim_in ?? 0);
+      const runFrom = runUp === 0 ? Math.min(takeStart, at - bar) : at - Math.max(1, runUp) * bar;
+      punch.current = { at, base, from: Math.max(0, runFrom) };
+    } else punch.current = null;
     setError(null);
     // the sound must run (the beat to sing on, and the recorder): a browser starts it only after a click on the page
     if (!(await e.readyToRecord())) {
@@ -495,7 +519,7 @@ export function useLocalRecorder(o: {
     const p = punch.current;
     const full = takeWindow(range, bar, countIn);
     // continuing: a bar (or the count-in) of run-up before the joint, with the take so far heard up to it
-    const w = p ? { from: Math.max(0, p.at - Math.max(1, countIn) * bar), to: full.to } : full;
+    const w = p ? { from: p.from, to: full.to } : full;
     const layers = await layersFor(w.from, w.to, l);
     if (p) {
       const own = (await layersFor(w.from, w.to, undefined, p.base)).find((x) => x.id === p.base.id);
@@ -536,7 +560,7 @@ export function useLocalRecorder(o: {
     setStatus({ kind: "saving", lane: l });
     let peak = -1;
     try {
-      const w = joint ? { from: Math.max(0, joint.at - Math.max(1, countIn) * bar) } : takeWindow(range, bar, countIn);
+      const w = joint ? { from: joint.from } : takeWindow(range, bar, countIn);
       const rec = await e.stopRecording(latency, channel, w.from);
       if (rec) for (const v of rec.samples) peak = Math.max(peak, Math.abs(v));
       if (!rec || rec.samples.length < rec.sampleRate * 0.3) throw new Error("Nothing was recorded.");
@@ -576,6 +600,8 @@ export function useLocalRecorder(o: {
         sample_rate: out.sampleRate,
         peaks: peaksOf(out.samples, 160),
         ...(note ? { note } : {}),
+        // a take continued: a new version of the same take (kept together with it)
+        ...(joint ? { of: joint.base.id } : {}),
       });
       // kept, but hardly a voice in it: most likely another microphone than the one sung into
       if (peak < 0.05)
@@ -713,6 +739,30 @@ export function useLocalRecorder(o: {
    * Auto level: you sing (or rap) your loudest part for 5 seconds; the gain is set so its peaks land at about
    * −6 dB — loud, with room before it clips — and the input the microphone is on is chosen.
    */
+  const checkMic = async (): Promise<MicCheck | null> => {
+    const e = engine.current;
+    if (!e || busy || leveling !== null) return null;
+    if (!e.inputAlive && !(await arm())) return null;
+    setLevelNote(null);
+    const secs = 5;
+    setLeveling(secs);
+    const tick = setInterval(() => setLeveling((x) => (x && x > 1 ? x - 1 : x)), 1000);
+    try {
+      const m = await e.measureInput(secs);
+      if (!m) return null;
+      const k = m.peaks.length > 1 && m.peaks[1] > 4 * m.peaks[0] ? 1 : 0;
+      const peak = m.peaks[k];
+      const db = (v: number) => (v > 0 ? Math.round(20 * Math.log10(v) * 10) / 10 : -99);
+      const raw = Math.max(1e-6, peak / 10 ** (gainDb / 20));
+      const suggestDb = Math.round(Math.max(GAIN_MIN, Math.min(GAIN_MAX, 20 * Math.log10(0.5 / raw))) * 2) / 2;
+      const peakDb = db(peak);
+      const verdict = peak < 0.002 ? "silent" : peak >= 0.98 ? "clipping" : peakDb > -2 ? "loud" : peakDb < -20 ? "quiet" : "good";
+      return { verdict, peakDb, rmsDb: db(m.rms[k]), suggestDb, channel: k !== channel && channel >= 0 && m.peaks[channel] < m.peaks[k] / 4 ? k : null };
+    } finally {
+      clearInterval(tick);
+      setLeveling(null);
+    }
+  };
   const autoLevel = async () => {
     const e = engine.current;
     if (!e || busy || leveling !== null) return;
@@ -777,7 +827,7 @@ export function useLocalRecorder(o: {
   const run = useRef<(c: RemoteCmd) => Promise<void>>(async () => {});
   useEffect(() => {
     run.current = async (c: RemoteCmd) => {
-      const label: Partial<Record<RemoteCmd["t"], string>> = { select: "Part", record: "Record", retake: "Again", stop: "Stop", play: "Play", playTake: "Play take", choose: "Use take", delete: "Delete take", addLane: "New layer", countIn: "Count-in", clicks: "Metronome", sound: "Sound", key: "Key" };
+      const label: Partial<Record<RemoteCmd["t"], string>> = { select: "Part", record: "Record", retake: "Again", stop: "Stop", play: "Play", playTake: "Play take", choose: "Use take", delete: "Delete take", addLane: "New layer", countIn: "Count-in", clicks: "Metronome", runUp: "Run-up", sound: "Sound", key: "Key" };
       setNote(`Phone: ${label[c.t] ?? c.t}`);
       setTimeout(() => setNote(null), 2500);
       switch (c.t) {
@@ -828,6 +878,9 @@ export function useLocalRecorder(o: {
         case "clicks":
           setClicks(!!c.on);
           break;
+        case "runUp":
+          setRunUp([0, 1, 2, 4].includes(c.bars) ? c.bars : 2);
+          break;
         case "countIn":
           setCountIn(Math.max(0, Math.min(2, Math.round(c.bars))));
           break;
@@ -869,6 +922,7 @@ export function useLocalRecorder(o: {
     countIn,
     clicks,
     continueAt,
+    runUp,
     error,
     mic,
     playingTake: status.kind === "playing" ? status.take : null,
@@ -927,6 +981,8 @@ export function useLocalRecorder(o: {
     mic,
     record: (l) => void record(l),
     recordFrom: (l, at) => void record(l, false, at),
+    runUp,
+    setRunUp,
     continueAt,
     stop: () => void stop(),
     restart: () => void restart(),
@@ -973,6 +1029,7 @@ export function useLocalRecorder(o: {
       monitorDelayMs,
       setMonitor,
       autoLevel: () => void autoLevel(),
+      checkMic,
       leveling,
       levelNote,
     },
@@ -1070,6 +1127,8 @@ export function useRemoteRecorder(o: { tree: ProjectTree; section: [string | nul
       send({ t: "record", lane: l, from: at });
     },
     continueAt: connected ? (state.continueAt ?? null) : null,
+    runUp: connected ? (state.runUp ?? 2) : 2,
+    setRunUp: (bars) => send({ t: "runUp", bars }),
     stop: () => send({ t: "stop" }),
     restart: () => send({ t: "retake", lane: state?.statusLane ?? lane }),
     play: () => send({ t: "play" }),

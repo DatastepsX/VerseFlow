@@ -176,6 +176,8 @@ export async function syncTakes(
       sample_rate: take.sr,
       peaks: peaksOf(result.samples, 160),
       note: noteOf(mode, lead),
+      // a version of the take it came from
+      of: t.id,
     });
     latest = saved.data;
     const id = saved.res.headers.get("x-take-id");

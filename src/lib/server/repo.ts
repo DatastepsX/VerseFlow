@@ -1481,6 +1481,14 @@ export async function trimTake(id: string, from: number, to: number | null) {
   return t.project_id;
 }
 
+/** a new version of a take (continued, synced): it belongs with the take it came from (the first of that line) */
+export async function linkTake(projectId: string, id: string, of: string) {
+  const settings = await projectSettings(projectId);
+  const takeOf = { ...(settings.takeOf ?? {}) };
+  takeOf[id] = takeOf[of] ?? of;
+  await updateProject(projectId, { settings: { ...settings, takeOf } });
+}
+
 /** a take's fade in / out (s; both 0: none) — kept with the song (settings.takeFades), the recording stays */
 export async function setTakeFade(id: string, fade: { in: number; out: number }) {
   const t = await getTake(id);
@@ -1507,12 +1515,14 @@ export async function deleteTake(id: string) {
   const t = await getTake(id);
   check(await db().from("takes").delete().eq("id", id));
   await db().storage.from(BUCKET).remove([t.path]);
-  // its fades go with it
+  // its fades and its place among versions go with it
   const settings = await projectSettings(t.project_id);
-  if (settings.takeFades?.[id]) {
-    const fades = { ...settings.takeFades };
+  if (settings.takeFades?.[id] || settings.takeOf?.[id]) {
+    const fades = { ...(settings.takeFades ?? {}) };
     delete fades[id];
-    await updateProject(t.project_id, { settings: { ...settings, takeFades: fades } });
+    const takeOf = { ...(settings.takeOf ?? {}) };
+    delete takeOf[id];
+    await updateProject(t.project_id, { settings: { ...settings, takeFades: fades, takeOf } });
   }
   if (t.chosen) {
     let q = db().from("takes").select("id").eq("project_id", t.project_id).eq("lane", t.lane);

@@ -1,4 +1,4 @@
-import { saveTake, takeUploadUrl, takeUrls } from "@/lib/server/repo";
+import { linkTake, saveTake, takeUploadUrl, takeUrls } from "@/lib/server/repo";
 import { body, handle, treeResponse } from "@/lib/server/http";
 import { access } from "@/lib/server/users";
 
@@ -21,6 +21,7 @@ export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]/t
     const uid = await access((await ctx.params).id, "edit");
     const { id } = await ctx.params;
     const b = await body<{
+      of?: unknown;
       action: string;
       path?: string;
       section_id?: string;
@@ -47,6 +48,8 @@ export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]/t
         note: typeof b.note === "string" ? b.note.slice(0, 80) : null,
         created_by: uid,
       });
+      // a version of another take (continued in pieces, synced): kept together with it
+      if (typeof b.of === "string" && /^[0-9a-f-]{36}$/.test(b.of)) await linkTake(id, takeId, b.of);
       const res = await treeResponse(id);
       res.headers.set("x-take-id", takeId);
       return res;

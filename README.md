@@ -164,7 +164,14 @@ mix and the exports), and "The whole take again" undoes it.
 **A take in pieces** (Record → "Continue Lead take 1", or tap a line → "Record from …"): a bar of run-up with the take
 so far heard up to the joint, then it records on; when stopped, the take so far (up to the joint) and the new piece
 (from it) are joined into one new take with a short crossfade (`src/lib/studio/join.ts`), noted "2 parts", "3 parts"…
-— the earlier take stays.
+— the earlier take stays. Before going on, "Hear first" sets how much of the take so far plays (1, 2, 4 bars or the
+whole take from its start), and ▶ plays it. A take's versions (continued, synced) are kept together
+(`settings.takeOf`): one card per take with its versions as chips ("as sung", "2 parts", "on the beat"…), and a row
+at the top jumps between the takes.
+
+**Mic check** (the first take of a session, or "Check" next to the level meter): sing your loudest for 5 seconds —
+no sound / too quiet / good / too loud / clipping, with the loudest and average level — and "Set it for me" sets the
+gain that puts the loudest at about −6 dB. Record → it can be turned off in the sheet.
 
 **Your settings** (`/settings`: the slider button on Home, More → Your settings, Record → Settings): recording
 (count-in, click, lyrics size, headphones), timing, your voice, the ElevenLabs account, appearance — the same in every

@@ -18,6 +18,7 @@ export type RemoteCmd =
   | { t: "addLane"; name: string }
   | { t: "countIn"; bars: number }
   | { t: "clicks"; on: boolean }
+  | { t: "runUp"; bars: number }
   | { t: "sound"; lane: string; preset: string; part?: boolean }
   | { t: "key"; key: "chromatic" | { root: number; minor: boolean } }
   // the phone drives the whole song on the Mac (the Mac is the main device): what it shows, what it plays
@@ -57,6 +58,8 @@ export interface RemoteState {
   clicks?: boolean;
   /** where "Continue" goes on from (the current layer's take ends there) */
   continueAt?: number | null;
+  /** how much of the take so far is heard before continuing (bars; 0: the whole take) */
+  runUp?: number;
   error: string | null;
   /** which page publishes (a phone ignores a state that isn't from the recording device) */
   host?: string;

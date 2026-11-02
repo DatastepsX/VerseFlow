@@ -19,7 +19,7 @@ import { undoHeaders, undoStep } from "@/lib/undo-group";
 import type { Timeline } from "@/lib/audio/timeline";
 import type { StudioEngine } from "@/lib/studio/engine";
 import type { Line, ProjectTree } from "@/lib/types";
-import { GAIN_MAX, GAIN_MIN, useIsPhone, useLocalRecorder, usePref, useRemoteRecorder, type Recorder } from "./recorder";
+import { GAIN_MAX, GAIN_MIN, useIsPhone, useLocalRecorder, usePref, useRemoteRecorder, type MicCheck, type Recorder } from "./recorder";
 
 type On = "here" | "mac";
 
@@ -115,6 +115,27 @@ function RecordScreen({ r, tree, setTree, rangeOf, bar, timeline, onBusy, host, 
   const [soundFor, setSoundFor] = useState<string | null>(null);
   /** "Copy this part's sound" open */
   const [copying, setCopying] = useState(false);
+  /** the microphone checked before the first take of a session (this device records) */
+  const [checkFirst, setCheckFirst] = usePref("vf.studio.micCheck", true);
+  const [micCheck, setMicCheck] = useState<{ then?: () => void } | null>(null);
+  const checkedKey = "vf.micChecked";
+  const checked = () => {
+    try {
+      return sessionStorage.getItem(checkedKey) === "1";
+    } catch {
+      return true;
+    }
+  };
+  const markChecked = () => {
+    try {
+      sessionStorage.setItem(checkedKey, "1");
+    } catch {}
+  };
+  /** record — the first time in a session, after a quick check of the microphone's level */
+  const recordChecked = () => {
+    if (r.settings && checkFirst && !checked()) setMicCheck({ then: () => r.record(r.lane) });
+    else r.record(r.lane);
+  };
   /** a line tapped: the take continues from its start (instead of from where it stopped) */
   const [fromLine, setFromLine] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
@@ -463,8 +484,11 @@ function RecordScreen({ r, tree, setTree, rangeOf, bar, timeline, onBusy, host, 
           {takes.length === 0 ? (
             <p className="px-1 text-sm text-muted">No {r.lane} takes yet — tap the red button to record one.</p>
           ) : (
-            <div className="space-y-2">
-              {takes.map((t) => {
+            <TakeGroups
+              takes={takes}
+              tree={tree}
+              lane={r.lane}
+              row={(t) => {
                 const playingThis = r.status === "playing" && r.playingTake === t.id;
                 return (
                   <div key={t.id} className={`flex items-center gap-3 rounded-2xl bg-panel px-3 py-2.5 ring-1 ${t.chosen ? "ring-accent/60" : "ring-line/60"}`}>
@@ -554,8 +578,8 @@ function RecordScreen({ r, tree, setTree, rangeOf, bar, timeline, onBusy, host, 
                     </button>
                   </div>
                 );
-              })}
-            </div>
+              }}
+            />
           )}
         </div>
       )}
@@ -564,15 +588,51 @@ function RecordScreen({ r, tree, setTree, rangeOf, bar, timeline, onBusy, host, 
       {/* transport, above the tabs */}
       <div className="fixed inset-x-0 bottom-0 z-20 mx-auto max-w-lg border-t border-line/70 bg-bg/95 pb-[calc(env(safe-area-inset-bottom)+4.3rem)] backdrop-blur-xl">
         {/* a take in pieces: go on from where it stopped (or from a tapped line) — joined into the same take */}
-        {idle && r.continueAt !== null && canRecord && (() => {
+        {(idle || r.status === "playing") && r.continueAt !== null && r.beatReady && !!range && (() => {
           const line = fromLine ? lines.find((x) => x.id === fromLine) : null;
           const lineAt = line && section ? (timeline.get(section.id)?.starts ?? [])[section.lines.indexOf(line as (typeof section.lines)[number])] : undefined;
           const at = line && lineAt !== undefined && Number.isFinite(lineAt) ? lineAt : r.continueAt;
           const take = r.takes.filter((t) => t.lane === r.lane).find((t) => t.chosen);
+          const playingIt = !!take && r.status === "playing" && r.playingTake === take.id;
           return (
-            <div className="flex items-center gap-2 px-5 pt-2.5">
+            <div className="space-y-1.5 px-5 pt-2.5">
+            {/* before going on: what is heard of the take so far */}
+            <div className="flex items-center gap-1.5 text-[11px]">
+              {take && (
+                <button
+                  className={`flex h-7 shrink-0 items-center gap-1 rounded-full px-2.5 font-semibold ${playingIt ? "bg-accent text-white" : "bg-panel-2 text-fg/80"}`}
+                  onClick={() => (playingIt ? r.stop() : r.playTake(take.id))}
+                  aria-label={playingIt ? "Stop" : `Listen to take ${take.take_no}`}
+                >
+                  {playingIt ? <Pause className="h-3 w-3" /> : <Play className="h-3 w-3" />} Take {take.take_no}
+                </button>
+              )}
+              <span className="shrink-0 text-muted">Hear first</span>
+              <div className="flex flex-1 rounded-full bg-panel-2 p-0.5" role="radiogroup" aria-label="Heard before it goes on">
+                {(
+                  [
+                    [1, "1 bar"],
+                    [2, "2 bars"],
+                    [4, "4 bars"],
+                    [0, "Whole take"],
+                  ] as const
+                ).map(([v, label]) => (
+                  <button
+                    key={v}
+                    role="radio"
+                    aria-checked={r.runUp === v}
+                    className={`flex-1 rounded-full py-1 font-semibold ${r.runUp === v ? "bg-panel text-fg shadow-sm" : "text-muted"}`}
+                    onClick={() => r.setRunUp(v)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
               <button
-                className="flex h-10 flex-1 items-center justify-center gap-2 rounded-2xl bg-bad-soft text-sm font-semibold text-bad active:opacity-80"
+                className="flex h-10 flex-1 items-center justify-center gap-2 rounded-2xl bg-bad-soft text-sm font-semibold text-bad active:opacity-80 disabled:opacity-50"
+                disabled={!canRecord}
                 onClick={() => {
                   r.recordFrom(r.lane, at);
                   setFromLine(null);
@@ -588,6 +648,7 @@ function RecordScreen({ r, tree, setTree, rangeOf, bar, timeline, onBusy, host, 
                 </button>
               )}
             </div>
+            </div>
           );
         })()}
         <div className="flex items-center justify-between px-5 pt-3">
@@ -600,7 +661,7 @@ function RecordScreen({ r, tree, setTree, rangeOf, bar, timeline, onBusy, host, 
               {r.status === "playing" && !r.playingTake ? <Pause className="h-5 w-5" /> : <Play className="ml-0.5 h-5 w-5" />}
             </DockButton>
           )}
-          <BigButton r={r} canRecord={canRecord} />
+          <BigButton r={r} canRecord={canRecord} onRecord={recordChecked} />
           {/* the metronome during the take: on / off at any time, even while recording */}
           <DockButton label={r.clicks ? "Click on" : "Click off"} onClick={() => r.setClicks(!r.clicks)} active={r.clicks}>
             <Metronome className="h-5 w-5" />
@@ -613,7 +674,7 @@ function RecordScreen({ r, tree, setTree, rangeOf, bar, timeline, onBusy, host, 
           <span className={`truncate ${recording ? "text-[#dc2626]" : ""}`}>{statusText}</span>
         </div>
         {/* the microphone: its level live, before and while recording — tap for its gain, hearing yourself… */}
-        {r.settings && <MicStrip r={r} onOpen={() => setMicSheet(true)} />}
+        {r.settings && <MicStrip r={r} onOpen={() => setMicSheet(true)} onCheck={() => setMicCheck({})} />}
       </div>
 
       {r.note && <div className="fixed left-1/2 top-20 z-30 -translate-x-1/2 rounded-full bg-fg px-3.5 py-1.5 text-xs font-semibold text-bg shadow-lg">{r.note}</div>}
@@ -631,6 +692,18 @@ function RecordScreen({ r, tree, setTree, rangeOf, bar, timeline, onBusy, host, 
         />
       )}
       {micSheet && <MicSheet r={r} onClose={() => setMicSheet(false)} />}
+      {micCheck && r.settings && (
+        <MicCheckSheet
+          r={r}
+          then={micCheck.then}
+          everySession={checkFirst}
+          setEverySession={setCheckFirst}
+          onDone={() => {
+            markChecked();
+            setMicCheck(null);
+          }}
+        />
+      )}
       {notesFor &&
         (() => {
           const line = tree.sections.flatMap((x) => x.lines).find((x) => x.id === notesFor);
@@ -745,8 +818,119 @@ function DockButton({ label, disabled, onClick, children, active }: { label: str
   );
 }
 
+/**
+ * A layer's takes, one card per take with its versions (continued in pieces, synced — they came from it):
+ * the version shown is the one picked, else the one in the song, else the latest. With several takes, a row
+ * at the top jumps between them.
+ */
+function TakeGroups<T extends { id: string; take_no: number; chosen: boolean }>({
+  takes,
+  tree,
+  lane,
+  row,
+}: {
+  takes: T[];
+  tree: ProjectTree;
+  lane: string;
+  row: (t: T) => ReactNode;
+}) {
+  const of = tree.project.settings?.takeOf ?? {};
+  const noteOf = (id: string) => tree.takes.find((x) => x.id === id)?.note ?? null;
+  const byKey = new Map<string, T[]>();
+  for (const t of takes) {
+    const key = of[t.id] ?? t.id;
+    byKey.set(key, [...(byKey.get(key) ?? []), t]);
+  }
+  const groups = [...byKey.entries()]
+    .map(([key, members]) => {
+      const sorted = [...members].sort((a, b) => a.take_no - b.take_no);
+      return { key, head: sorted.find((m) => m.id === key) ?? sorted[0], members: sorted };
+    })
+    .sort((a, b) => b.head.take_no - a.head.take_no);
+  /** the version shown in each card (picked by tapping its chip) */
+  const [view, setView] = useState<Record<string, string>>({});
+  const [focus, setFocus] = useState<string | null>(null);
+  const jump = (key: string) => {
+    setFocus(key);
+    document.getElementById(`takegroup-${key}`)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  };
+  const at = Math.max(0, groups.findIndex((g) => g.key === focus));
+  const versionName = (m: T, head: T) => (m.id === head.id ? "as sung" : (noteOf(m.id) ?? `#${m.take_no}`));
+  return (
+    <div className="space-y-2">
+      {groups.length > 1 && (
+        <div className="flex items-center gap-1.5">
+          <button className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-panel-2 text-fg/80 disabled:opacity-30" disabled={at <= 0} onClick={() => jump(groups[at - 1].key)} aria-label="Newer take">
+            ‹
+          </button>
+          <div className="no-scrollbar flex flex-1 gap-1.5 overflow-x-auto">
+            {groups.map((g) => {
+              const inSong = g.members.some((m) => m.chosen);
+              return (
+                <button
+                  key={g.key}
+                  className={`flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold ${focus === g.key ? "bg-fg text-bg" : inSong ? "bg-accent-soft text-accent" : "bg-panel-2 text-fg/80"}`}
+                  onClick={() => jump(g.key)}
+                >
+                  {inSong && <Check className="h-3 w-3" />}
+                  {lane} {g.head.take_no}
+                  {g.members.length > 1 && <span className="font-normal opacity-70">· {g.members.length}</span>}
+                </button>
+              );
+            })}
+          </div>
+          <button
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-panel-2 text-fg/80 disabled:opacity-30"
+            disabled={at >= groups.length - 1}
+            onClick={() => jump(groups[Math.min(groups.length - 1, focus ? at + 1 : 1)].key)}
+            aria-label="Older take"
+          >
+            ›
+          </button>
+        </div>
+      )}
+      {groups.map((g) => {
+        const shown = g.members.find((m) => m.id === view[g.key]) ?? g.members.find((m) => m.chosen) ?? g.members[g.members.length - 1];
+        const inSong = g.members.some((m) => m.chosen);
+        return (
+          <div
+            key={g.key}
+            id={`takegroup-${g.key}`}
+            className={`space-y-1.5 rounded-3xl p-1.5 ring-1 transition-colors ${focus === g.key ? "bg-accent-soft/50 ring-accent" : inSong ? "bg-panel-2/40 ring-accent/30" : "bg-panel-2/40 ring-line/40"}`}
+          >
+            <div className="flex items-center gap-2 px-2 pt-1">
+              <span className="text-sm font-bold">
+                {lane} take {g.head.take_no}
+              </span>
+              {g.members.length > 1 && <span className="text-[11px] text-muted">{g.members.length} versions</span>}
+              {inSong && <span className="ml-auto text-[11px] font-semibold text-accent">in the song</span>}
+            </div>
+            {/* its versions: tap one to see (and play, cut, use) it */}
+            {g.members.length > 1 && (
+              <div className="no-scrollbar flex gap-1.5 overflow-x-auto px-1">
+                {g.members.map((m) => (
+                  <button
+                    key={m.id}
+                    className={`flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-semibold ring-1 ${m.id === shown.id ? "bg-panel text-fg ring-accent" : "bg-panel/60 text-muted ring-transparent"}`}
+                    onClick={() => setView({ ...view, [g.key]: m.id })}
+                    aria-pressed={m.id === shown.id}
+                  >
+                    {m.chosen && <Check className="h-3 w-3 text-accent" />}
+                    {versionName(m, g.head)}
+                  </button>
+                ))}
+              </div>
+            )}
+            {row(shown)}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 /** record · the count-in · stop */
-function BigButton({ r, canRecord }: { r: Recorder; canRecord: boolean }) {
+function BigButton({ r, canRecord, onRecord }: { r: Recorder; canRecord: boolean; onRecord?: () => void }) {
   const base = "relative flex h-[76px] w-[76px] items-center justify-center rounded-full shadow-xl active:scale-95 disabled:opacity-40";
   if (r.status === "countin")
     return (
@@ -768,7 +952,7 @@ function BigButton({ r, canRecord }: { r: Recorder; canRecord: boolean }) {
       </span>
     );
   return (
-    <button className={`${base} bg-[#dc2626] text-white shadow-red-500/30`} disabled={!canRecord} onClick={() => r.record(r.lane)} aria-label={`Record ${r.lane}`}>
+    <button className={`${base} bg-[#dc2626] text-white shadow-red-500/30`} disabled={!canRecord} onClick={() => (onRecord ? onRecord() : r.record(r.lane))} aria-label={`Record ${r.lane}`}>
       <span className="h-8 w-8 rounded-full bg-white" />
     </button>
   );
@@ -1306,7 +1490,7 @@ function Meter({ level, hold, clipped, big }: { level: number; hold: number; cli
   );
 }
 
-function MicStrip({ r, onOpen }: { r: Recorder; onOpen: () => void }) {
+function MicStrip({ r, onOpen, onCheck }: { r: Recorder; onOpen: () => void; onCheck: () => void }) {
   const s = r.settings!;
   if (!r.armed)
     return (
@@ -1317,7 +1501,8 @@ function MicStrip({ r, onOpen }: { r: Recorder; onOpen: () => void }) {
       </div>
     );
   return (
-    <button className="flex w-full items-center gap-2 px-6 pb-1.5 text-left" onClick={onOpen} aria-label="Microphone: level, gain, hear yourself">
+    <div className="flex items-center gap-1 pr-4">
+    <button className="flex min-w-0 flex-1 items-center gap-2 pb-1.5 pl-6 text-left" onClick={onOpen} aria-label="Microphone: level, gain, hear yourself">
       <Mic className="h-3.5 w-3.5 shrink-0 text-accent" />
       <Meter level={r.level} hold={r.meter.hold} clipped={r.meter.clip} />
       <span className="shrink-0 rounded-full bg-panel-2 px-2 py-0.5 font-mono text-[10px] font-semibold text-fg/80">
@@ -1326,6 +1511,114 @@ function MicStrip({ r, onOpen }: { r: Recorder; onOpen: () => void }) {
       </span>
       {s.monitor && s.headphones && <Headphones className="h-3.5 w-3.5 shrink-0 text-accent" />}
     </button>
+    <button className="mb-1.5 shrink-0 rounded-full bg-accent-soft px-2.5 py-1 text-[11px] font-semibold text-accent disabled:opacity-40" onClick={onCheck} disabled={r.status !== "idle"}>
+      Check
+    </button>
+    </div>
+  );
+}
+
+/**
+ * Before recording: is the microphone's level right? Sing your loudest for 5 seconds — too quiet, good, too
+ * loud — and one tap sets the gain. Opens by itself before the first take of a session (it can be turned off).
+ */
+function MicCheckSheet({ r, then, everySession, setEverySession, onDone }: { r: Recorder; then?: () => void; everySession: boolean; setEverySession: (on: boolean) => void; onDone: () => void }) {
+  const s = r.settings!;
+  const [result, setResult] = useState<MicCheck | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [fixed, setFixed] = useState(false);
+  const run = async () => {
+    setFailed(false);
+    setFixed(false);
+    const m = await s.checkMic();
+    if (!m) setFailed(true);
+    setResult(m);
+  };
+  const VERDICT: Record<MicCheck["verdict"], { title: string; text: string; tone: string }> = {
+    silent: { title: "No sound came in", text: `Is “${r.mic ?? "the microphone"}” the one you sing into, and is it switched on? Choose it in the microphone settings.`, tone: "bg-bad-soft text-bad" },
+    quiet: { title: "Too quiet", text: "Your voice is far below where it should be — the take would be thin and noisy.", tone: "bg-warn-soft text-warn" },
+    good: { title: "Good level", text: "Loud and clear, with room before it clips. Ready to record.", tone: "bg-ok-soft text-ok" },
+    loud: { title: "A bit too loud", text: "Your loudest is right at the top — a louder word would clip.", tone: "bg-warn-soft text-warn" },
+    clipping: { title: "Too loud — it clips", text: "Your voice hits the top and distorts.", tone: "bg-bad-soft text-bad" },
+  };
+  const v = result ? VERDICT[result.verdict] : null;
+  const needsFix = !!result && result.verdict !== "good" && result.verdict !== "silent" && Math.abs(result.suggestDb - s.gainDb) >= 1;
+  return (
+    <div className="fixed inset-0 z-40 flex items-end justify-center bg-black/40" onClick={() => s.leveling === null && onDone()}>
+      <div onClick={(e) => e.stopPropagation()} className="max-h-[92dvh] w-full max-w-lg space-y-4 overflow-auto rounded-t-3xl bg-panel px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-3">
+        <div className="mx-auto h-1.5 w-10 rounded-full bg-line" />
+        <div>
+          <h2 className="text-xl font-bold">Check the microphone</h2>
+          <p className="text-xs text-muted">
+            {r.mic ? `“${r.mic}” · ` : ""}gain {s.gainDb > 0 ? "+" : ""}
+            {s.gainDb} dB — sing or rap your loudest line for 5 seconds.
+          </p>
+        </div>
+        {/* live: what comes in now */}
+        <div className="rounded-2xl bg-panel-2/70 px-4 py-3">
+          <Meter level={r.level} hold={r.meter.hold} clipped={r.meter.clip} big />
+          <p className="mt-1 text-[11px] text-muted">Aim for the loud parts to reach the green — never the red.</p>
+        </div>
+        {s.leveling !== null ? (
+          <div className="rounded-2xl bg-accent-soft px-4 py-4 text-center">
+            <p className="text-3xl font-extrabold tabular-nums text-accent">{s.leveling}</p>
+            <p className="text-sm font-semibold text-accent">Sing your loudest now…</p>
+          </div>
+        ) : v && result ? (
+          <div className={`space-y-1 rounded-2xl px-4 py-3 ${v.tone}`}>
+            <p className="text-base font-bold">{fixed ? "Gain set — check again to hear it" : v.title}</p>
+            {!fixed && <p className="text-xs">{v.text}</p>}
+            <p className="font-mono text-[11px] opacity-80">
+              loudest {result.peakDb} dB · average {result.rmsDb} dB
+            </p>
+          </div>
+        ) : failed ? (
+          <p className="rounded-xl bg-bad-soft px-3 py-2 text-sm text-bad">The check couldn&apos;t run — tap the page once, then try again.</p>
+        ) : null}
+        <div className="flex flex-col gap-2">
+          {needsFix && !fixed && (
+            <button
+              className="btn-primary w-full justify-center rounded-2xl py-3 text-sm"
+              onClick={() => {
+                s.setGainDb(result!.suggestDb);
+                if (result!.channel !== null) s.setChannel(result!.channel);
+                setFixed(true);
+              }}
+            >
+              Set it for me · gain {result!.suggestDb > 0 ? "+" : ""}
+              {result!.suggestDb} dB
+            </button>
+          )}
+          <button className={`${result ? "btn" : "btn-primary"} w-full justify-center rounded-2xl py-3 text-sm`} disabled={s.leveling !== null} onClick={() => void run()}>
+            {result ? "Check again" : "Start the check · 5 s"}
+          </button>
+          {then && (
+            <button
+              className="flex w-full items-center justify-center gap-2 rounded-2xl bg-[#dc2626] py-3 text-sm font-semibold text-white disabled:opacity-50"
+              disabled={s.leveling !== null}
+              onClick={() => {
+                onDone();
+                then();
+              }}
+            >
+              <span className="h-2.5 w-2.5 rounded-full bg-white" /> {result?.verdict === "good" || fixed ? "Record" : "Record anyway"}
+            </button>
+          )}
+          {!then && (
+            <button className="btn w-full justify-center rounded-2xl py-3 text-sm" disabled={s.leveling !== null} onClick={onDone}>
+              Done
+            </button>
+          )}
+        </div>
+        <label className="flex items-center justify-between gap-3 px-1 text-sm">
+          <span>
+            Check before the first take
+            <span className="block text-[11px] text-muted">Each time the app is opened.</span>
+          </span>
+          <Toggle on={everySession} onChange={setEverySession} />
+        </label>
+      </div>
+    </div>
   );
 }
 
