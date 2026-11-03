@@ -284,7 +284,7 @@ export async function acceptInvite(token: string, userId: string) {
 // ---------- each person's own settings ----------
 
 /** a settings row of the signed-in person ("me" → "me:<id>"); accounts off: the shared one */
-export async function settingsKey(base: "me" | "nav" | "host") {
+export async function settingsKey(base: "me" | "nav" | "host" | "fx") {
   const uid = await currentUserId();
   return uid ? `${base}:${uid}` : base;
 }

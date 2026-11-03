@@ -1,5 +1,5 @@
 import "server-only";
-import { partFxKey } from "@/lib/fx/presets";
+import { partFxKey, type FxPreset } from "@/lib/fx/presets";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { headers } from "next/headers";
 import { check, db } from "./db";
@@ -936,17 +936,23 @@ export async function deleteAudio(projectId: string) {
 
 /** Short-lived URLs the browser can stream the song from — and the song without its vocals, when made. */
 export async function audioPlaybackUrl(projectId: string) {
-  const row = check(await db().from("audio_tracks").select("path, instrumental_path").eq("project_id", projectId).maybeSingle()) as {
+  const row = check(await db().from("audio_tracks").select("path, instrumental_path, vocals_path").eq("project_id", projectId).maybeSingle()) as {
     path: string;
     instrumental_path: string | null;
+    vocals_path: string | null;
   } | null;
-  if (!row) return { url: null, instrumentalUrl: null };
+  if (!row) return { url: null, instrumentalUrl: null, vocalsUrl: null };
   const sign = async (path: string) => {
     const { data, error } = await db().storage.from(BUCKET).createSignedUrl(path, 60 * 60 * 6);
     if (error || !data) throw new Error(error?.message ?? "Could not create playback URL");
     return data.signedUrl;
   };
-  return { url: await sign(row.path), instrumentalUrl: row.instrumental_path ? await sign(row.instrumental_path) : null };
+  return {
+    url: await sign(row.path),
+    instrumentalUrl: row.instrumental_path ? await sign(row.instrumental_path) : null,
+    // the song's own vocals, apart (once removed from the music): a voice to take a sound from
+    vocalsUrl: row.vocals_path ? await sign(row.vocals_path) : null,
+  };
 }
 
 // ---------- lyrics from the beat ----------
@@ -1554,9 +1560,14 @@ export async function takeUrls(projectId: string, ids: string[]) {
  * only that part's (kept as "<sectionId>:<layer>"; "inherit" gives the part the song's sound again). With
  * `sectionId` alone: the song's sound, and that part follows it again.
  */
-export async function setSound(projectId: string, s: { lane?: string; preset?: string; key?: ProjectSettings["songKey"]; sectionId?: string; partOnly?: boolean }) {
+export async function setSound(
+  projectId: string,
+  s: { lane?: string; preset?: string; key?: ProjectSettings["songKey"]; sectionId?: string; partOnly?: boolean; custom?: FxPreset | null },
+) {
   const settings = await projectSettings(projectId);
   const fx = { ...(settings.fx ?? {}) };
+  // a sound of the library (or made from a voice): kept with the song, so everyone on it hears it
+  const customFx = s.custom ? { ...(settings.customFx ?? {}), [s.custom.id]: s.custom } : settings.customFx;
   if (s.lane && s.preset) {
     const lane = s.lane.trim().slice(0, 30);
     const own = s.sectionId ? partFxKey(s.sectionId, lane) : null;
@@ -1569,7 +1580,7 @@ export async function setSound(projectId: string, s: { lane?: string; preset?: s
       if (own) delete fx[own];
     }
   }
-  await updateProject(projectId, { settings: { ...settings, fx, ...(s.key !== undefined ? { songKey: s.key } : {}) } });
+  await updateProject(projectId, { settings: { ...settings, fx, ...(customFx ? { customFx } : {}), ...(s.key !== undefined ? { songKey: s.key } : {}) } });
 }
 
 /**

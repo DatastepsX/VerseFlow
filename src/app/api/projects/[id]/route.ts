@@ -20,6 +20,7 @@ import { body, handle, pick, treeResponse } from "@/lib/server/http";
 import { parseText } from "@/lib/text-import";
 import type { Project, ProjectSettings } from "@/lib/types";
 import { FX_PRESETS } from "@/lib/fx/presets";
+import { cleanPreset } from "@/lib/fx/match";
 import { access, addMember, currentUserId } from "@/lib/server/users";
 
 export async function GET(_req: Request, ctx: RouteContext<"/api/projects/[id]">) {
@@ -54,7 +55,7 @@ export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]">
   return handle(async () => {
     await access((await ctx.params).id, "edit");
     const { id } = await ctx.params;
-    const b = await body<{ action: string; name?: string; group_size?: number; label?: string; audio_start?: number | null; times?: { id: string; at: number | null }[]; text?: string; artistId?: string; color?: string; notes?: string; lanes?: string[]; lane?: string; preset?: string; key?: unknown; sectionId?: unknown; part?: unknown; from?: unknown; to?: unknown; levels?: unknown }>(req);
+    const b = await body<{ action: string; name?: string; group_size?: number; label?: string; audio_start?: number | null; times?: { id: string; at: number | null }[]; text?: string; artistId?: string; color?: string; notes?: string; lanes?: string[]; lane?: string; preset?: string; key?: unknown; sectionId?: unknown; part?: unknown; custom?: unknown; from?: unknown; to?: unknown; levels?: unknown }>(req);
     switch (b.action) {
       case "undo":
       case "redo": {
@@ -100,7 +101,10 @@ export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]">
         break;
       case "setSound": {
         // a layer's effect preset and / or the song's key ("chromatic" or {root 0–11, minor})
-        if (b.preset !== undefined && b.preset !== "inherit" && !FX_PRESETS.some((p) => p.id === b.preset)) return Response.json({ error: "Unknown sound" }, { status: 400 });
+        // a built-in sound, or one of the library / made from a voice (its definition comes along, and stays with the song)
+        const custom = b.preset !== undefined && b.preset !== "inherit" && !FX_PRESETS.some((p) => p.id === b.preset) ? cleanPreset(b.custom) : null;
+        if (b.preset !== undefined && b.preset !== "inherit" && !FX_PRESETS.some((p) => p.id === b.preset) && !(custom && custom.id === b.preset && custom.id.startsWith("fx-")))
+          return Response.json({ error: "Unknown sound" }, { status: 400 });
         const k = b.key as { root?: unknown; minor?: unknown } | string | undefined;
         const key: ProjectSettings["songKey"] | undefined =
           k === "chromatic"
@@ -115,6 +119,7 @@ export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]">
           // a part's own sound ("part": only this part; else the song's, and this part follows it)
           sectionId: typeof b.sectionId === "string" ? b.sectionId : undefined,
           partOnly: b.part === true,
+          custom,
         });
         break;
       }

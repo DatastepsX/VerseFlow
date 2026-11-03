@@ -248,7 +248,14 @@ export const FX_PRESETS: FxPreset[] = [
 
 export const FX_CATEGORIES: FxCategory[] = ["Clean", "Space", "Tuned", "Character", "Layers"];
 
-export const presetById = (id: string | undefined | null) => FX_PRESETS.find((p) => p.id === id) ?? FX_PRESETS[0];
+/** sounds beyond the built-in ones (the library, a song's own): known by id once registered */
+const custom = new Map<string, FxPreset>();
+export function registerFx(list: FxPreset[] | Record<string, FxPreset> | null | undefined) {
+  for (const p of Array.isArray(list) ? list : Object.values(list ?? {})) if (p?.id) custom.set(p.id, p);
+}
+export const customFx = (id: string | null | undefined) => (id ? (custom.get(id) ?? null) : null);
+
+export const presetById = (id: string | undefined | null) => FX_PRESETS.find((p) => p.id === id) ?? (id ? custom.get(id) : undefined) ?? FX_PRESETS[0];
 
 /** a part's own sound for a layer, kept beside the song's ("<sectionId>:<layer>" in `settings.fx`) */
 export const partFxKey = (sectionId: string, lane: string) => `${sectionId}:${lane}`;

@@ -14,7 +14,7 @@ import type { ProjectSettings, ProjectTree, Take } from "@/lib/types";
 import { buildChain } from "@/lib/fx/chain";
 import { channelOf, clipOf, laneBus } from "@/lib/studio/mix";
 import { detectKey } from "@/lib/fx/key";
-import { layerPreset, presetById, type FxPreset } from "@/lib/fx/presets";
+import { customFx, layerPreset, presetById, registerFx, type FxPreset } from "@/lib/fx/presets";
 import { retune, type MusicKey } from "@/lib/fx/tune";
 
 /**
@@ -814,7 +814,8 @@ export function useLocalRecorder(o: {
   /** a layer's sound: saved for the song (or for this part only), and heard at once on the layer's take in this part */
   const trySound = (lane: string, preset: string, part?: boolean) => {
     if (busy && status.kind !== "playing") return;
-    void api(`/api/projects/${pid}`, { action: "setSound", lane, preset, sectionId, part: !!part }).catch(failed);
+    // a sound of the library: its definition comes along (kept with the song)
+    void api(`/api/projects/${pid}`, { action: "setSound", lane, preset, sectionId, part: !!part, custom: customFx(preset) }).catch(failed);
     const take = sectionTakes.find((t) => t.lane === lane && t.chosen) ?? sectionTakes.filter((t) => t.lane === lane).pop();
     // "inherit": the part goes back to the song's sound
     const heard = preset === "inherit" ? (sounds[lane] ?? "raw") : preset;
@@ -879,6 +880,7 @@ export function useLocalRecorder(o: {
           addLane(c.name);
           break;
         case "sound":
+          if (c.custom) registerFx([c.custom]);
           trySound(c.lane, c.preset, c.part);
           break;
         case "key":
@@ -1154,7 +1156,7 @@ export function useRemoteRecorder(o: { tree: ProjectTree; section: [string | nul
     },
     sounds: connected ? (state.sounds ?? {}) : (o.tree.project.settings?.fx ?? {}),
     songKey: connected ? (state.songKey ?? null) : (o.tree.project.settings?.songKey ?? null),
-    trySound: (lane, preset, part) => send({ t: "sound", lane, preset, part }),
+    trySound: (lane, preset, part) => send({ t: "sound", lane, preset, part, custom: customFx(preset) }),
     setKey: (key) => send({ t: "key", key }),
     tuning: connected && !!state.tuning,
     arm: () => {},

@@ -34,7 +34,7 @@ import { marksFor, type Mark } from "@/lib/marks";
 import { NOTATION_KEYS, parseNotation, toNotation, untyped } from "@/lib/flow/notation";
 import { lanesOf, usePref } from "./recorder";
 import { buildChain } from "@/lib/fx/chain";
-import { layerPreset } from "@/lib/fx/presets";
+import { layerPreset, registerFx } from "@/lib/fx/presets";
 import { channelOf, clipOf, laneBus, mixPans, mixVolumes, withChannel, type ChannelPatch } from "@/lib/studio/mix";
 import { undoHeaders, undoStep } from "@/lib/undo-group";
 import { TapFlow } from "./TapFlow";
@@ -146,6 +146,8 @@ export function SongApp({
     };
   }, [pid]);
   const lang = tree.project.language;
+  // the sounds this song uses beyond the built-in ones (library sounds, sounds made from a voice): playable
+  registerFx(tree.project.settings?.customFx);
   const lyricLines = tree.sections.flatMap((s) => s.lines.filter((l) => l.kind === "lyric"));
   const hasLines = lyricLines.length > 0;
   // your recorded flows: the whole song's, and the ones recorded for single parts (while the part exists)
@@ -2185,7 +2187,7 @@ export function SongApp({
             onSeek={(t) => (playing ? void play(t) : setNow(t))}
             setChannel={setChannel}
             setSound={async (lane, preset) => {
-              await call(`/api/projects/${pid}`, { action: "setSound", lane, preset });
+              await call(`/api/projects/${pid}`, { action: "setSound", lane, preset, custom: tree.project.settings?.customFx?.[preset] ?? null });
               // playing: heard with the new sound from here on
               if (playing && !controller) void play(engine.current?.position() ?? now, stopAt.current);
             }}

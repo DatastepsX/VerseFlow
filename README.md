@@ -122,6 +122,16 @@ else the song's; `layerPreset(fx, lane, sectionId)`). **Copy this part's sound t
 `copyPartSound` in `repo.ts`) gives other parts the same sound layer by layer — Lead to Lead, Double to Double — and,
 if wanted, the volume and pan of the takes that play.
 
+**A sound from a voice** (Record → Sound → "Make a sound from a voice…"; `src/lib/fx/match.ts`, in the browser, no AI
+call, nothing uploaded): a voice with the sound you want — the song's vocals (once removed from the music), a file, or
+a take — is listened to and its effect chain estimated: tone (EQ against your own dry take of that layer, or a typical
+dry voice), compression (how even the level is), reverb (how the voice dies away after a phrase, on its lowest level so
+echoes don't hide it), echoes on the tempo (the phrase's pattern found again after it), width and autotune (how tightly
+the pitch sits on notes). It gets a name ("Bright hall · echo") and what was found; use it on a layer, save it.
+**The sound library**: "My sounds" (each person's, `user_settings` `fx:<user>`) and "Shared sounds" (everyone's,
+`fx:shared`; changed or removed by who shared it or the studio's people) — `/api/fx`, `src/lib/server/fxlib.ts`. A
+sound used in a song is kept with it (`settings.customFx`), so everyone on the song hears it, in exports too.
+
 **Remove the vocals** (More → "The song's vocals"; `separateVocals` in `src/lib/server/transcribe.ts`): one
 ElevenLabs stem-separation call (`two_stems_v1`) splits the uploaded song into its vocals and the music without them;
 both are stored next to the song (`audio_tracks.instrumental_path` / `vocals_path`), which stays as uploaded. Then

@@ -19,6 +19,7 @@ import { undoHeaders, undoStep } from "@/lib/undo-group";
 import type { Timeline } from "@/lib/audio/timeline";
 import type { StudioEngine } from "@/lib/studio/engine";
 import type { Line, ProjectTree } from "@/lib/types";
+import { LibrarySounds, MatchSheet, useSoundLibrary } from "./SoundMatch";
 import { GAIN_MAX, GAIN_MIN, useIsPhone, useLocalRecorder, usePref, useRemoteRecorder, type MicCheck, type Recorder } from "./recorder";
 
 type On = "here" | "mac";
@@ -788,7 +789,7 @@ function RecordScreen({ r, tree, setTree, rangeOf, bar, timeline, onBusy, host, 
             />
           );
         })()}
-      {soundFor && <SoundLibrary r={r} lane={soundFor} hasTake={r.takes.some((t) => t.lane === soundFor)} onClose={() => setSoundFor(null)} />}
+      {soundFor && <SoundLibrary r={r} tree={tree} lane={soundFor} hasTake={r.takes.some((t) => t.lane === soundFor)} onClose={() => setSoundFor(null)} />}
       {copying && r.sectionId && <CopySound tree={tree} from={r.sectionId} lanes={r.lanes} setTree={setTree} onClose={() => setCopying(false)} />}
     </>
   );
@@ -1004,7 +1005,9 @@ function Peaks({ peaks, className }: { peaks: number[]; className?: string }) {
  * The sound library: the typical modern vocal chains, by kind. Tapping one gives it to the layer and plays
  * it on the layer's take in this part, with the beat and the other layers.
  */
-function SoundLibrary({ r, lane, hasTake, onClose }: { r: Recorder; lane: string; hasTake: boolean; onClose: () => void }) {
+function SoundLibrary({ r, tree, lane, hasTake, onClose }: { r: Recorder; tree: ProjectTree; lane: string; hasTake: boolean; onClose: () => void }) {
+  const library = useSoundLibrary();
+  const [matching, setMatching] = useState(false);
   const current = layerPreset(r.sounds, lane, r.sectionId).id;
   const own = hasPartSound(r.sounds, lane, r.sectionId);
   /** a sound for this part only, or for the layer in every part (the parts with their own keep theirs) */
@@ -1054,6 +1057,11 @@ function SoundLibrary({ r, lane, hasTake, onClose }: { r: Recorder; lane: string
             )}
           </div>
         )}
+        {/* a sound taken from a voice (a song's vocals, a file, a take) */}
+        <button className="flex w-full items-center justify-center gap-2 rounded-2xl bg-accent-soft py-2.5 text-sm font-semibold text-accent" onClick={() => setMatching(true)}>
+          <Wand className="h-4 w-4" /> Make a sound from a voice…
+        </button>
+        <LibrarySounds api={library} tree={tree} current={current} onPick={(id) => r.trySound(lane, id, onlyHere)} disabled={r.tuning || (!r.connected && r.remote)} />
         {FX_CATEGORIES.map((cat) => (
           <div key={cat}>
             <p className="label">{cat === "Tuned" ? "Autotune" : cat === "Layers" ? "For doubles & ad-libs" : cat}</p>
@@ -1121,6 +1129,19 @@ function SoundLibrary({ r, lane, hasTake, onClose }: { r: Recorder; lane: string
           </button>
         </div>
       </div>
+      {matching && (
+        <MatchSheet
+          tree={tree}
+          lane={lane}
+          sectionId={r.sectionId}
+          api={library}
+          onUse={(p) => {
+            r.trySound(lane, p.id, onlyHere);
+            setMatching(false);
+          }}
+          onClose={() => setMatching(false)}
+        />
+      )}
     </div>
   );
 }

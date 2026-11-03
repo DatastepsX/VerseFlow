@@ -411,6 +411,16 @@ function Strip(p: MixerProps & { track: { key: string; name: string; color: stri
                 ))}
               </optgroup>
             ))}
+            {/* the sounds this song has from the library / made from a voice */}
+            {Object.values(p.tree.project.settings?.customFx ?? {}).length > 0 && (
+              <optgroup label="This song's sounds">
+                {Object.values(p.tree.project.settings?.customFx ?? {}).map((x) => (
+                  <option key={x.id} value={x.id}>
+                    {x.name}
+                  </option>
+                ))}
+              </optgroup>
+            )}
           </select>
         </label>
       )}
