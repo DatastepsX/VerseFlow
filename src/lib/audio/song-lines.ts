@@ -237,7 +237,8 @@ export function songSections(
     const prev = lines[i - 1];
     const last = out[out.length - 1];
     const gap = prev ? l.start - prev.end : 0;
-    if (last && gap >= 4 * bar) out.push({ kind: "break", lines: [], vocalStart: prev.end + 0.2, families: new Set() });
+    // the beat playing on without vocals for 2 bars or more: an instrumental part of its own, and a new part after it
+    if (last && gap >= 2 * bar) out.push({ kind: "break", lines: [], vocalStart: prev.end + 0.2, families: new Set() });
     const cur = out[out.length - 1];
     // a different repeated part starts (its line and the next one belong to another family)
     const newFamily =
@@ -273,6 +274,7 @@ export function songSections(
   type Part = (typeof merged)[number];
   const split = (s: Part): Part[] => {
     const n = s.lines.length;
+    // a chorus stays whole (its words repeat — a change in the production inside it isn't a new part)
     if ((s.kind !== "verse" && s.kind !== "rap") || n < 4) return [s];
     let best: { k: number; s: number } | null = null;
     for (const c of strong) {
@@ -316,6 +318,12 @@ export function songSections(
       start = start - bar < prev ? Math.max(prev, s.vocalStart - 0.1) : Math.max(0, start - bar);
     }
     if (!sections.length) start = s.kind === "intro" ? 0 : Math.min(start, s.vocalStart);
+    // an instrumental part starts after the last sung word: on the next bar line (if it comes before the vocals do again)
+    if (s.kind === "break") {
+      const nextVocal = merged[i + 1]?.vocalStart ?? Infinity;
+      const onBar = grid.bpm ? grid.beat_offset + Math.ceil((s.vocalStart - grid.beat_offset) / bar - 1e-6) * bar : s.vocalStart;
+      start = onBar < nextVocal - 0.5 * bar ? onBar : s.vocalStart;
+    }
     const kind = s.kind;
     // the part most of the section's lines belong to: the first repeated part is the chorus, others bridges
     let fam = -1;
@@ -345,7 +353,7 @@ export function songSections(
             : kind === "intro"
               ? "Intro"
               : kind === "break"
-            ? "Break"
+            ? "Instrumental"
             : kind === "outro"
               ? "Outro"
               : rapSong

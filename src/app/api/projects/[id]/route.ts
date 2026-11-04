@@ -12,6 +12,7 @@ import {
   setLanes,
   setSound,
   copyPartSound,
+  redetectParts,
   setLineTimes,
   undo,
   updateProject,
@@ -123,6 +124,10 @@ export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]">
         });
         break;
       }
+      case "redetectParts":
+        // the parts found again from when the lines are sung (instrumentals, beat changes) — no API call
+        await redetectParts(id);
+        break;
       case "copySound":
         // a part's sound (each layer's effect, and the takes' volume and pan) onto other parts, layer by layer
         await copyPartSound(

@@ -23,7 +23,20 @@ export function syllablesFromWords(words: TimedWord[], lang: string): Syllable[]
   return out;
 }
 
-export function vocalLines(words: TimedWord[], grid: FlowGrid, opts: { lang: string; duration: number }): FlowLine[] {
+/**
+ * A word can't last longer than its syllables can be held: a recognised word whose end reaches far past that
+ * (the last word before an instrumental, its end stretched to the next sung word) ends there — so the
+ * instrumental stays a part without vocals.
+ */
+export function capWords(words: TimedWord[], lang: string): TimedWord[] {
+  return words.map((w) => {
+    const most = 0.8 + 0.5 * Math.max(1, prosody(w.text, lang).syllables);
+    return w.end - w.start > most ? { ...w, end: Math.round((w.start + most) * 1000) / 1000 } : w;
+  });
+}
+
+export function vocalLines(rawWords: TimedWord[], grid: FlowGrid, opts: { lang: string; duration: number }): FlowLine[] {
+  const words = capWords(rawWords, opts.lang);
   return flowLines(syllablesFromWords(words, opts.lang), words, grid, { offset: 0, ...opts })
     .filter((l) => l.words.trim())
     .map((l) => {

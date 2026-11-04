@@ -8,7 +8,7 @@ import { exampleWords, isExampleText } from "./example";
 import { coupletsOf } from "./couplets";
 import { barsPerLine, chipsOf, fastFromText, lineCuts, lineFlowFrom, lineStarts, linesFromWords, linesIn, patternBars, lineFromText, linesFromBreaks, linesFromOnsets, nextFlowName, ownWords, relayout, unlinked } from "./pattern";
 import { prosody } from "@/lib/rhyme/prosody";
-import { emptyParts, vocalLines } from "./vocals";
+import { capWords, emptyParts, vocalLines } from "./vocals";
 
 const SR = 16000;
 
@@ -546,4 +546,11 @@ test("linked words are a fast run (double-time): real syllables, half the time, 
   // the lyrics: the words, unlinked
   assert.equal(unlinked("questa-vita-che mi_manca"), "questa vita che mi manca");
   assert.equal(unlinked("e - poi"), "e - poi");
+});
+
+test("a word stretched over an instrumental ends where it can be held", () => {
+  const [w] = capWords([{ text: "riconosce.", start: 60.28, end: 93.62 }], "it");
+  assert.ok(w.end - w.start <= 3, `${w.end}`);
+  const [short] = capWords([{ text: "te", start: 1, end: 1.4 }], "it");
+  assert.equal(short.end, 1.4, "a normal word stays as it is");
 });

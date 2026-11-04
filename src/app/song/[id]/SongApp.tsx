@@ -898,6 +898,8 @@ export function SongApp({
   const [partMenu, setPartMenu] = useState<string | null>(null);
   /** the line whose notes are open */
   const [notesFor, setNotesFor] = useState<string | null>(null);
+  /** what finding the parts again did */
+  const [partsNote, setPartsNote] = useState<string | null>(null);
   /** double-tapped word: its rhymes */
   const [rhymeWord, setRhymeWord] = useState<{ word: string; lineId: string } | null>(null);
   /** notes new to you: shown in the lyrics until opened */
@@ -2215,6 +2217,18 @@ export function SongApp({
             onRename={(title) => void call(`/api/projects/${pid}`, { title }, "PATCH")}
             onLanguage={(language) => void call(`/api/projects/${pid}`, { language }, "PATCH")}
             vocals={{ split: !!instrumental, off: vocalsOff, set: setVocalsOff, separate: () => void separate(), busy: separating }}
+            onRedetect={() =>
+              void lineAction(
+                "parts",
+                async () => {
+                  const t = await call(`/api/projects/${pid}`, { action: "redetectParts" });
+                  if (t) setPartsNote(`${t.sections.length} parts — instrumentals and beat changes start new ones. Undo brings the parts back as they were.`);
+                },
+                "Find the parts again",
+              )
+            }
+            redetecting={busyLine === "parts"}
+            partsNote={partsNote}
             onDelete={async () => {
               if (!window.confirm(`Delete “${tree.project.title}” for good?`)) return;
               await fetch(`/api/projects/${pid}`, { method: "DELETE" });
@@ -2928,6 +2942,9 @@ function MoreView({
   onDelete,
   vocals,
   role,
+  onRedetect,
+  redetecting,
+  partsNote,
 }: {
   role: "owner" | "editor" | "viewer";
   vocals: { split: boolean; off: "all" | string[]; set: (off: "all" | string[]) => void; separate: () => void; busy: boolean };
@@ -2937,6 +2954,10 @@ function MoreView({
   onRename: (t: string) => void;
   onLanguage: (l: string) => void;
   onDelete: () => void;
+  /** the parts found again from the song as it is (no API call) */
+  onRedetect: () => void;
+  redetecting: boolean;
+  partsNote: string | null;
 }) {
   const pid = tree.project.id;
   const [copied, setCopied] = useState(false);
@@ -2966,6 +2987,18 @@ function MoreView({
       <People pid={pid} title={tree.project.title} role={role} />
       {tree.audio && (
         <div className="space-y-2">
+          {/* the parts again: the beat without vocals (an instrumental) and beat changes start new parts */}
+          {role !== "viewer" && (
+            <div className="mb-3 space-y-1">
+              <p className="label">The parts</p>
+              <button className="btn w-full justify-center rounded-2xl py-2.5 text-sm disabled:opacity-50" disabled={redetecting} onClick={onRedetect}>
+                {redetecting ? "Finding the parts…" : "Find the parts again"}
+              </button>
+              <p className="px-1 text-[11px] text-muted">
+                {partsNote ?? "From when the lines are sung: where the beat plays without vocals, or the beat changes, a new part starts. Your lines stay as they are — no AI call."}
+              </p>
+            </div>
+          )}
           <p className="label">The song&apos;s vocals</p>
           {vocals.split ? (
             <>

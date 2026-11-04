@@ -96,3 +96,20 @@ test("ad-libs make the intro, a beat change before the chorus the pre-chorus", (
   assert.equal(secs[2].start, 20);
   assert.equal(secs[2].lines[0].text, "Basso nel petto non senti le voci.");
 });
+
+test("the beat without vocals for 2 bars or more: an instrumental part, and the vocals after it a new part", () => {
+  const grid = { bpm: 120, beat_offset: 0, beats_per_bar: 4, duration: 80 };
+  const chorus = (from: number) => [
+    ...sing("Resto un attimo con te dentro il tempo che ci resta.", from, 0.4),
+    ...sing("Non promettermi il per sempre, dammi il vero, dammi adesso.", from + 6, 0.4),
+  ];
+  // two choruses with 5 s (2.5 bars) of beat between them
+  const words = [...chorus(2), ...chorus(19)];
+  const secs = songSections(sungLines(words, "it", { bar: 2 }), grid, "song");
+  const names = secs.map((s) => s.name);
+  assert.ok(names.includes("Instrumental"), names.join(", "));
+  const k = names.indexOf("Instrumental");
+  assert.equal(secs[k].lines.length, 0);
+  assert.ok(secs[k + 1]?.lines.length, "the vocals after it start a new part");
+  assert.ok(secs[k].start > 12 && secs[k].start < 19, `starts after the last word (${secs[k].start})`);
+});

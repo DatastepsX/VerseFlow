@@ -28,6 +28,7 @@ import type {
 import { lineFlowFrom, lineStarts, linesIn, nextFlowName, ownWords, unlinked } from "@/lib/flow/pattern";
 import { fixPairs } from "@/lib/flow/rhymelines";
 import { songSections, type SungLine } from "@/lib/audio/song-lines";
+import { prosody } from "@/lib/rhyme/prosody";
 import { sectionRanges } from "@/lib/audio/song-map";
 import type { Extension } from "@/lib/audio/arrange";
 import { settingsKey } from "./users";
@@ -1831,14 +1832,16 @@ export async function buildFlowSong(
       syllables: l.syllables,
       pair: l.pair,
     }));
-    const vocal = songSections(asSung, { ...tree.audio, duration: tree.audio.duration }, tree.project.type)
-      .filter((x) => x.lines.length)
-      .map((x) => ({ name: x.name, start: x.start, items: fixPairs(x.lines.map((l) => sung[asSung.indexOf(l)])) as Item[] }));
     const firstSung = sung[0].start;
     const lastSung = sung[sung.length - 1].start;
     const empty = groups
       .filter((g) => "placeholder" in g[0])
-      .map((g) => ({ name: g[0].start < firstSung ? "Intro" : g[0].start > lastSung ? "Outro" : "Break", start: g[0].start, items: g }));
+      .map((g) => ({ name: g[0].start < firstSung ? "Intro" : g[0].start > lastSung ? "Outro" : "Instrumental", start: g[0].start, items: g }));
+    const bar = tree.audio.bpm ? (tree.audio.beats_per_bar * 60) / tree.audio.bpm : 2.5;
+    // instrumental stretches (the beat without vocals) are parts of their own — unless one with lines to write is there
+    const vocal = songSections(asSung, { ...tree.audio, duration: tree.audio.duration }, tree.project.type)
+      .filter((x) => x.lines.length || (x.kind === "break" && !empty.some((e) => Math.abs(e.start - x.start) < 2 * bar)))
+      .map((x) => ({ name: x.name, start: x.start, items: fixPairs(x.lines.map((l) => sung[asSung.indexOf(l)])) as Item[] }));
     named = [...vocal, ...empty].sort((a, b) => a.start - b.start);
   }
   const secRows = check(
@@ -1853,6 +1856,84 @@ export async function buildFlowSong(
     named.flatMap((g, i) => flowRows(projectId, idAt.get(i + 1)!, g.items, source, step)),
   );
   await touch(projectId);
+}
+
+/**
+ * The parts found again from the song as it is — the same lines (their words, options, notes, flows stay), regrouped
+ * by when they are sung: the beat without vocals for 2 bars or more is an instrumental part and the vocals after it a
+ * new part, a beat change splits a long part, repeated lines make the chorus. Lines don't change; the parts there
+ * are now are reused (renamed, moved) and new ones added; takes move with their time. A version is saved first: undo
+ * brings the parts back as they were. No API call. Returns how many parts there are now.
+ */
+export async function redetectParts(projectId: string) {
+  const tree = await getTree(projectId);
+  if (!tree.audio) throw new Error("This song has no track to find its parts in.");
+  const lang = tree.project.language;
+  const all = tree.sections.flatMap((s) => s.lines.map((l) => ({ l, s })));
+  // the sung lines in song order (lines without text are placed afterwards, by their time)
+  const sung = all
+    .filter((x) => x.l.kind === "lyric" && x.l.text.trim() && x.l.audio_at !== null)
+    .sort((a, b) => a.l.audio_at! - b.l.audio_at!);
+  if (sung.length < 2) throw new Error("There aren't enough lines with their timing to find the parts.");
+  await markRebuild(projectId, await saveVersion(projectId, "Before finding the parts again", { timing: true }), "Parts found again");
+  // each line's end: when its singing ends — never past what its words can be held (an end stretched over an instrumental)
+  const asSung: SungLine[] = sung.map((x, i) => {
+    const start = x.l.audio_at!;
+    const syllables = x.l.flow?.syllables ?? Math.max(1, prosody(x.l.text, lang).syllables);
+    const most = start + 0.8 + 0.45 * syllables;
+    const next = sung[i + 1]?.l.audio_at ?? Infinity;
+    return { text: x.l.text, start, end: Math.min(x.l.flow?.end ?? most, most, next), syllables, pair: x.l.flow?.pair };
+  });
+  const parts = songSections(asSung, { ...tree.audio, duration: tree.audio.duration }, tree.project.type);
+  if (!parts.length) throw new Error("No parts were found.");
+  // the sections: the ones there are reused in order (their settings, takes and notes stay attached), new ones added
+  const old = [...tree.sections].sort((a, b) => a.position - b.position);
+  const ids: string[] = [];
+  for (const [i, p] of parts.entries()) {
+    const fields = { name: p.name, position: 1000 + i, audio_start: Math.round(p.start * 1000) / 1000 };
+    if (old[i]) {
+      check(await db().from("sections").update(fields).eq("id", old[i].id));
+      ids.push(old[i].id);
+    } else {
+      const row = check(await db().from("sections").insert({ project_id: projectId, group_size: old[0]?.group_size ?? 2, ...fields }).select("id").single()) as { id: string };
+      ids.push(row.id);
+    }
+  }
+  // which part a time belongs to: the last one starting at or before it
+  const partAt = (t: number) => {
+    let k = 0;
+    for (let i = 0; i < parts.length; i++) if (parts[i].start <= t + 0.05) k = i;
+    return k;
+  };
+  // the lines: a sung line goes where songSections put it, any other line by its time (or with the line before it)
+  const lineOf = new Map(asSung.map((x, i) => [x, sung[i].l.id]));
+  const target = new Map<string, number>();
+  parts.forEach((p, k) => p.lines.forEach((sl) => target.set(lineOf.get(sl)!, k)));
+  const ordered = [...all].sort((a, b) => (a.s.position - b.s.position) || (a.l.position - b.l.position));
+  let lastK = 0;
+  for (const x of ordered) {
+    const k = target.get(x.l.id) ?? (x.l.audio_at !== null ? partAt(x.l.audio_at) : lastK);
+    target.set(x.l.id, k);
+    lastK = k;
+  }
+  const byPart = parts.map(() => [] as typeof ordered);
+  for (const x of ordered) byPart[target.get(x.l.id)!].push(x);
+  for (const [k, list] of byPart.entries()) {
+    list.sort((a, b) => (a.l.audio_at ?? Infinity) - (b.l.audio_at ?? Infinity) || a.l.position - b.l.position);
+    for (const [n, x] of list.entries()) check(await db().from("lines").update({ section_id: ids[k], position: n + 1 }).eq("id", x.l.id));
+  }
+  // takes: with the part their recording falls in
+  for (const t of tree.takes) {
+    if (!t.section_id) continue;
+    const k = partAt(t.start_at + Math.min(3, t.duration / 2));
+    if (ids[k] !== t.section_id) check(await db().from("takes").update({ section_id: ids[k] }).eq("id", t.id));
+  }
+  // parts left over (fewer parts now): empty — removed
+  const extra = old.slice(parts.length).map((s) => s.id);
+  if (extra.length) check(await db().from("sections").delete().in("id", extra));
+  for (const [i, id] of ids.entries()) check(await db().from("sections").update({ position: i + 1 }).eq("id", id));
+  await touch(projectId);
+  return parts.length;
 }
 
 /**
