@@ -1972,8 +1972,8 @@ export function SongApp({
                           // the line it rhymes with, as it is now: options are picked to rhyme with it
                           const pr = pairs.find(([a, b]) => a.id === l.id || b.id === l.id);
                           const partner = pr ? ((pr[0].id === l.id ? pr[1] : pr[0]) as LyricLine) : null;
-                          // ↻ gives the next couplet that rhymes (this line's option, or a pair of options for both lines)
-                          const moves = partner?.text.trim() ? rhymeMoves(l, partner, lang) : [];
+                          // ↻ changes only this line: its next option that rhymes with the other line as it is (both lines: "Next pair")
+                          const moves = partner?.text.trim() ? rhymeMoves(l, partner, lang).filter((m) => !m.partnerAlt) : [];
                           return (
                           <LineCard
                             key={l.id}
@@ -2114,23 +2114,66 @@ export function SongApp({
                         {(pairs.length ? pairs : group.length === 1 ? [[group[0], null] as const] : []).map(([a, b]) => {
                           const x = a as LyricLine;
                           const y = b as LyricLine | null;
-                          if (isKept(x) || (y && isKept(y)) || !x.text.trim()) return null;
-                          const moves: RhymeMove[] = y ? pairMoves(x, y, lang) : x.alternatives.map((alt) => ({ alt }));
-                          if (!moves.length) return null;
                           const busy = busyLine === x.id || (!!y && busyLine === y.id);
-                          return (
-                            <OptionPicker
-                              key={x.id}
-                              current={[x.text, y?.text ?? null]}
-                              options={moves.map((m) => ({ texts: [m.alt.text, m.partnerAlt?.text ?? null] as [string, string | null], pick: () => void applyMove(x, m) }))}
-                              busy={busy}
-                              onKeep={() =>
-                                void lineAction(x.id, async () => {
-                                  for (const l of y ? [x, y] : [x]) await call(`/api/lines/${l.id}`, { status: "APPROVED", action: "approve" }, "PATCH");
-                                }, y ? "Keep couplet" : "Keep")
-                              }
-                            />
-                          );
+                          const keepLines = (ls: LyricLine[], label: string) =>
+                            void lineAction(ls[0].id, async () => {
+                              for (const l of ls) await call(`/api/lines/${l.id}`, { status: "APPROVED", action: "approve" }, "PATCH");
+                            }, label);
+                          // a line on its own: its options
+                          if (!y) {
+                            if (isKept(x) || !x.text.trim() || !x.alternatives.length) return null;
+                            return (
+                              <OptionPicker
+                                key={x.id}
+                                busy={busy}
+                                tabs={[
+                                  {
+                                    key: "line",
+                                    label: "",
+                                    current: [x.text, null],
+                                    options: x.alternatives.map((alt) => ({ texts: [alt.text, null] as [string, string | null], pick: () => void applyMove(x, { alt }) })),
+                                    keep: () => keepLines([x], "Keep"),
+                                  },
+                                ]}
+                              />
+                            );
+                          }
+                          if ((isKept(x) && isKept(y)) || !x.text.trim() || !y.text.trim()) return null;
+                          const tabs: PickerTab[] = [];
+                          // both lines change: the rhyming pairs they were written in
+                          const both = isKept(x) || isKept(y) ? [] : pairMoves(x, y, lang);
+                          if (both.length)
+                            tabs.push({
+                              key: "both",
+                              label: "Both lines",
+                              current: [x.text, y.text],
+                              options: both.map((m) => ({ texts: [m.alt.text, m.partnerAlt.text] as [string, string | null], pick: () => void applyMove(x, m) })),
+                              keep: () => keepLines([x, y], "Keep couplet"),
+                            });
+                          // only one line changes: its options that rhyme with the other line as it is — and 3 more (1 call)
+                          for (const [l, other, label] of [
+                            [x, y, "1st line"],
+                            [y, x, "2nd line"],
+                          ] as const) {
+                            if (isKept(l)) continue;
+                            const own = l.alternatives.filter((alt) => rhymeScore(other.text, alt.text, lang) >= RHYMES);
+                            tabs.push({
+                              key: l.id,
+                              label: `Only ${label}`,
+                              hint: `rhymes with “${lastWordOf(other.text)}”${isKept(other) ? " (kept)" : ""}`,
+                              current: label === "1st line" ? [l.text, other.text] : [other.text, l.text],
+                              fixed: label === "1st line" ? 1 : 0,
+                              options: own.map((alt) => ({
+                                texts: (label === "1st line" ? [alt.text, other.text] : [other.text, alt.text]) as [string, string | null],
+                                pick: () => void applyMove(l, { alt }),
+                              })),
+                              keep: () => keepLines([l], "Keep"),
+                              more: () =>
+                                void lineAction(l.id, () => call(`/api/projects/${pid}/flow`, { action: "suggest", lineIds: [l.id], add: true }), "More options"),
+                              moreLabel: `3 more rhyming with “${lastWordOf(other.text)}”`,
+                            });
+                          }
+                          return <OptionPicker key={x.id} busy={busy} tabs={tabs} />;
                         })}
                       </div>
                       </div>
@@ -2691,7 +2734,7 @@ function LineCard(props: {
                 props.rhymingCount === null
                   ? "Next option (free)"
                   : props.rhymingCount
-                    ? `Next couplet that rhymes (${props.rhymingCount}) — free`
+                    ? `Next version of this line that rhymes with the other one (${props.rhymingCount}) — only this line changes, free`
                     : "None of the options rhymes with the other line — 3 new ones that do (1 AI call)"
               }
               aria-label={props.rhymingCount === 0 ? "New rhyming options, 1 call" : "Next option"}
@@ -3273,27 +3316,35 @@ function Elapsed({ since }: { since: number }) {
   return <span className="font-normal tabular-nums text-muted"> · {Math.floor(s / 60)}:{String(s % 60).padStart(2, "0")}</span>;
 }
 
-/**
- * The options of written lines, side by side under them: for a couplet, its rhyming pairs (option 1 of the first
- * line with option 1 of the second…). Each stays in its place, the one in the lyrics now is marked; tap one to put
- * it in, "Keep" to keep it. No AI call — they came with the writing.
- */
-function OptionPicker({
-  current,
-  options,
-  busy,
-  onKeep,
-}: {
+/** one way to choose: both lines of a couplet (its rhyming pairs), or only one of them (rhyming with the other as it is) */
+interface PickerTab {
+  key: string;
+  label: string;
+  hint?: string;
   current: [string, string | null];
+  /** only one line changes: the other one (0 or 1) is shown dimmed */
+  fixed?: 0 | 1;
   options: { texts: [string, string | null]; pick: () => void }[];
-  busy: boolean;
-  onKeep: () => void;
-}) {
-  const all = [{ texts: current, pick: null as (() => void) | null }, ...options];
-  // a fixed order, so an option stays where it was when another one is picked
-  const shown = [...all].sort((p, q) => p.texts[0].localeCompare(q.texts[0]));
+  keep: () => void;
+  /** 3 more options (1 call) */
+  more?: () => void;
+  moreLabel?: string;
+}
+
+/**
+ * The options of written lines, under them: for a couplet, its rhyming pairs (both lines change) or one line's
+ * options that rhyme with the other line as it is (only that line changes). Each stays in its place, the one in
+ * the lyrics now is marked; tap one to put it in, "Keep" to keep it. No AI call — they came with the writing —
+ * except "3 more" (1 call).
+ */
+function OptionPicker({ tabs, busy }: { tabs: PickerTab[]; busy: boolean }) {
   // closed until asked for: the lyrics read clean
   const [open, setOpen] = useState(false);
+  const [tabKey, setTabKey] = useState<string | null>(null);
+  if (!tabs.length) return null;
+  // the one chosen, else both lines when there are pairs, else the line with options (the 2nd line first)
+  const tab = tabs.find((t) => t.key === tabKey) ?? tabs.find((t) => t.key === "both") ?? [...tabs].reverse().find((t) => t.options.length) ?? tabs[tabs.length - 1];
+  const count = tabs.reduce((n, t) => n + t.options.length, 0);
   if (!open)
     return (
       <div className="mx-1 mt-1 flex justify-end">
@@ -3303,10 +3354,15 @@ function OptionPicker({
           aria-expanded={false}
         >
           <Shuffle className="h-3 w-3" />
-          {all.length} options
+          {count ? `${count + 1} options` : "Options"}
         </button>
       </div>
     );
+  const all = [{ texts: tab.current, pick: null as (() => void) | null }, ...tab.options];
+  // a fixed order, so an option stays where it was when another one is picked
+  const changing = tab.fixed === 0 ? 1 : 0;
+  const shown = [...all].sort((p, q) => (p.texts[changing] ?? "").localeCompare(q.texts[changing] ?? ""));
+  const single = tab.current[1] === null;
   return (
     <div className="mx-1 mt-1.5 space-y-1.5 rounded-2xl bg-panel-2/60 p-2">
       <div className="flex items-center px-1">
@@ -3315,11 +3371,28 @@ function OptionPicker({
           Hide
         </button>
       </div>
+      {tabs.length > 1 && (
+        <div className="flex rounded-full bg-panel p-0.5" role="radiogroup" aria-label="What changes">
+          {tabs.map((t) => (
+            <button
+              key={t.key}
+              role="radio"
+              aria-checked={t === tab}
+              className={`min-w-0 flex-1 truncate rounded-full px-2 py-1 text-[11px] font-semibold ${t === tab ? "bg-accent text-white" : "text-muted"}`}
+              onClick={() => setTabKey(t.key)}
+            >
+              {t.label}
+              {t.options.length ? ` · ${t.options.length}` : ""}
+            </button>
+          ))}
+        </div>
+      )}
+      {tab.hint && <p className="px-1 text-[11px] text-muted">Only this line changes — {tab.hint}</p>}
       {shown.map((o, i) => {
         const on = o.pick === null;
         return (
           <button
-            key={i}
+            key={`${tab.key}:${o.texts.join("|")}`}
             className={`flex w-full items-start gap-2 rounded-xl px-2.5 py-2 text-left text-[13px] leading-snug ring-1 transition-colors disabled:opacity-60 ${on ? "bg-accent-soft ring-accent" : "bg-panel ring-line/60 active:bg-panel-2"}`}
             disabled={busy || on}
             onClick={() => o.pick?.()}
@@ -3329,15 +3402,32 @@ function OptionPicker({
               {on ? <Check className="h-3 w-3" /> : i + 1}
             </span>
             <span className="min-w-0 flex-1">
-              <span className="block">{o.texts[0]}</span>
-              {o.texts[1] !== null && <span className="block text-fg/80">{o.texts[1]}</span>}
+              {o.texts.map((t, k) =>
+                t === null ? null : (
+                  <span key={k} className={`block ${tab.fixed === k ? "text-[12px] text-muted" : k ? "text-fg/80" : ""}`}>
+                    {t}
+                  </span>
+                ),
+              )}
             </span>
           </button>
         );
       })}
-      <button className="flex h-9 w-full items-center justify-center gap-1.5 rounded-xl bg-ok-soft text-sm font-semibold text-ok disabled:opacity-50" disabled={busy} onClick={onKeep}>
+      {tab.more && (
+        <button
+          className="flex h-9 w-full items-center justify-center gap-1.5 rounded-xl bg-accent-soft text-[13px] font-semibold text-accent disabled:opacity-50"
+          disabled={busy}
+          onClick={tab.more}
+          title="3 new versions of this line that rhyme with the other one — the line stays as it is until you tap one (1 AI call)"
+        >
+          {busy ? <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-accent border-r-transparent" /> : <Sparkles className="h-4 w-4" />}
+          {busy ? "Writing…" : tab.moreLabel ?? "3 more"}
+          {!busy && <span className="text-[10px] font-medium text-muted">· 1 call</span>}
+        </button>
+      )}
+      <button className="flex h-9 w-full items-center justify-center gap-1.5 rounded-xl bg-ok-soft text-sm font-semibold text-ok disabled:opacity-50" disabled={busy} onClick={tab.keep}>
         {busy ? <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-ok border-r-transparent" /> : <Check className="h-4 w-4" />}
-        Keep {current[1] !== null ? "this couplet" : "this line"}
+        Keep {single || tab.fixed !== undefined ? "this line" : "this couplet"}
       </button>
     </div>
   );

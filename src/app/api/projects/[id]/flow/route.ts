@@ -25,6 +25,7 @@ export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]/f
     const b = await body<{
       more?: unknown;
       endWith?: unknown;
+      add?: unknown;
       action: string;
       takeId?: string;
       lines?: { start: number; sungAt: number; end?: number; syllables: number; stress: number[]; held: boolean; words: string; times?: number[]; pair?: number }[];
@@ -78,11 +79,13 @@ export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]/f
       // the same lines asked for twice at once (a double tap, two devices): written once, both get the result
       // a rhyme word the writer chose (double-tap → rhymes): every option ends on it
       const endWith = typeof b.endWith === "string" && /^[\p{L}'’]{1,30}$/u.test(b.endWith.trim()) ? b.endWith.trim() : undefined;
-      const key = `${id}:${[...ids].sort().join(",")}:${endWith ?? ""}`;
+      // add: more options to choose from, the line stays as it is
+      const add = b.add === true;
+      const key = `${id}:${[...ids].sort().join(",")}:${endWith ?? ""}:${add}`;
       let job = writingNow.get(key);
       if (!job) {
         // more: other groups of the same part follow (its stable part is cached for them)
-        job = (async () => applyFlowOptions(id, await flowSuggest(await getTree(id), ids, { more: b.more === true, endWith })))().finally(() => writingNow.delete(key));
+        job = (async () => applyFlowOptions(id, await flowSuggest(await getTree(id), ids, { more: b.more === true, endWith, add }), add))().finally(() => writingNow.delete(key));
         writingNow.set(key, job);
       }
       await job;

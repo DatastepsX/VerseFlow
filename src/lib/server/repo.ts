@@ -2055,7 +2055,8 @@ export async function applyFlow(projectId: string, flowId: string, sectionId: st
  * Suggestions for lines (first = the line's text unless the writer approved
  * it; the others under ↻). Older pending options are dropped.
  */
-export async function applyFlowOptions(projectId: string, items: { id: string; options: string[] }[]) {
+/** add: more options to choose from — the lines and the options they have stay, the new ones join them */
+export async function applyFlowOptions(projectId: string, items: { id: string; options: string[] }[], add = false) {
   const ids = items.map((x) => x.id);
   if (!ids.length) return;
   const current = check(await db().from("lines").select("id, text, status, flow").eq("project_id", projectId).in("id", ids)) as {
@@ -2065,8 +2066,23 @@ export async function applyFlowOptions(projectId: string, items: { id: string; o
     flow: LineFlow | null;
   }[];
   const byId = new Map(current.map((l) => [l.id, l]));
-  check(await db().from("alternatives").update({ state: "rejected" }).in("line_id", ids).eq("state", "pending"));
   const alts: Record<string, unknown>[] = [];
+  if (add) {
+    const have = check(await db().from("alternatives").select("line_id, text").in("line_id", ids).eq("state", "pending")) as { line_id: string; text: string }[];
+    for (const x of items) {
+      const l = byId.get(x.id);
+      if (!l) continue;
+      const seen = new Set([l.text.trim(), ...have.filter((h) => h.line_id === l.id).map((h) => h.text.trim())]);
+      for (const text of x.options.map((o) => o.trim()).filter((o) => o && !seen.has(o))) {
+        seen.add(text);
+        alts.push({ line_id: l.id, project_id: projectId, text, source: "ai", state: "pending" });
+      }
+    }
+    if (alts.length) check(await db().from("alternatives").insert(alts));
+    await touch(projectId);
+    return;
+  }
+  check(await db().from("alternatives").update({ state: "rejected" }).in("line_id", ids).eq("state", "pending"));
   for (const x of items) {
     const l = byId.get(x.id);
     if (!l || !x.options.length) continue;

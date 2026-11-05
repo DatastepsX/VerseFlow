@@ -666,7 +666,7 @@ export const cleanLyric = (o: string) =>
  * in couplets. Every option is checked with the syllable counter and nudged
  * onto the target length; the best fitting comes first.
  */
-export async function flowSuggest(tree: ProjectTree, lineIds: string[], call: { more?: boolean; endWith?: string } = {}) {
+export async function flowSuggest(tree: ProjectTree, lineIds: string[], call: { more?: boolean; endWith?: string; add?: boolean } = {}) {
   if (!aiConfigured()) throw new AiUnavailable("AI is not configured yet (ANTHROPIC_API_KEY missing).");
   const { project } = tree;
   const lang = project.language;
@@ -708,6 +708,8 @@ export async function flowSuggest(tree: ProjectTree, lineIds: string[], call: { 
   const rhymes: string[] = [];
   /** every couplet with a line being written, to keep its options rhyming pairwise */
   const allCouplets: [Line, Line][] = [];
+  /** the second line of a couplet written together: 2 more options rhyming with the first line's option 1 (to change it alone) */
+  const extra = new Set<string>();
   for (const s of tree.sections) {
     const lyric = s.lines.filter((l) => l.kind === "lyric");
     // as sung, and the lines left over in order: every line has a rhyme partner
@@ -721,8 +723,12 @@ export async function flowSuggest(tree: ProjectTree, lineIds: string[], call: { 
         `Line ${num.get(l.id)} must rhyme with line ${num.get(partner.id)} “${partner.text}” (-${analyzeLine(partner.text, lang).rhymeKey}).`;
       if (want.has(a.id) && stays(b)) rhymes.push(rule(a, b));
       if (want.has(b.id) && stays(a)) rhymes.push(rule(b, a));
-      if (want.has(a.id) && want.has(b.id) && !stays(a) && !stays(b))
-        rhymes.push(`Lines ${num.get(a.id)} and ${num.get(b.id)} rhyme with each other (option i with option i).`);
+      if (want.has(a.id) && want.has(b.id) && !stays(a) && !stays(b)) {
+        rhymes.push(
+          `Lines ${num.get(a.id)} and ${num.get(b.id)} rhyme with each other (option i with option i). Line ${num.get(b.id)} gets 5 options: options 4 and 5 are two more versions of it that rhyme with option 1 of line ${num.get(a.id)} (other words, other last words) — so it can be changed on its own.`,
+        );
+        if (!call.endWith) extra.add(b.id);
+      }
     }
   }
   const st = project.settings ?? {};
@@ -773,6 +779,13 @@ ${
       ? `\nThe writer chose the rhyme: every option of ${targets.map((x) => `line ${num.get(x.l.id)}`).join(" and ")} must END on the word “${call.endWith}” — a natural line that leads to it, on the line's rhythm (the word's stress on the line's last DUM). This word decides the rhyme.`
       : ""
   }
+${
+    call.add
+      ? `\nThe writer wants MORE options to choose from: write 3 new ones, different from the ones already offered —\n${targets
+          .map((x) => `line ${num.get(x.l.id)}: ${[x.l.text, ...x.l.alternatives.map((a) => a.text)].filter((t) => t.trim()).map((t) => `“${t}”`).join(", ") || "(none)"}`)
+          .join("\n")}`
+      : ""
+  }
 Return one entry per [WRITE] line, "line" = its number.`;
 
   // more groups follow: the stable part is written to the cache (the next calls read it at a twentieth of the price)
@@ -788,7 +801,7 @@ Return one entry per [WRITE] line, "line" = its number.`;
     const fitted = slot.options
       .map(cleanLyric)
       .filter(Boolean)
-      .slice(0, 3)
+      .slice(0, extra.has(line.id) ? 5 : 3)
       .map((o, i) => {
         let text = o;
         // nudge a near miss onto the sung length (fillers / small cuts) — never past the word the writer chose to end on
@@ -814,9 +827,10 @@ Return one entry per [WRITE] line, "line" = its number.`;
     if (oa && ob) {
       // both written: option i of one goes with option i of the other — keep the pairs together, best rhyme first
       const n = Math.min(oa.length, ob.length);
-      const order = Array.from({ length: n }, (_, k) => k).sort(
-        (x, y) => rhymeScore(oa[y].text, ob[y].text) * 2 - (fit(oa[y]) + fit(ob[y])) * 0.5 - (rhymeScore(oa[x].text, ob[x].text) * 2 - (fit(oa[x]) + fit(ob[x])) * 0.5) || x - y,
-      );
+      const score = (k: number) => rhymeScore(oa[k].text, ob[k].text) * 2 - (fit(oa[k]) + fit(ob[k])) * 0.5;
+      // the first pair goes in when it rhymes: the second line's extra options rhyme with it
+      const first = n > 0 && rhymeScore(oa[0].text, ob[0].text) >= 0.55 && fit(oa[0]) + fit(ob[0]) <= 1;
+      const order = Array.from({ length: n }, (_, k) => k).sort((x, y) => (first ? (x === 0 ? -1 : y === 0 ? 1 : 0) : 0) || score(y) - score(x) || x - y);
       opts.set(a.id, [...order.map((k) => oa[k]), ...oa.slice(n)]);
       opts.set(b.id, [...order.map((k) => ob[k]), ...ob.slice(n)]);
       done.add(a.id).add(b.id);
