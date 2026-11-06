@@ -27,6 +27,7 @@ import type {
 } from "@/lib/types";
 import { lineFlowFrom, lineStarts, linesIn, nextFlowName, ownWords, unlinked } from "@/lib/flow/pattern";
 import { fixPairs } from "@/lib/flow/rhymelines";
+import { nextSinging, roomForLine } from "@/lib/flow/room";
 import { songSections, type SungLine } from "@/lib/audio/song-lines";
 import { prosody } from "@/lib/rhyme/prosody";
 import { sectionRanges } from "@/lib/audio/song-map";
@@ -2006,7 +2007,10 @@ export async function applyFlow(projectId: string, flowId: string, sectionId: st
     if (current && change > 0) to = change;
   }
   const start = barLine(fromLineId ? (lyric[from].audio_at ?? partStart) : partStart);
-  const end = to < lyric.length ? barLine(lyric[to].audio_at ?? partEnd) : partEnd;
+  // to the part's end: the beat without vocals before the next part's singing is this part's too
+  const after0 = nextSinging(tree.sections, sIdx, audio);
+  const fill = to === lyric.length && nextStart !== null && after0.singing !== null && after0.singing > nextStart ? after0.singing - 0.1 : null;
+  const end = to < lyric.length ? barLine(lyric[to].audio_at ?? partEnd) : (fill ?? partEnd);
   const old = lyric.slice(from, to);
   // where each line starts: as far apart as the pattern's lines (sung: as sung), the pattern repeating
   const n = linesIn(flow.pattern, bar, end - start);
@@ -2042,6 +2046,10 @@ export async function applyFlow(projectId: string, flowId: string, sectionId: st
   rows.forEach((r, i) => (r.position = base + i));
   for (const [k, l] of after.entries()) check(await db().from("lines").update({ position: base + n + k }).eq("id", l.id));
   await insertFlowRows(projectId, rows);
+  // the last line runs past where the next part starts: that part starts after it (its singing stays)
+  const lastEnd = rows[n - 1]?.flow.times?.at(-1);
+  if (fill !== null && after0.next && nextStart !== null && lastEnd !== undefined && lastEnd + 0.1 > nextStart)
+    check(await db().from("sections").update({ audio_start: Math.min(fill + 0.05, lastEnd + 0.25) }).eq("id", after0.next.id));
   await touch(projectId);
   const fresh = check(await db().from("lines").select("id, text, flow").eq("section_id", section.id).eq("deleted", false)) as {
     id: string;
@@ -2049,6 +2057,26 @@ export async function applyFlow(projectId: string, flowId: string, sectionId: st
     flow: LineFlow | null;
   }[];
   return fresh.filter((l) => l.flow?.flowId === flowId && !l.text.trim()).map((l) => l.id);
+}
+
+/**
+ * One more line of the part's flow at its end, in the beat without vocals before the next part's singing: an
+ * empty line, ready to write. The next part starts after it when it has to (its singing stays where it is).
+ */
+export async function addFlowLine(sectionId: string) {
+  const row = check(await db().from("sections").select("project_id").eq("id", sectionId).maybeSingle()) as { project_id: string } | null;
+  if (!row) throw new NotFound("Part not found");
+  const tree = await getTree(row.project_id);
+  const room = roomForLine(tree.sections, sectionId, tree.flows, tree.audio);
+  if (!room) throw new Error("There's no room for another line before the next part.");
+  const lyric = tree.sections.find((s) => s.id === sectionId)!.lines;
+  const position = Math.max(0, ...lyric.map((l) => l.position)) + 1;
+  await insertFlowRows(row.project_id, [
+    { project_id: row.project_id, section_id: sectionId, position, text: "", status: "OPEN", kind: "lyric", audio_at: room.at, flow: room.flow },
+  ]);
+  if (room.moveNext !== null && room.nextId) check(await db().from("sections").update({ audio_start: room.moveNext }).eq("id", room.nextId));
+  await touch(row.project_id);
+  return row.project_id;
 }
 
 /**

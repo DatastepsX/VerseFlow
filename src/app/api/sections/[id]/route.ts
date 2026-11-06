@@ -1,5 +1,5 @@
 import { draftPlan, draftSection, fillBank, fitLine } from "@/lib/server/ai";
-import { addLine, appendLines, applyDraft, applyPolish, applyRefit, clearBank, deleteSection, extendSection, getTree, pasteSection, insertBank, mergeIntoPrevious, moveSection, setBankState, updateLine, updateSection } from "@/lib/server/repo";
+import { addFlowLine, addLine, appendLines, applyDraft, applyPolish, applyRefit, clearBank, deleteSection, extendSection, getTree, pasteSection, insertBank, mergeIntoPrevious, moveSection, setBankState, updateLine, updateSection } from "@/lib/server/repo";
 import { rhymePartners } from "@/lib/scheme";
 import { db } from "@/lib/server/db";
 import { body, handle, pick, treeResponse } from "@/lib/server/http";
@@ -130,6 +130,7 @@ export async function POST(req: Request, ctx: RouteContext<"/api/sections/[id]">
     // the part made longer: its last bars of the beat again, empty lines to write (free)
     // a copy of this part pasted after another one (its bars, lines and flow; free)
     if (b.action === "paste" && typeof b.after === "string") return treeResponse(await pasteSection(id, b.after));
+    if (b.action === "addFlowLine") return treeResponse(await addFlowLine(id));
     if (b.action === "extend") return treeResponse(await extendSection(id, [2, 4, 8, 16].includes(Number(b.bars)) ? Number(b.bars) : 4));
     if (b.action === "clearBank") {
       // removes the section's unused suggestions (free)

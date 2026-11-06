@@ -42,6 +42,7 @@ import { FlowSheet, type SheetAudio } from "./FlowSheet";
 import { exampleWords } from "@/lib/flow/example";
 import { People } from "./People";
 import { coupletsOf } from "@/lib/flow/couplets";
+import { roomForLine } from "@/lib/flow/room";
 import { analyzeLine, compareLines } from "@/lib/rhyme/analyze";
 import { gridFor, type BeatGrid, type FlowGridModel } from "@/lib/flow/grid";
 import {
@@ -2180,6 +2181,22 @@ export function SongApp({
                       );
                     })}
                   </div>
+                  {/* the beat goes on without vocals before the next part: room for another line of the flow */}
+                  {(() => {
+                    const room = roomForLine(tree.sections, s.id, tree.flows, tree.audio);
+                    if (!room) return null;
+                    return (
+                      <button
+                        className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-2xl border border-dashed border-accent/40 py-2 text-[13px] font-semibold text-accent active:bg-accent-soft disabled:opacity-50"
+                        disabled={busyLine === s.id}
+                        onClick={() => void lineAction(s.id, () => call(`/api/sections/${s.id}`, { action: "addFlowLine" }), "Add a line")}
+                        title={`The beat plays on without vocals at ${fmtTime(room.at)} — a line there on the flow, to write`}
+                      >
+                        <Plus className="h-4 w-4" />
+                        {busyLine === s.id ? "Adding…" : `A line at ${fmtTime(room.at)}${room.nextName ? ` · before the ${room.nextName}` : ""}`}
+                      </button>
+                    );
+                  })()}
                 </section>
               );
             })}
