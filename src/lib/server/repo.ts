@@ -2427,3 +2427,45 @@ export async function deleteNote(projectId: string, noteId: string, authorId: st
   if (n.audio_path) await db().storage.from(BUCKET).remove([n.audio_path]);
   check(await db().from("line_notes").delete().eq("id", noteId));
 }
+
+// ---------- who is on the song now (presence) ----------
+
+/** someone with the song open: where they are in it */
+export interface Here {
+  /** "user:device" (no accounts: the device) */
+  key: string;
+  userId: string | null;
+  name: string;
+  /** "phone" / "computer" */
+  device: string;
+  view: string | null;
+  part: string | null;
+  /** the line they have open, or are editing */
+  line: string | null;
+  editing: boolean;
+  at: number;
+}
+
+const HERE_FRESH_MS = 20_000;
+const HERE_WRITE_MS = 10_000;
+
+/**
+ * This device has the song open (with the song's version check, every few seconds): it is noted — at most every
+ * 10 s, or when it moves to another tab, part or line — and the others seen in the last 20 s come back. A row in
+ * user_settings per song; entries older than a minute are dropped.
+ */
+export async function presence(projectId: string, me: Omit<Here, "at" | "name"> & { name: () => Promise<string> }, leave = false) {
+  const id = `presence:${projectId}`;
+  const row = check(await db().from("user_settings").select("prefs").eq("id", id).maybeSingle()) as { prefs: Record<string, Here> } | null;
+  const all = { ...(row?.prefs ?? {}) };
+  const now = Date.now();
+  const mine = all[me.key];
+  const moved = !mine || mine.view !== me.view || mine.part !== me.part || mine.line !== me.line || mine.editing !== me.editing;
+  if (leave || moved || now - mine.at > HERE_WRITE_MS) {
+    for (const [k, v] of Object.entries(all)) if (now - v.at > 60_000) delete all[k];
+    if (leave) delete all[me.key];
+    else all[me.key] = { key: me.key, userId: me.userId, name: mine?.name ?? (await me.name()), device: me.device, view: me.view, part: me.part, line: me.line, editing: me.editing, at: now };
+    check(await db().from("user_settings").upsert({ id, prefs: all, updated_at: new Date().toISOString() }));
+  }
+  return Object.values(all).filter((h) => h.key !== me.key && now - h.at < HERE_FRESH_MS);
+}

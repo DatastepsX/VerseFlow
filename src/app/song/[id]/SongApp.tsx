@@ -118,16 +118,24 @@ export function SongApp({
   const router = useRouter();
   const [tree, setTree] = useState(initialTree);
   const pid = tree.project.id;
-  // the song open on another device (the Mac, the phone) changed: this one follows within a few seconds
+  // the song open on another device (the Mac, the phone) changed: this one follows within a few seconds —
+  // and who else has it open now, and where (sent along: where you are)
   const seenVersion = useRef<string | null>(null);
+  const where = useRef<{ view: string; part: string | null; line: string | null; edit: boolean }>({ view: "", part: null, line: null, edit: false });
+  const [here, setHere] = useState<HereNow[]>([]);
   useEffect(() => {
     let stop = false;
+    const device = deviceId();
+    const dev = window.matchMedia?.("(pointer: coarse)").matches ? "phone" : "computer";
     const tick = async () => {
       if (document.hidden) return;
-      const r = (await fetch(`/api/projects/${pid}/version`, { cache: "no-store" })
+      const w = where.current;
+      const q = new URLSearchParams({ d: device, dev, view: w.view, part: w.part ?? "", line: w.line ?? "", edit: w.edit ? "1" : "" });
+      const r = (await fetch(`/api/projects/${pid}/version?${q}`, { cache: "no-store" })
         .then((x) => (x.ok ? x.json() : null))
-        .catch(() => null)) as { v: string } | null;
+        .catch(() => null)) as { v: string; here?: HereNow[] } | null;
       if (!r || stop) return;
+      setHere(r.here ?? []);
       if (seenVersion.current !== null && r.v !== seenVersion.current) {
         const t = (await fetch(`/api/projects/${pid}`, { cache: "no-store" })
           .then((x) => (x.ok ? x.json() : null))
@@ -140,11 +148,16 @@ export function SongApp({
     void tick();
     const id = setInterval(() => void tick(), 3000);
     const onShow = () => void tick();
+    // closing the song (or the app): the others see you leave right away
+    const onLeave = () => navigator.sendBeacon?.(`/api/projects/${pid}/version`, new Blob([JSON.stringify({ d: device })], { type: "application/json" }));
     document.addEventListener("visibilitychange", onShow);
+    window.addEventListener("pagehide", onLeave);
     return () => {
       stop = true;
       clearInterval(id);
       document.removeEventListener("visibilitychange", onShow);
+      window.removeEventListener("pagehide", onLeave);
+      onLeave();
     };
   }, [pid]);
   const lang = tree.project.language;
@@ -1235,6 +1248,14 @@ export function SongApp({
   };
 
   const [editing, setEditing] = useState<string | null>(null);
+  // the part of the line you have open, else the one you're looking at
+  const lineNow = editing ?? openLine;
+  const partNow = (lineNow && tree.sections.find((x) => x.lines.some((l) => l.id === lineNow))?.id) || activePart;
+  useEffect(() => {
+    where.current = { view, part: partNow, line: lineNow, edit: editing !== null };
+  }, [view, partNow, lineNow, editing]);
+  /** who else is on this part / this line now */
+  const hereOn = (key: "part" | "line", id: string) => here.filter((h) => h[key] === id && (key === "part" || h.view === "lyrics"));
   const [draft, setDraft] = useState("");
   /** a change to a line (or a part): busy while it runs, one undo step with this label */
   /** actions running now: a second tap (before the button shows it's busy) doesn't start — and pay for — it again */
@@ -1387,6 +1408,8 @@ export function SongApp({
             <ChevronLeft className="h-6 w-6" />
           </Link>
           <h1 className="min-w-0 flex-1 truncate text-[17px] font-bold tracking-tight">{tree.project.title}</h1>
+          {/* who else has the song open now */}
+          {here.length > 0 && <HereNowButton here={here} parts={tree.sections} />}
           {/* undo / redo: whole actions ("New couplet", "New flow · Part 2"…), as many as you like */}
           {rec === null && (
             <div className="flex shrink-0 items-center">
@@ -1989,6 +2012,12 @@ export function SongApp({
                         {writing && <Elapsed since={writing.since} />}
                       </span>
                     )}
+                    {hereOn("part", s.id).map((h) => (
+                      <span key={h.key} className="flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold" style={{ background: `${hereColor(h.key)}22`, color: hereColor(h.key) }} title={`${hereName(h)} is in this part`}>
+                        <span className="h-1.5 w-1.5 rounded-full" style={{ background: hereColor(h.key) }} />
+                        {hereName(h)}
+                      </span>
+                    ))}
                     {lines.some((l) => l.text.trim()) && (
                       <button
                         className="flex shrink-0 items-center gap-1 rounded-full bg-panel-2 px-2.5 py-1 text-xs font-semibold text-accent disabled:opacity-50"
@@ -2139,6 +2168,7 @@ export function SongApp({
                             isNewNote={notesSeen.isNew}
                             onNotes={() => setNotesFor(l.id)}
                             onRhymes={(word) => setRhymeWord({ word, lineId: l.id })}
+                            here={hereOn("line", l.id)}
                             check={checkOf(l)}
                             checkBusy={busyLine === `check:${l.id}`}
                             checkLabel={`${partner?.text.trim() ? "Check couplet" : "Check"} · ${checkCost(partner?.text.trim() ? [l, partner] : [l])}`}
@@ -2587,6 +2617,8 @@ function LineCard(props: {
   onNotes: () => void;
   /** a word double-tapped: its rhymes */
   onRhymes: (word: string) => void;
+  /** others on this line now (open, or editing it) */
+  here: HereNow[];
   /** the quality check of the line as it is now */
   check: import("@/lib/types").LineCheck | null;
   checkBusy: boolean;
@@ -2681,6 +2713,12 @@ function LineCard(props: {
           kept && <Check className="mt-2 h-4 w-4 shrink-0 text-ok" aria-label="kept" />
         )}
       </button>
+      {props.here.map((h) => (
+        <p key={h.key} className="ml-3 flex items-center gap-1 text-[11px] font-semibold" style={{ color: hereColor(h.key) }}>
+          <span className="h-1.5 w-1.5 animate-pulse rounded-full" style={{ background: hereColor(h.key) }} />
+          {hereName(h)} {h.editing ? "is editing this line" : "has this line open"}
+        </p>
+      ))}
       {props.check && !props.check.ok && (
         <button className="ml-3 flex max-w-full items-center gap-1 rounded-full px-1 text-left text-[11px] font-semibold text-warn" onClick={props.onToggle}>
           <span className="shrink-0">● needs work ·</span>
@@ -3625,4 +3663,83 @@ async function fetchWithProgress(url: string, onProgress: (n: number, total: num
     o += p.length;
   }
   return out.buffer;
+}
+
+/** someone else with the song open now, and where (from the song's version check) */
+interface HereNow {
+  key: string;
+  userId: string | null;
+  name: string;
+  device: string;
+  view: string | null;
+  part: string | null;
+  line: string | null;
+  editing: boolean;
+  at: number;
+  /** you, on another device */
+  self?: boolean;
+}
+
+/** this browser's id (to tell your devices apart) */
+function deviceId() {
+  try {
+    let d = localStorage.getItem("vf.device");
+    if (!d) {
+      d = Math.random().toString(36).slice(2, 12);
+      localStorage.setItem("vf.device", d);
+    }
+    return d;
+  } catch {
+    return "nostore";
+  }
+}
+
+const HERE_COLORS = ["#f97316", "#22c55e", "#06b6d4", "#e11d48", "#eab308", "#3b82f6", "#d946ef"];
+const hereColor = (key: string) => HERE_COLORS[[...key].reduce((a, c) => (a * 31 + c.charCodeAt(0)) >>> 0, 7) % HERE_COLORS.length];
+const hereName = (h: HereNow) => (h.self ? `You (${h.device})` : h.userId ? h.name.split(" ")[0] || "Someone" : `A ${h.device}`);
+const VIEW_NAMES: Record<string, string> = { lyrics: "Lyrics", flow: "Flow", record: "Record", mix: "Mix", more: "More" };
+
+/** the people on the song now: their initials in the header — tap: who, where, on what */
+function HereNowButton({ here, parts }: { here: HereNow[]; parts: { id: string; name: string }[] }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="relative shrink-0">
+      <button className="flex items-center rounded-full py-1 pl-1 pr-1.5 active:bg-panel-2" onClick={() => setOpen(!open)} aria-label={`${here.length} more on this song now`} aria-expanded={open}>
+        {here.slice(0, 3).map((h, i) => (
+          <span
+            key={h.key}
+            className={`relative flex h-7 w-7 items-center justify-center rounded-full text-[11px] font-bold text-white ring-2 ring-bg ${i ? "-ml-2" : ""}`}
+            style={{ background: hereColor(h.key) }}
+          >
+            {(h.self ? "You" : h.name).slice(0, 1).toUpperCase()}
+            {i === 0 && <span className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-ok ring-2 ring-bg" />}
+          </span>
+        ))}
+        {here.length > 3 && <span className="ml-1 text-[11px] font-semibold text-muted">+{here.length - 3}</span>}
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="fixed right-3 top-[calc(env(safe-area-inset-top)+3.5rem)] z-50 w-[min(18rem,calc(100vw-1.5rem))] space-y-1 rounded-2xl bg-panel p-2 shadow-xl ring-1 ring-line">
+            <p className="px-2 pb-1 text-[11px] font-semibold text-muted">On this song now</p>
+            {here.map((h) => (
+              <div key={h.key} className="flex items-center gap-2 rounded-xl px-2 py-1.5">
+                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[11px] font-bold text-white" style={{ background: hereColor(h.key) }}>
+                  {(h.self ? "You" : h.name).slice(0, 1).toUpperCase()}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-semibold">{h.self ? `You · on your ${h.device}` : h.name}</span>
+                  <span className="block truncate text-[11px] text-muted">
+                    {[VIEW_NAMES[h.view ?? ""] ?? null, parts.find((p) => p.id === h.part)?.name ?? null, h.editing ? "editing a line" : null].filter(Boolean).join(" · ") || "in the song"}
+                    {!h.self && ` · ${h.device}`}
+                  </span>
+                </span>
+                <span className="h-2 w-2 shrink-0 rounded-full bg-ok" title="online" />
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
 }
