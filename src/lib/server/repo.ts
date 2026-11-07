@@ -28,6 +28,7 @@ import type {
 import { lineFlowFrom, lineStarts, linesIn, nextFlowName, ownWords, unlinked } from "@/lib/flow/pattern";
 import { fixPairs } from "@/lib/flow/rhymelines";
 import { nextSinging, roomForLine } from "@/lib/flow/room";
+import { fitPartStarts } from "@/lib/audio/fit-parts";
 import { lineFlowOfPart, patternFromPart } from "@/lib/flow/partflow";
 import { songSections, type SungLine } from "@/lib/audio/song-lines";
 import { prosody } from "@/lib/rhyme/prosody";
@@ -1881,6 +1882,7 @@ export async function buildFlowSong(
     projectId,
     named.flatMap((g, i) => flowRows(projectId, idAt.get(i + 1)!, g.items, source, step)),
   );
+  await fitParts(projectId);
   await touch(projectId);
 }
 
@@ -1958,8 +1960,22 @@ export async function redetectParts(projectId: string) {
   const extra = old.slice(parts.length).map((s) => s.id);
   if (extra.length) check(await db().from("sections").delete().in("id", extra));
   for (const [i, id] of ids.entries()) check(await db().from("sections").update({ position: i + 1 }).eq("id", id));
+  await fitParts(projectId);
   await touch(projectId);
   return parts.length;
+}
+
+/**
+ * The parts of beat without recorded voice (instrumentals, parts to write) start where the singing before them
+ * stops — the beat change after the last word, or the next bar (lib/audio/fit-parts). No API call.
+ */
+export async function fitParts(projectId: string) {
+  const tree = await getTree(projectId);
+  if (!tree.audio) return [];
+  const moves = fitPartStarts(tree.sections, tree.audio);
+  for (const m of moves) check(await db().from("sections").update({ audio_start: m.to }).eq("id", m.id));
+  if (moves.length) await touch(projectId);
+  return moves.map((m) => ({ ...m, name: tree.sections.find((s) => s.id === m.id)?.name ?? "" }));
 }
 
 /**

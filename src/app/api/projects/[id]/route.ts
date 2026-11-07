@@ -13,6 +13,7 @@ import {
   setSound,
   copyPartSound,
   redetectParts,
+  fitParts,
   saveChecks,
   dismissCheck,
   setLineTimes,
@@ -59,7 +60,7 @@ export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]">
   return handle(async () => {
     await access((await ctx.params).id, "edit");
     const { id } = await ctx.params;
-    const b = await body<{ action: string; name?: string; group_size?: number; label?: string; audio_start?: number | null; times?: { id: string; at: number | null }[]; text?: string; artistId?: string; color?: string; notes?: string; lanes?: string[]; lane?: string; preset?: string; key?: unknown; sectionId?: unknown; part?: unknown; custom?: unknown; from?: unknown; to?: unknown; levels?: unknown; lineIds?: unknown; lineId?: unknown }>(req);
+    const b = await body<{ action: string; name?: string; group_size?: number; label?: string; audio_start?: number | null; times?: { id: string; at: number | null }[]; text?: string; artistId?: string; color?: string; notes?: string; lanes?: string[]; lane?: string; preset?: string; key?: unknown; sectionId?: unknown; part?: unknown; custom?: unknown; from?: unknown; to?: unknown; levels?: unknown; lineIds?: unknown; lineId?: unknown; once?: unknown }>(req);
     switch (b.action) {
       case "undo":
       case "redo": {
@@ -137,6 +138,16 @@ export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]">
       case "dismissCheck":
         if (typeof b.lineId === "string") await dismissCheck(id, b.lineId);
         break;
+      case "fitParts": {
+        // instrumentals start where the singing before them stops (once on opening: "once"; free)
+        const tree = await getTree(id);
+        if (b.once === true && tree.project.settings?.partsFitted) break;
+        const moves = await fitParts(id);
+        if (b.once === true) await updateProject(id, { settings: { ...(await getTree(id)).project.settings, partsFitted: true } });
+        const res = await treeResponse(id);
+        res.headers.set("x-moved", encodeURIComponent(JSON.stringify(moves.map((m) => ({ name: m.name, from: m.from, to: m.to })))));
+        return res;
+      }
       case "redetectParts":
         // the parts found again from when the lines are sung (instrumentals, beat changes) — no API call
         await redetectParts(id);

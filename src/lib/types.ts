@@ -71,6 +71,8 @@ export interface ProjectSettings {
   mixer?: Record<string, { vol?: number; pan?: number; mute?: boolean; solo?: boolean }>;
   /** where the song's original vocals are out (once removed): everywhere ("all", the default) or these parts */
   vocalsOff?: "all" | string[];
+  /** the parts were fitted to where the singing stops once, when the song was opened (lib/audio/fit-parts) */
+  partsFitted?: boolean;
   /** the writer's brief for each part's lyrics (mood, perspective, words, rhymes, topic): lib/brief */
   briefs?: Record<string, import("./brief").LyricsBrief>;
   /** bars added to parts (a part made longer): applied in order to the uploaded song when it loads (lib/audio/arrange) */
