@@ -4,7 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import type { RhymeResult, RhymeWord } from "@/lib/rhyme/types";
 
 /**
- * Words that rhyme with a word of the lyrics: double-tap (or double-click) a word, a sheet lists its rhymes and
+ * Words that rhyme with a word of the lyrics: hold a finger on a word, double-tap it, or tap it in the open line's
+ * "Rhymes for" chips — a sheet lists its rhymes and
  * near rhymes from the rhyme dictionary — no AI call. Tap one: the AI writes 3 lines ending on it, on the line's flow
  * (1 call), to choose from right there — or copy it.
  */
@@ -58,34 +59,114 @@ function wordAt(container: HTMLElement, x: number, y: number): string | null {
 }
 
 /**
- * A tap that waits a moment for a second one: one tap → `onTap` (opening the line), two → `onWord` with the word
- * under them (the rhymes). On a computer a double-click does the same.
+ * Taps on a line's text: one tap → `onTap` (opening the line, after a moment to see if a second one comes); two
+ * taps, or holding a finger on a word → `onWord` with the word under it (its rhymes). On a computer a
+ * double-click does the same. Spread the result on the element: `<button {...taps(onToggle)}>`.
  */
 export function useWordTaps(onWord: (word: string) => void) {
   const last = useRef<{ t: number; x: number; y: number; timer: ReturnType<typeof setTimeout> | null } | null>(null);
-  useEffect(() => () => {
-    if (last.current?.timer) clearTimeout(last.current.timer);
-  }, []);
-  return (e: React.MouseEvent<HTMLElement>, onTap?: () => void) => {
-    const now = Date.now();
-    const p = last.current;
-    if (p && now - p.t < 320 && Math.abs(e.clientX - p.x) < 24 && Math.abs(e.clientY - p.y) < 24) {
-      if (p.timer) clearTimeout(p.timer);
-      last.current = null;
-      const word = wordAt(e.currentTarget, p.x, p.y) ?? wordAt(e.currentTarget, e.clientX, e.clientY);
-      window.getSelection()?.removeAllRanges();
-      if (word) onWord(word);
-      else onTap?.();
-      return;
-    }
-    const timer = onTap
-      ? setTimeout(() => {
-          last.current = null;
-          onTap();
-        }, 280)
-      : null;
-    last.current = { t: now, x: e.clientX, y: e.clientY, timer };
+  /** a finger held down: where, and the timer that picks the word */
+  const press = useRef<{ x: number; y: number; timer: ReturnType<typeof setTimeout> } | null>(null);
+  /** the word was picked by holding: the click that follows the finger lifting is not a tap */
+  const held = useRef(false);
+  useEffect(
+    () => () => {
+      if (last.current?.timer) clearTimeout(last.current.timer);
+      if (press.current) clearTimeout(press.current.timer);
+    },
+    [],
+  );
+  const endPress = () => {
+    if (press.current) clearTimeout(press.current.timer);
+    press.current = null;
   };
+  return (onTap?: () => void) => ({
+    onPointerDown: (e: React.PointerEvent<HTMLElement>) => {
+      endPress();
+      held.current = false;
+      if (e.pointerType === "mouse") return;
+      const el = e.currentTarget;
+      const [x, y] = [e.clientX, e.clientY];
+      press.current = {
+        x,
+        y,
+        timer: setTimeout(() => {
+          press.current = null;
+          const word = wordAt(el, x, y);
+          if (!word) return;
+          held.current = true;
+          if (last.current?.timer) clearTimeout(last.current.timer);
+          last.current = null;
+          window.getSelection()?.removeAllRanges();
+          navigator.vibrate?.(15);
+          onWord(word);
+        }, 450),
+      };
+    },
+    onPointerMove: (e: React.PointerEvent<HTMLElement>) => {
+      // scrolling, not holding
+      if (press.current && Math.hypot(e.clientX - press.current.x, e.clientY - press.current.y) > 10) endPress();
+    },
+    onPointerUp: endPress,
+    onPointerCancel: endPress,
+    // no copy menu / magnifier while holding a word
+    onContextMenu: (e: React.MouseEvent) => {
+      if (held.current || press.current) e.preventDefault();
+    },
+    onClick: (e: React.MouseEvent<HTMLElement>) => {
+      if (held.current) {
+        held.current = false;
+        return;
+      }
+      const now = Date.now();
+      const p = last.current;
+      if (p && now - p.t < 320 && Math.abs(e.clientX - p.x) < 24 && Math.abs(e.clientY - p.y) < 24) {
+        if (p.timer) clearTimeout(p.timer);
+        last.current = null;
+        const word = wordAt(e.currentTarget, p.x, p.y) ?? wordAt(e.currentTarget, e.clientX, e.clientY);
+        window.getSelection()?.removeAllRanges();
+        if (word) onWord(word);
+        else onTap?.();
+        return;
+      }
+      const timer = onTap
+        ? setTimeout(() => {
+            last.current = null;
+            onTap();
+          }, 280)
+        : null;
+      last.current = { t: now, x: e.clientX, y: e.clientY, timer };
+    },
+  });
+}
+
+/** the words of a line as chips — tap one for its rhymes; the last word (the one that rhymes) first */
+export function WordChips({ text, onWord }: { text: string; onWord: (word: string) => void }) {
+  const words = [...text.matchAll(/[\p{L}\p{N}'’]+/gu)].map((m) => m[0].replace(/^['’]+|['’]+$/g, "")).filter((w) => w.length > 1);
+  if (!words.length) return null;
+  const lastWord = words[words.length - 1];
+  const seen = new Set<string>();
+  const list = [lastWord, ...words.slice(0, -1)].filter((w) => {
+    const k = norm(w);
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+  return (
+    <div className="-mx-1 mt-1.5 flex items-center gap-1.5 overflow-x-auto px-1 pb-0.5 [scrollbar-width:none]">
+      <span className="shrink-0 text-[11px] font-semibold text-muted">Rhymes for</span>
+      {list.map((w, i) => (
+        <button
+          key={w}
+          className={`shrink-0 rounded-full px-2.5 py-1 text-[13px] font-semibold ${i === 0 ? "bg-accent text-white" : "bg-panel-2 text-fg/80 active:bg-accent-soft"}`}
+          onClick={() => onWord(w)}
+          title={`Words that rhyme with “${w}”`}
+        >
+          {w}
+        </button>
+      ))}
+    </div>
+  );
 }
 
 export function RhymeSheet({ word, lang, onClose, write }: { word: string; lang: string; onClose: () => void; write?: RhymeWrite }) {

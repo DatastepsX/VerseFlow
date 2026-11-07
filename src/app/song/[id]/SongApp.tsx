@@ -25,7 +25,7 @@ import { download, fullText } from "@/components/writer/util";
 import { VoiceSheet, type VoiceInfo } from "./VoiceSheet";
 import { RecordView } from "./Record";
 import { Mixer, type ExportOptions } from "./Mixer";
-import { RhymeSheet, useWordTaps } from "./RhymeWords";
+import { RhymeSheet, useWordTaps, WordChips } from "./RhymeWords";
 import { NewNotesBanner, NotePreview, NotesSheet, notesOf, useNotesSeen } from "./Notes";
 import { encodeMp3, exportStems as exportStemsZip, logicNote, renderAll, safeName, type Stem } from "@/lib/studio/export";
 import { encodeWav } from "@/lib/studio/wav";
@@ -2558,8 +2558,8 @@ function LineCard(props: {
       <div>
       <button
         id={`line-${l.id}`}
-        onClick={(e) => taps(e, props.onToggle)}
-        className={`flex w-full items-start gap-2 rounded-2xl px-3 py-1 text-left transition-colors ${props.live ? "bg-accent-soft" : "active:bg-panel-2"}`}
+        {...taps(props.onToggle)}
+        className={`flex w-full select-none items-start gap-2 rounded-2xl px-3 py-1 text-left transition-colors [-webkit-touch-callout:none] ${props.live ? "bg-accent-soft" : "active:bg-panel-2"}`}
       >
         <span className="min-w-0 flex-1">{lineText}</span>
         {props.busy ? (
@@ -2618,9 +2618,10 @@ function LineCard(props: {
         </div>
       ) : (
         <>
-          <button className="block w-full text-left" onClick={(e) => taps(e, props.onToggle)} title="Close · double-tap a word: its rhymes">
+          <button className="block w-full select-none text-left [-webkit-touch-callout:none]" {...taps(props.onToggle)} title="Close · hold or double-tap a word: its rhymes">
             {lineText}
           </button>
+          {l.text.trim() && <WordChips text={l.text} onWord={props.onRhymes} />}
           {props.beatGrid && (l.flow || l.audio_at !== null) ? (
             <button className="group mt-1.5 flex items-center gap-2" onClick={props.onGrid} title="Set this line's flow: sing it or tap it" aria-expanded={props.gridOpen}>
               {l.flow?.syllables ? <Pattern flow={l.flow} /> : null}
