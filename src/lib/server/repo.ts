@@ -35,6 +35,7 @@ import { prosody } from "@/lib/rhyme/prosody";
 import { sectionRanges } from "@/lib/audio/song-map";
 import type { Extension } from "@/lib/audio/arrange";
 import { settingsKey } from "./users";
+import { noteActivity } from "./notify";
 
 const r3 = (t: number) => Math.round(t * 1000) / 1000;
 
@@ -265,6 +266,8 @@ export async function getTree(projectId: string): Promise<ProjectTree> {
 
 async function touch(projectId: string) {
   await db().from("projects").update({ updated_at: new Date().toISOString() }).eq("id", projectId);
+  // the others on the song are told (by email, collected)
+  noteActivity(projectId, "song");
 }
 
 export async function updateProject(
@@ -366,6 +369,7 @@ function snap(line: Partial<Line> & { deleted?: boolean }): Partial<LineSnapshot
 }
 
 async function recordEvent(projectId: string, lineId: string, action: string, before: object | null, after: object | null) {
+  noteActivity(projectId, "lyrics");
   const step = await currentStep(projectId, action);
   // a new action invalidates anything that could have been redone
   await db().from("line_events").delete().eq("project_id", projectId).eq("undone", true);
@@ -1441,6 +1445,7 @@ export async function saveTake(
   projectId: string,
   t: { path: string; section_id: string | null; lane: string; start_at: number; duration: number; sample_rate: number; peaks: number[]; note?: string | null; created_by?: string | null },
 ) {
+  noteActivity(projectId, "takes");
   if (!t.path.startsWith(`${projectId}/take-`)) throw new Error("Invalid take path");
   // a take without a section (the whole-song flow take) is grouped by its layer alone
   let prevQ = db().from("takes").select("take_no").eq("project_id", projectId).eq("lane", t.lane);
@@ -2372,7 +2377,7 @@ export async function publicShare(token: string) {
       return { name: f.name, bytes: f.bytes, url: data?.signedUrl ?? null };
     }),
   );
-  return { title: s.title, note: s.note, expires_at: s.expires_at, files: files.filter((f): f is typeof f & { url: string } => !!f.url) };
+  return { projectId: s.project_id, title: s.title, note: s.note, expires_at: s.expires_at, files: files.filter((f): f is typeof f & { url: string } => !!f.url) };
 }
 
 // ---------- notes on lines: a comment, a voice message ----------

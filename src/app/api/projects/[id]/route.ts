@@ -27,6 +27,7 @@ import { FX_PRESETS } from "@/lib/fx/presets";
 import { cleanPreset } from "@/lib/fx/match";
 import { access, addMember, currentUserId } from "@/lib/server/users";
 import { checkLyrics } from "@/lib/server/ai";
+import { noteActivity } from "@/lib/server/notify";
 
 export async function GET(_req: Request, ctx: RouteContext<"/api/projects/[id]">) {
   return handle(async () => {
@@ -60,7 +61,7 @@ export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]">
   return handle(async () => {
     await access((await ctx.params).id, "edit");
     const { id } = await ctx.params;
-    const b = await body<{ action: string; name?: string; group_size?: number; label?: string; audio_start?: number | null; times?: { id: string; at: number | null }[]; text?: string; artistId?: string; color?: string; notes?: string; lanes?: string[]; lane?: string; preset?: string; key?: unknown; sectionId?: unknown; part?: unknown; custom?: unknown; from?: unknown; to?: unknown; levels?: unknown; lineIds?: unknown; lineId?: unknown; once?: unknown }>(req);
+    const b = await body<{ action: string; name?: string; group_size?: number; label?: string; audio_start?: number | null; times?: { id: string; at: number | null }[]; text?: string; artistId?: string; color?: string; notes?: string; lanes?: string[]; lane?: string; preset?: string; key?: unknown; sectionId?: unknown; part?: unknown; custom?: unknown; from?: unknown; to?: unknown; levels?: unknown; lineIds?: unknown; lineId?: unknown; once?: unknown; what?: unknown }>(req);
     switch (b.action) {
       case "undo":
       case "redo": {
@@ -138,6 +139,10 @@ export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]">
       case "dismissCheck":
         if (typeof b.lineId === "string") await dismissCheck(id, b.lineId);
         break;
+      case "downloaded":
+        // the others are told by email, right away
+        noteActivity(id, "download", typeof b.what === "string" ? b.what.slice(0, 80) : "the song");
+        return Response.json({ ok: true });
       case "fitParts": {
         // instrumentals start where the singing before them stops (once on opening: "once"; free)
         const tree = await getTree(id);

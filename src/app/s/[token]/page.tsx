@@ -1,6 +1,7 @@
 import { Suspense } from "react";
 import type { Metadata } from "next";
 import { publicShare } from "@/lib/server/repo";
+import { noteActivity } from "@/lib/server/notify";
 import { DownloadAll } from "./DownloadAll";
 
 /**
@@ -32,6 +33,8 @@ async function Share({ params }: { params: Promise<{ token: string }> }) {
         <p className="text-sm text-muted">It has expired or was turned off. Ask for a new one.</p>
       </div>
     );
+  // the people on the song are told: someone is downloading it with the link
+  noteActivity(s.projectId, "download", `the stems with the share link “${s.title || "Song"}”`, null);
   const total = s.files.reduce((n, f) => n + f.bytes, 0);
   return (
     <div className="space-y-5">

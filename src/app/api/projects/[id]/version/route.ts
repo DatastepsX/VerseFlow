@@ -1,4 +1,5 @@
 import { presence, projectVersion } from "@/lib/server/repo";
+import { flushActivity } from "@/lib/server/notify";
 import { body, handle } from "@/lib/server/http";
 import { access, currentUserId, userById } from "@/lib/server/users";
 
@@ -27,6 +28,8 @@ export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]/v
     await access(id, "view");
     const b = await body<{ d?: unknown }>(req);
     if (typeof b.d === "string" && b.d) await presence(id, await meFrom(new URLSearchParams(), b.d.slice(0, 40)), true);
+    // what they did on the song goes out to the others now
+    flushActivity(id);
     return Response.json({ ok: true });
   });
 }

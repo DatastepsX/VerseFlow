@@ -32,6 +32,8 @@ export default function Settings() {
   // recording
   const [countIn, setCountIn] = usePref("vf.studio.countin", 1);
   const [metronome, setMetronome] = usePref("vf.studio.metronome", true);
+  /** emails when others change a song you're on, or download it (read by the server: the profile) */
+  const [notifyEmail, setNotifyEmail] = usePref("vf.notify.email", true);
   const [size, setSize] = usePref<"S" | "M" | "L">("vf.rec.size", "M");
   const [headphones, setHeadphones] = usePref("vf.studio.headphones", true);
 
@@ -120,6 +122,18 @@ export default function Settings() {
               ? "The Mac records and plays; your iPhone is the remote: the tab and the part you open on it, and what you play, happen on the Mac. Keep the song open on the Mac."
               : "Your iPhone records and plays by itself."}
           </p>
+        </div>
+      </section>
+
+      <section className="space-y-2">
+        <p className="label">Emails</p>
+        <div className={card}>
+          <Row
+            label="Tell me what others do on my songs"
+            sub={notifyEmail ? "An email when someone changes a song you're on (a summary, at most every 30 minutes) — and right away when it's downloaded." : "No emails about your songs."}
+            on={notifyEmail}
+            set={setNotifyEmail}
+          />
         </div>
       </section>
 

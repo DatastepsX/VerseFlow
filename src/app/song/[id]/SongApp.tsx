@@ -520,6 +520,9 @@ export function SongApp({
   };
   // ---------- stems for Logic: each track from 0:00, as WAVs in a ZIP ----------
   /** the export; a share link: its address */
+  /** the others on the song are told by email that it was downloaded */
+  const tellDownload = (what: string) =>
+    void fetch(`/api/projects/${pid}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "downloaded", what }) }).catch(() => {});
   const exportStems = async (o: ExportOptions, progress: (text: string) => void): Promise<string | void> => {
     const e = engine.current;
     const b = beat.current;
@@ -600,6 +603,7 @@ export function SongApp({
       });
       if (!sum) throw new Error("Nothing to mix.");
       const mp3 = await encodeMp3(sum, b.sampleRate, 256, (x) => progress(`MP3 · ${Math.round(x * 100)}%`));
+      tellDownload("the MP3 of the mix");
       return download(new Blob([mp3.buffer as ArrayBuffer], { type: "audio/mpeg" }), "mix.mp3");
     }
     const zip = await exportStemsZip({
@@ -614,6 +618,7 @@ export function SongApp({
       onProgress: (done, total, what) => progress(what === "ZIP" ? "Packing the ZIP…" : `Rendering ${what} · ${done + 1}/${total}`),
     });
     download(zip, "stems.zip");
+    tellDownload(`the stems (ZIP${o.mixed ? ", mixed" : ""})`);
   };
   /** the line whose bars play over and over (while you write it) */
   const [looping, setLooping] = useState<string | null>(null);
