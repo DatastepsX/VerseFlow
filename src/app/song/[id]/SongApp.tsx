@@ -42,7 +42,7 @@ import { FlowSheet, type SheetAudio } from "./FlowSheet";
 import { exampleWords } from "@/lib/flow/example";
 import { People } from "./People";
 import { coupletsOf } from "@/lib/flow/couplets";
-import { fitPartStarts } from "@/lib/audio/fit-parts";
+import { alignPartLines, fitPartStarts } from "@/lib/audio/fit-parts";
 import { roomForLine } from "@/lib/flow/room";
 import { analyzeLine, compareLines } from "@/lib/rhyme/analyze";
 import { gridFor, type BeatGrid, type FlowGridModel } from "@/lib/flow/grid";
@@ -904,7 +904,7 @@ export function SongApp({
   const [partsNote, setPartsNote] = useState<string | null>(null);
   // once, when the song opens: its instrumentals start where the singing before them stops (free)
   const fitted = useRef(false);
-  const needsFit = role !== "viewer" && !tree.project.settings?.partsFitted && !!tree.audio && fitPartStarts(tree.sections, tree.audio).length > 0;
+  const needsFit = role !== "viewer" && !tree.project.settings?.partsFitted && !!tree.audio && (fitPartStarts(tree.sections, tree.audio).length > 0 || alignPartLines(tree.sections, tree.audio).length > 0);
   useEffect(() => {
     if (!needsFit || fitted.current) return;
     fitted.current = true;
@@ -913,7 +913,7 @@ export function SongApp({
         if (!res.ok) return;
         const moved = JSON.parse(decodeURIComponent(res.headers.get("x-moved") ?? "%5B%5D")) as { name: string; to: number }[];
         setTree((await res.json()) as ProjectTree);
-        if (moved.length) setNote(`${moved.map((m) => `${m.name} now starts at ${fmtTime(m.to)}`).join(" · ")} — where the singing before it stops`);
+        if (moved.length) setNote(`${moved.map((m) => `${m.name} now start${m.name.endsWith("lyrics") ? "" : "s"} at ${fmtTime(m.to)}`).join(" · ")} — where the singing before stops`);
       })
       .catch(() => {});
   }, [needsFit, pid]);

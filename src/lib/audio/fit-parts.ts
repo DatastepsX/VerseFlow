@@ -49,3 +49,30 @@ export function fitPartStarts(parts: Part[], audio: Pick<AudioTrack, "bpm" | "be
   }
   return out;
 }
+
+/**
+ * The lines of a part of beat without recorded voice start on its first bar: when they were laid out later
+ * (the part began later then), they move earlier by whole bars — each keeps its place in the bar and its rhythm.
+ */
+export function alignPartLines(parts: Part[], audio: Pick<AudioTrack, "bpm" | "beat_offset" | "beats_per_bar">): { id: string; shift: number }[] {
+  if (!audio.bpm) return [];
+  const bar = ((audio.beats_per_bar || 4) * 60) / audio.bpm;
+  const origin = audio.beat_offset ?? 0;
+  const barOf = (t: number) => Math.round((t - origin) / bar);
+  const out: { id: string; shift: number }[] = [];
+  parts.forEach((part, i) => {
+    const lines = part.lines.filter((l) => l.kind === "lyric" && l.audio_at !== null);
+    if (part.audio_start === null || !lines.length || part.lines.some((l) => l.flow?.source === "vocals")) return;
+    const first = Math.min(...lines.map((l) => l.audio_at!));
+    const bars = barOf(first) - barOf(part.audio_start);
+    if (bars < 1) return;
+    const shift = bars * bar;
+    // never into the singing of the part before
+    const prev = [...parts.slice(0, i)].reverse().find((p) => p.audio_start !== null);
+    const sung = (prev?.lines ?? []).filter((l) => l.kind === "lyric" && l.audio_at !== null && (l.text.trim() || l.flow?.source === "vocals"));
+    const voiceEnd = sung.length ? Math.max(...sung.map((l) => lineEnd(l) ?? 0)) : -Infinity;
+    if (first - shift < voiceEnd) return;
+    out.push({ id: part.id, shift: Math.round(shift * 1000) / 1000 });
+  });
+  return out;
+}

@@ -63,7 +63,7 @@ function cleanPattern(v: unknown): FlowPattern | null {
       ...(l.sung ? { sung: true } : {}),
       ...(l.commaPauses ? { commaPauses: true } : {}),
       // sung with its own spacing: the bar it is timed from
-      ...(num(l.at) && (l.at as number) >= 0 && (l.at as number) < 256 ? { at: Math.round((l.at as number) * 1000) / 1000 } : {}),
+      ...(num(l.at) && (l.at as number) > -1 && (l.at as number) < 256 ? { at: Math.round((l.at as number) * 1000) / 1000 } : {}),
     };
   });
   if (lines.some((l) => !l) || lines.length < 1 || !num(p.bar) || (p.bar as number) <= 0) return null;

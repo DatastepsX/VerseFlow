@@ -334,7 +334,7 @@ export function FlowSheet({
   };
 
   const like = parts.find((x) => x.id === likePart) ?? null;
-  const likePattern = like ? patternFromPart(like.lines, lang, bar, 0, like)?.pattern ?? null : null;
+  const likePattern = like ? patternFromPart(like.lines, lang, bar, barStart, like)?.pattern ?? null : null;
   const ready = likePattern ? true : lines.every((l) => l.syllables > 0);
   const pattern: FlowPattern = { lines, scheme: p === 4 ? scheme : "AABB", bar, source: mode };
   const total = likePattern ? linesIn(likePattern, bar, stretchSeconds) : ready ? linesIn(pattern, bar, stretchSeconds) : linesInStretch;

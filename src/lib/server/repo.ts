@@ -28,7 +28,7 @@ import type {
 import { lineFlowFrom, lineStarts, linesIn, nextFlowName, ownWords, unlinked } from "@/lib/flow/pattern";
 import { fixPairs } from "@/lib/flow/rhymelines";
 import { nextSinging, roomForLine } from "@/lib/flow/room";
-import { fitPartStarts } from "@/lib/audio/fit-parts";
+import { alignPartLines, fitPartStarts } from "@/lib/audio/fit-parts";
 import { lineFlowOfPart, patternFromPart } from "@/lib/flow/partflow";
 import { songSections, type SungLine } from "@/lib/audio/song-lines";
 import { prosody } from "@/lib/rhyme/prosody";
@@ -1974,8 +1974,29 @@ export async function fitParts(projectId: string) {
   if (!tree.audio) return [];
   const moves = fitPartStarts(tree.sections, tree.audio);
   for (const m of moves) check(await db().from("sections").update({ audio_start: m.to }).eq("id", m.id));
-  if (moves.length) await touch(projectId);
-  return moves.map((m) => ({ ...m, name: tree.sections.find((s) => s.id === m.id)?.name ?? "" }));
+  // its lyrics start on its first bar: earlier by whole bars (each line keeps its rhythm)
+  const sections = tree.sections.map((s) => ({ ...s, audio_start: moves.find((m) => m.id === s.id)?.to ?? s.audio_start }));
+  // a part with takes recorded on its lines keeps them where they are (the takes would no longer fit)
+  const shifts = alignPartLines(sections, tree.audio).filter((sh) => !tree.takes.some((t) => t.section_id === sh.id));
+  for (const sh of shifts) {
+    const lines = sections.find((s) => s.id === sh.id)!.lines.filter((l) => l.kind === "lyric" && l.audio_at !== null);
+    await setLineTimes(projectId, lines.map((l) => ({ id: l.id, at: l.audio_at! - sh.shift })));
+    for (const l of lines) {
+      if (!l.flow?.times?.length) continue;
+      const r = (t: number) => Math.round((t - sh.shift) * 1000) / 1000;
+      await updateLine(l.id, { flow: { ...l.flow, times: l.flow.times.map(r), ...(l.flow.end !== undefined ? { end: r(l.flow.end) } : {}) } }, "flow");
+    }
+  }
+  if (moves.length || shifts.length) await touch(projectId);
+  const name = (id: string) => tree.sections.find((s) => s.id === id)?.name ?? "";
+  return [
+    ...moves.map((m) => ({ ...m, name: name(m.id) })),
+    ...shifts.map((sh) => {
+      const s = sections.find((x) => x.id === sh.id)!;
+      const first = Math.min(...s.lines.filter((l) => l.audio_at !== null).map((l) => l.audio_at!));
+      return { id: sh.id, from: first, to: first - sh.shift, name: `${name(sh.id)}'s lyrics` };
+    }),
+  ];
 }
 
 /**

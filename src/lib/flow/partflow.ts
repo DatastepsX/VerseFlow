@@ -15,8 +15,9 @@ export function patternFromPart(
 ): { pattern: FlowPattern; start: number; ids: string[] } | null {
   const sung = lines.filter((l) => l.text.trim() && l.audio_at !== null).sort((a, b) => a.audio_at! - b.audio_at!);
   if (!sung.length) return null;
-  // the bar the part's first line is sung in
-  const start = origin + Math.floor((sung[0].audio_at! - origin) / bar + 1e-6) * bar;
+  // the bar the part's first line leads into: a line sung just before a bar line (a pickup) belongs to that bar —
+  // the part starts there, not a bar earlier (the line keeps coming in a little before it)
+  const start = origin + Math.round((sung[0].audio_at! - origin) / bar) * bar;
   const out: PatternLine[] = sung.map((l) => {
     const f = l.flow;
     const at = Math.round(((l.audio_at! - start) / bar) * 1000) / 1000;

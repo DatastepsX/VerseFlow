@@ -32,6 +32,17 @@ test("a part's flow from its lyrics: one line per written line, syllables from t
   assert.equal(f.syllables, made.pattern.lines[0].syllables);
 });
 
+test("a part whose first line is a pickup: the flow starts on the bar it leads into, not a bar earlier", () => {
+  // Rap: its first line at 64.7, just before the bar at 64.99 (bars of 2.7036 from 0.11)
+  const b = 2.7036;
+  const lines = [64.7, 68.3].map((at, i) => ({ id: `r${i}`, text: "Il cappotto sulle gambe, quella pioggia e sigarette", audio_at: at, flow: sungFlow(at, 16) }));
+  const made = patternFromPart(lines, "it", b, 0.11, { id: "rap", name: "Rap" })!;
+  assert.ok(Math.abs(made.start - 64.99) < 0.01, String(made.start));
+  // in another part starting on a bar, its first line comes in the same little bit before it
+  assert.ok(made.pattern.lines[0].at! < 0 && made.pattern.lines[0].at! > -0.2);
+  assert.ok(Math.abs(124.47 + lineStarts(made.pattern, b, 1)[0] - 124.18) < 0.02);
+});
+
 test("a part with nothing written: no flow from it", () => {
   assert.equal(patternFromPart([{ id: "x", text: " ", audio_at: 3, flow: null }], "it", bar, 0, { id: "p", name: "P" }), null);
 });

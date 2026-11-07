@@ -28,3 +28,17 @@ test("a word stretched over the beat doesn't hold the part back; a part with rec
   const [m] = fitPartStarts(instr, audio);
   assert.ok(m.to < 64 && m.to > 61, String(m.to));
 });
+
+test("a no-vocals part's lyrics laid out later move to its first bar, by whole bars", async () => {
+  const { alignPartLines } = await import("./fit-parts");
+  const parts = [
+    { id: "chorus", audio_start: 92.7, lines: [sung(120.04, [120.04, 121.28, 122.68], 123.38)] },
+    { id: "instr", audio_start: 124.471, lines: [written(129.597), written(133.157)] },
+  ];
+  const [a] = alignPartLines(parts, audio);
+  assert.equal(a.id, "instr");
+  // two bars: "Le finestre" at 2:04.2, a pickup into the part's first bar (2:04.5)
+  assert.ok(Math.abs(129.597 - a.shift - 124.19) < 0.02, String(129.597 - a.shift));
+  // lyrics on the part's first bar already: nothing
+  assert.deepEqual(alignPartLines([parts[0], { id: "instr", audio_start: 124.471, lines: [written(124.19)] }], audio), []);
+});
