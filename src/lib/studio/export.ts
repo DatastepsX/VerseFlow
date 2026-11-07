@@ -2,7 +2,7 @@
 
 import { zipSync } from "fflate";
 import type { PlayLayer } from "./engine";
-import { softClip } from "./limiter";
+import { softClip, vocalLimiter } from "./limiter";
 import { encodeWav } from "./wav";
 
 /**
@@ -18,6 +18,8 @@ export interface Stem {
   channel: { vol: number; pan: number } | null;
   /** a beat: stereo; a voice: mono unless it is panned */
   stereo: boolean;
+  /** a voice: its limiter, as when it plays */
+  vocal?: boolean;
 }
 
 /** one stem, rendered offline (faster than real time) */
@@ -35,7 +37,8 @@ export async function renderStem(stem: Stem, seconds: number, sampleRate: number
     bus.connect(p);
     out = p;
   }
-  out.connect(ctx.destination);
+  if (stem.vocal) out.connect(vocalLimiter(ctx)).connect(ctx.destination);
+  else out.connect(ctx.destination);
   for (const l of stem.layers) {
     const c0 = Math.max(0, l.clip?.from ?? 0);
     const c1 = Math.min(l.buffer.duration, l.clip?.to ?? l.buffer.duration);

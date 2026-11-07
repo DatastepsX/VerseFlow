@@ -536,7 +536,7 @@ export function SongApp({
     if (flows.length) stems.push({ name: "Flow (guide)", layers: flows, channel: o.mixed ? ch("flow") : null, stereo: false });
     for (const l of lanes) {
       const layers = takes.filter((x) => x.bus === laneBus(l));
-      if (layers.length) stems.push({ name: l, layers, channel: o.mixed ? ch(laneBus(l)) : null, stereo: false });
+      if (layers.length) stems.push({ name: l, layers, channel: o.mixed ? ch(laneBus(l)) : null, stereo: false, vocal: true });
     }
     // the mix: as heard (the beat a little down, as it plays here)
     const mix = o.mixdown || o.kind !== "zip"

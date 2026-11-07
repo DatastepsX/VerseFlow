@@ -27,7 +27,8 @@ test("solo: only the soloed channels play; mute wins", () => {
 });
 
 test("a quiet take made as loud as it can be, never past the limit", () => {
-  assert.equal(louderGain([0.1, 0.2, 0.05]), 4.45 > 4 ? 4 : 4.45);
+  assert.equal(louderGain([0.1, 0.2, 0.05]), 4.45);
+  assert.equal(louderGain([0.05]), 8);
   assert.equal(louderGain([0.445]), 2);
   assert.equal(louderGain([0, 0.001]), null);
 });

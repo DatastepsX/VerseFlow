@@ -12,7 +12,7 @@ import { takeWindow } from "@/lib/studio/timing";
 import { encodeWav, peaksOf } from "@/lib/studio/wav";
 import type { ProjectSettings, ProjectTree, Take } from "@/lib/types";
 import { buildChain } from "@/lib/fx/chain";
-import { channelOf, clipOf, laneBus, louderGain } from "@/lib/studio/mix";
+import { channelOf, clipOf, laneBus, levelGain } from "@/lib/studio/mix";
 import { detectKey } from "@/lib/fx/key";
 import { customFx, layerPreset, presetById, registerFx, type FxPreset } from "@/lib/fx/presets";
 import { retune, type MusicKey } from "@/lib/fx/tune";
@@ -634,11 +634,12 @@ export function useLocalRecorder(o: {
       // the joined take keeps the volume and pan the take had
       if (id && joint && ((joint.base.gain ?? 1) !== 1 || (joint.base.pan ?? 0) !== 0))
         await api(`/api/takes/${id}`, { gain: joint.base.gain ?? 1, pan: joint.base.pan ?? 0 }, "PATCH").catch(() => {});
-      // as loud as it can be without clipping — a phone or a quiet microphone records low (a continued take keeps
-      // a volume that was set by hand)
+      // as loud as a voice sits in the beat — a phone or a quiet microphone records low (a continued take keeps a
+      // volume that was set by hand)
       let fresh = saved as unknown as ProjectTree;
-      const louder = louderGain(peaksOf(out.samples, 400));
-      if (loudTakes && id && louder && louder > 1.05 && !(joint && (joint.base.gain ?? 1) !== 1)) {
+      // by loudness, not by the loudest moment: a voice's peaks would keep it quiet (the vocals' limiter holds them)
+      const louder = levelGain(out.samples, out.sampleRate);
+      if (loudTakes && id && louder && Math.abs(louder - 1) > 0.05 && !(joint && (joint.base.gain ?? 1) !== 1)) {
         const r2 = await api(`/api/takes/${id}`, { gain: louder }, "PATCH").catch(() => null);
         if (r2?.data.sections) fresh = r2.data;
       }

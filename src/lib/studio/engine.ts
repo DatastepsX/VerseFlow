@@ -1,7 +1,7 @@
 "use client";
 
 import { measureClaps, measureLatency, songTimeOfFrame } from "./timing";
-import { softClip } from "./limiter";
+import { softClip, vocalLimiter } from "./limiter";
 
 /**
  * The studio's audio engine (browser): the beat, other takes and the
@@ -461,7 +461,9 @@ export class StudioEngine {
       gain.gain.value = this.volumes.get(key) ?? 1;
       const pan = this.ctx.createStereoPanner();
       pan.pan.value = this.pans.get(key) ?? 0;
-      gain.connect(pan).connect(this.ctx.destination);
+      // the vocals (the recording layers, your voice): held under full scale, however loud they are set
+      if (key.startsWith("lane:") || key === "voice") gain.connect(pan).connect(vocalLimiter(this.ctx)).connect(this.ctx.destination);
+      else gain.connect(pan).connect(this.ctx.destination);
       b = { gain, pan };
       this.buses.set(key, b);
     }

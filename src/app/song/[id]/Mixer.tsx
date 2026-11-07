@@ -545,9 +545,9 @@ function TakeSheet(p: MixerProps & { lane: string; sectionId: string | null; onC
         <div className="rounded-2xl bg-panel-2/70 px-4 py-3">
           <p className="text-sm font-semibold">Take {t.take_no} on its own</p>
           <VolumeSlider value={mix.gain} max={TAKE_MAX} label={`Take ${t.take_no}`} onValue={(v) => change({ gain: Math.round(v * 100) / 100 })} />
-          {louderGain(t.peaks ?? []) !== null && Math.abs((louderGain(t.peaks ?? []) ?? 1) - mix.gain) > 0.05 && (
+          {louderGain(t.peaks ?? []) !== null && (louderGain(t.peaks ?? []) ?? 1) > mix.gain + 0.05 && (
             <button className="mt-1 rounded-full bg-accent-soft px-3 py-1.5 text-xs font-semibold text-accent" onClick={() => change({ gain: louderGain(t.peaks ?? [])! })}>
-              {louderGain(t.peaks ?? [])! > mix.gain ? "Louder" : "Softer"} · as loud as it can be ({Math.round(louderGain(t.peaks ?? [])! * 100)}%)
+              Louder · up to its loudest peak ({Math.round(louderGain(t.peaks ?? [])! * 100)}%)
             </button>
           )}
           <PanSlider value={mix.pan} label={`Take ${t.take_no}`} onValue={(v) => change({ pan: v })} />

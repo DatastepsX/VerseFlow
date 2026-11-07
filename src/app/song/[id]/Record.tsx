@@ -1485,7 +1485,7 @@ function TakeCut(props: {
             }}
           />
           {/* a quiet take: as loud as it can be without clipping */}
-          {louderGain(props.peaks) !== null && Math.abs((louderGain(props.peaks) ?? 1) - gain) > 0.05 && (
+          {louderGain(props.peaks) !== null && (louderGain(props.peaks) ?? 1) > gain + 0.05 && (
             <button
               className="mt-1 flex items-center gap-1 rounded-full bg-accent-soft px-3 py-1.5 text-xs font-semibold text-accent"
               onClick={() => {
@@ -1494,7 +1494,7 @@ function TakeCut(props: {
                 props.onGain(g);
               }}
             >
-              <Wand className="h-3.5 w-3.5" /> {louderGain(props.peaks)! > gain ? "Louder" : "Softer"} · as loud as it can be ({pct(louderGain(props.peaks)!)})
+              <Wand className="h-3.5 w-3.5" /> Louder · up to its loudest peak ({pct(louderGain(props.peaks)!)})
             </button>
           )}
           <p className="text-[11px] text-muted">The whole {props.take.lane} layer: the Mixer.</p>

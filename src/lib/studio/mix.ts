@@ -6,11 +6,12 @@ import type { ProjectSettings } from "@/lib/types";
  * the Mac plays. Each take has its own volume and pan on top (takes.gain / takes.pan). Pure.
  */
 
-export const MIX_MAX = 1.5;
+/** a channel's volume up to this (+8 dB; the vocals have a limiter, so a louder voice doesn't crack) */
+export const MIX_MAX = 2.5;
 export const laneBus = (lane: string) => `lane:${lane}`;
 
 export interface Channel {
-  /** 0–1.5 (1: as is) */
+  /** 0–MIX_MAX (1: as is) */
   vol: number;
   /** −1 left … 0 centre … 1 right */
   pan: number;
@@ -69,8 +70,38 @@ export const clipOf = (t: { id?: string; trim_in: number; trim_out: number | nul
 
 export const pct = (v: number) => `${Math.round(v * 100)}%`;
 
-/** a take's volume up to this (a quiet take made louder) */
-export const TAKE_MAX = 4;
+/** a take's volume up to this (a quiet take made louder: +18 dB) */
+export const TAKE_MAX = 8;
+
+/** how loud a voice should be (about LUFS): where a voice sits in a mastered beat */
+export const VOICE_TARGET_DB = -16;
+
+/**
+ * A recording's loudness in dB (close to LUFS for a voice): the level of its 400 ms blocks, the silent ones
+ * left out — below −70 dB, then those 10 dB under the rest — so pauses between lines don't count. null: silence.
+ */
+export function loudnessDb(x: Float32Array, sampleRate: number): number | null {
+  const n = Math.max(1, Math.round(sampleRate * 0.4));
+  const blocks: number[] = [];
+  for (let i = 0; i + n <= x.length; i += Math.round(n / 4)) {
+    let sum = 0;
+    for (let k = i; k < i + n; k++) sum += x[k] * x[k];
+    blocks.push(sum / n);
+  }
+  const db = (ms: number) => 10 * Math.log10(ms + 1e-12);
+  const loud = blocks.filter((m) => db(m) > -70);
+  if (!loud.length) return null;
+  const gate = db(loud.reduce((a, b) => a + b, 0) / loud.length) - 10;
+  const kept = loud.filter((m) => db(m) > gate);
+  return db(kept.reduce((a, b) => a + b, 0) / kept.length);
+}
+
+/** the volume that brings a take to the voice's loudness (VOICE_TARGET_DB); null: no voice in it */
+export function levelGain(x: Float32Array, sampleRate: number): number | null {
+  const l = loudnessDb(x, sampleRate);
+  if (l === null || l < -60) return null;
+  return Math.round(Math.max(0.5, Math.min(TAKE_MAX, Math.pow(10, (VOICE_TARGET_DB - l) / 20))) * 100) / 100;
+}
 
 /** the volume that brings a take's loudest moment to about −1 dB (its waveform: 0…1 peaks); null: no sound */
 export function louderGain(peaks: number[]): number | null {
