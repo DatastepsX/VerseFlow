@@ -12,7 +12,7 @@ import { takeWindow } from "@/lib/studio/timing";
 import { encodeWav, peaksOf } from "@/lib/studio/wav";
 import type { ProjectSettings, ProjectTree, Take } from "@/lib/types";
 import { buildChain } from "@/lib/fx/chain";
-import { channelOf, clipOf, laneBus } from "@/lib/studio/mix";
+import { channelOf, clipOf, laneBus, louderGain } from "@/lib/studio/mix";
 import { detectKey } from "@/lib/fx/key";
 import { customFx, layerPreset, presetById, registerFx, type FxPreset } from "@/lib/fx/presets";
 import { retune, type MusicKey } from "@/lib/fx/tune";
@@ -136,6 +136,8 @@ export interface LocalSettings {
   /** a double / ad-lib take follows the part's Lead by itself once saved (a synced copy; the take stays) */
   followLead: boolean;
   setFollowLead: (on: boolean) => void;
+  loudTakes: boolean;
+  setLoudTakes: (on: boolean) => void;
   headphones: boolean;
   setHeadphones: (on: boolean) => void;
   latencyMs: number;
@@ -247,6 +249,8 @@ export function useLocalRecorder(o: {
   };
   const [metronome, setMetronome] = usePref("vf.studio.metronome", true);
   const [followLead, setFollowLead] = usePref("vf.studio.followLead", true);
+  /** a new take is made as loud as it can be without clipping (its volume — the recording stays as it is) */
+  const [loudTakes, setLoudTakes] = usePref("vf.studio.loudTakes", true);
   const [headphones, setHeadphones] = usePref("vf.studio.headphones", true);
   // the microphone's gain: each microphone of this device its own (a USB microphone often comes in quiet)
   const [gains, setGains] = usePref<Record<string, number>>("vf.studio.ingains", {});
@@ -477,15 +481,20 @@ export function useLocalRecorder(o: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deviceId, headphones, armed]);
 
-  /** the count-in's clicks (when the metronome is on for it), then the take's (heard while `clicks` is on) */
+  /**
+   * The clicks of a take: in the count-in (its bars only — not the run-up heard before a continued piece; when
+   * "click during the count-in" is on), then during the take. All of them follow the Click button, live: off is
+   * off — no click at all, so none can end up in the recording either.
+   */
   const clicksFor = (from: number, to: number, takeTo?: number) => {
     const perBar = Math.max(1, Math.round(bar / o.beatLength));
-    const out: { at: number; accent: boolean; take?: boolean }[] = [];
+    const out: { at: number; accent: boolean; take: true }[] = [];
     const end = takeTo ?? to;
+    const countFrom = to - Math.max(0, countIn) * bar;
     for (let k = 0; from + k * o.beatLength < end - 0.01; k++) {
       const at = from + k * o.beatLength;
       const take = at >= to - 0.01;
-      if (take || metronome) out.push({ at, accent: k % perBar === 0, ...(take ? { take: true } : {}) });
+      if (take || (metronome && at >= countFrom - 0.01)) out.push({ at, accent: k % perBar === 0, take: true });
     }
     return out;
   };
@@ -625,8 +634,15 @@ export function useLocalRecorder(o: {
       // the joined take keeps the volume and pan the take had
       if (id && joint && ((joint.base.gain ?? 1) !== 1 || (joint.base.pan ?? 0) !== 0))
         await api(`/api/takes/${id}`, { gain: joint.base.gain ?? 1, pan: joint.base.pan ?? 0 }, "PATCH").catch(() => {});
+      // as loud as it can be without clipping — a phone or a quiet microphone records low (a continued take keeps
+      // a volume that was set by hand)
+      let fresh = saved as unknown as ProjectTree;
+      const louder = louderGain(peaksOf(out.samples, 400));
+      if (loudTakes && id && louder && louder > 1.05 && !(joint && (joint.base.gain ?? 1) !== 1)) {
+        const r2 = await api(`/api/takes/${id}`, { gain: louder }, "PATCH").catch(() => null);
+        if (r2?.data.sections) fresh = r2.data;
+      }
       // a double sung along with the Lead lands a little late (you follow what you hear): it follows the Lead by itself
-      const fresh = saved as unknown as ProjectTree;
       const lead = leadOf(fresh, sectionId);
       const take = fresh.takes?.find((t) => t.id === id);
       if (followLead && id && take && lead && lead.id !== id && l !== "Lead" && l !== "Flow") {
@@ -1027,6 +1043,8 @@ export function useLocalRecorder(o: {
       setMetronome,
       followLead,
       setFollowLead,
+      loudTakes,
+      setLoudTakes,
       headphones,
       setHeadphones,
       latencyMs: Math.round(latency * 1000 * 10) / 10,

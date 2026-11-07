@@ -1176,10 +1176,19 @@ function RecordSettings({ r, size, setSize, onClose, onMic }: { r: Recorder; siz
           {s && (
             <label className="flex items-center justify-between gap-3 px-1 py-1 text-sm">
               <span>
-                Click during the take
-                <span className="block text-[11px] text-muted">Also the metronome button next to record — with headphones, so the mic doesn&apos;t hear it.</span>
+                Click
+                <span className="block text-[11px] text-muted">The metronome button next to record. Off: no click at all — not in the count-in either. Use headphones, so the mic doesn&apos;t hear it.</span>
               </span>
               <Toggle on={r.clicks} onChange={r.setClicks} />
+            </label>
+          )}
+          {s && (
+            <label className="flex items-center justify-between gap-3 px-1 py-1 text-sm">
+              <span>
+                Takes as loud as they can be
+                <span className="block text-[11px] text-muted">Each new take&apos;s volume is raised to just below clipping — a phone records quietly. Change it any time (Cut · Volume).</span>
+              </span>
+              <Toggle on={s.loudTakes} onChange={s.setLoudTakes} />
             </label>
           )}
           {s && (
@@ -1598,7 +1607,7 @@ function MicCheckSheet({ r, then, everySession, setEverySession, onDone }: { r: 
       <div onClick={(e) => e.stopPropagation()} className="max-h-[92dvh] w-full max-w-lg space-y-4 overflow-auto rounded-t-3xl bg-panel px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-3">
         <div className="mx-auto h-1.5 w-10 rounded-full bg-line" />
         <div>
-          <h2 className="text-xl font-bold">Check the microphone</h2>
+          <h2 className="text-xl font-bold">Check before recording</h2>
           <p className="text-xs text-muted">
             {r.mic ? `“${r.mic}” · ` : ""}gain {s.gainDb > 0 ? "+" : ""}
             {s.gainDb} dB — sing or rap your loudest line for 5 seconds.
@@ -1625,6 +1634,27 @@ function MicCheckSheet({ r, then, everySession, setEverySession, onDone }: { r: 
         ) : failed ? (
           <p className="rounded-xl bg-bad-soft px-3 py-2 text-sm text-bad">The check couldn&apos;t run — tap the page once, then try again.</p>
         ) : null}
+        {/* the delay: what you hear is late by the sound's way out and in — set, every take lands on the beat */}
+        <div className="space-y-2 rounded-2xl bg-panel-2/70 px-4 py-3">
+          <div className="flex items-baseline justify-between gap-2">
+            <p className="text-sm font-semibold">Delay {s.headphones ? "with headphones" : "without headphones"}</p>
+            <p className="font-mono text-sm font-bold">{s.latencyMs} ms</p>
+          </div>
+          <p className="text-[11px] text-muted">
+            {r.status === "calibrating"
+              ? "Clap exactly on each click — 4 to count in, then clap along 8 times."
+              : s.calibrated
+                ? "Measured on this device: every take is moved by it, so it lands on the beat. Changed headphones or microphone? Measure again."
+                : "Only estimated — measure it once on this device, or takes can land a little late."}
+          </p>
+          <button
+            className={`${s.calibrated ? "btn" : "btn-primary"} w-full justify-center rounded-xl py-2.5 text-sm disabled:opacity-50`}
+            disabled={r.status !== "idle" || s.leveling !== null}
+            onClick={() => s.calibrate("claps")}
+          >
+            {r.status === "calibrating" ? "Clap on each click…" : s.calibrated ? "Measure the delay again · clap along" : "Measure the delay · clap along"}
+          </button>
+        </div>
         <div className="flex flex-col gap-2">
           {needsFix && !fixed && (
             <button
