@@ -286,9 +286,56 @@ export class StudioEngine {
     return this.ctx.decodeAudioData(data);
   }
 
-  /** current song position while playing */
+  /** current song position while playing (looping: within the loop) */
   position() {
-    return this.ctx.currentTime - this.base;
+    const t = this.ctx.currentTime - this.base;
+    const l = this.looping;
+    if (!l || t < l.from) return t;
+    return l.from + ((t - l.from) % (l.to - l.from));
+  }
+
+  /** a stretch of the song played over and over (song time) */
+  private looping: { from: number; to: number } | null = null;
+
+  /**
+   * Plays the stretch [from, to) of `buffer` over and over, seamlessly: cut on the given (bar) lines, its last
+   * milliseconds cross-faded with what comes just before `from`, so the end runs into the start as the song
+   * itself would — no click, no gap. Stops with stop() (or another play()).
+   */
+  loop(buffer: AudioBuffer, from: number, to: number, opts: { gain?: number; bus?: string; fade?: number } = {}) {
+    this.stop();
+    const sr = buffer.sampleRate;
+    const a = Math.max(0, Math.round(from * sr));
+    const b = Math.min(buffer.length, Math.round(to * sr));
+    const n = b - a;
+    if (n < sr * 0.2) return null;
+    const x = Math.min(Math.round((opts.fade ?? 0.012) * sr), a, Math.floor(n / 4));
+    const out = this.ctx.createBuffer(buffer.numberOfChannels, n, sr);
+    for (let c = 0; c < buffer.numberOfChannels; c++) {
+      const src = buffer.getChannelData(c);
+      const dst = out.getChannelData(c);
+      dst.set(src.subarray(a, b));
+      // the tail turns into what precedes the start: at the loop point the sound goes on as it does in the song
+      for (let k = 0; k < x; k++) {
+        const w = (k + 1) / (x + 1);
+        const fadeOut = Math.cos((w * Math.PI) / 2);
+        const fadeIn = Math.sin((w * Math.PI) / 2);
+        dst[n - x + k] = src[b - x + k] * fadeOut + src[a - x + k] * fadeIn;
+      }
+    }
+    const node = this.ctx.createBufferSource();
+    node.buffer = out;
+    node.loop = true;
+    const level = this.ctx.createGain();
+    level.gain.value = opts.gain ?? 1;
+    node.connect(level).connect(opts.bus ? this.bus(opts.bus) : this.ctx.destination);
+    this.chains.push(level);
+    const start = this.ctx.currentTime + 0.06;
+    this.base = start - from;
+    this.looping = { from, to: from + n / sr };
+    node.start(start);
+    this.playing.push(node);
+    return this.base;
   }
 
   /** the metronome during a take: its own level, so it can be switched on and off while the take runs */
@@ -422,6 +469,7 @@ export class StudioEngine {
   }
 
   stop() {
+    this.looping = null;
     for (const s of this.playing) {
       try {
         s.stop();

@@ -43,6 +43,7 @@ import { exampleWords } from "@/lib/flow/example";
 import { People } from "./People";
 import { coupletsOf } from "@/lib/flow/couplets";
 import { alignPartLines, fitPartStarts } from "@/lib/audio/fit-parts";
+import { loopBars } from "@/lib/audio/loop";
 import { roomForLine } from "@/lib/flow/room";
 import { analyzeLine, compareLines } from "@/lib/rhyme/analyze";
 import { gridFor, type BeatGrid, type FlowGridModel } from "@/lib/flow/grid";
@@ -512,6 +513,7 @@ export function SongApp({
     // your recorded takes (Record), unless muted; not with clicks (tapping / singing a flow)
     const takes = opts.clicks || opts.guide ? [] : await takeLayers().catch(() => []);
     const layers = [...flows, ...guideL.map((l) => ({ ...l, bus: "voice" })), ...takes];
+    setLooping(null);
     e.play(Math.max(0, from), { beat: beat.current, layers, beatGain: guideL.length ? 0.6 : 0.8, clicks: opts.clicks });
     stopAt.current = until;
     setPlaying(true);
@@ -613,7 +615,20 @@ export function SongApp({
     });
     download(zip, "stems.zip");
   };
+  /** the line whose bars play over and over (while you write it) */
+  const [looping, setLooping] = useState<string | null>(null);
+  const startLoop = async (l: Line) => {
+    const e = engine.current;
+    const r = beatGrid && beat.current ? loopBars(l, beatGrid, beat.current.duration) : null;
+    if (!e || !r || !beat.current) return;
+    await e.ctx.resume();
+    stopAt.current = null;
+    e.loop(beat.current, r.from, r.to, { gain: 0.8, bus: "beat" });
+    setLooping(l.id);
+    setPlaying(true);
+  };
   const stopPlay = () => {
+    setLooping(null);
     if (controller) {
       sendRemote({ t: "songStop" });
       if (remoteEnd.current) clearTimeout(remoteEnd.current);
@@ -2169,6 +2184,12 @@ export function SongApp({
                             onNotes={() => setNotesFor(l.id)}
                             onRhymes={(word) => setRhymeWord({ word, lineId: l.id })}
                             here={hereOn("line", l.id)}
+                            looping={looping === l.id}
+                            onLoop={
+                              !controller && beatGrid && l.audio_at !== null
+                                ? () => (looping === l.id ? stopPlay() : void startLoop(l))
+                                : null
+                            }
                             check={checkOf(l)}
                             checkBusy={busyLine === `check:${l.id}`}
                             checkLabel={`${partner?.text.trim() ? "Check couplet" : "Check"} · ${checkCost(partner?.text.trim() ? [l, partner] : [l])}`}
@@ -2619,6 +2640,9 @@ function LineCard(props: {
   onRhymes: (word: string) => void;
   /** others on this line now (open, or editing it) */
   here: HereNow[];
+  /** its bars playing over and over (while writing it) */
+  looping: boolean;
+  onLoop: (() => void) | null;
   /** the quality check of the line as it is now */
   check: import("@/lib/types").LineCheck | null;
   checkBusy: boolean;
@@ -2765,6 +2789,18 @@ function LineCard(props: {
             <b className="font-mono text-accent">~</b> hold · <b className="font-mono text-accent">^</b> breath — Hear and the karaoke follow them.
           </p>
           <div className="flex gap-2">
+            {props.onLoop && (
+              <button
+                className={`flex shrink-0 items-center justify-center gap-1.5 rounded-xl px-3 py-2 text-sm font-semibold ${props.looping ? "bg-accent text-white" : "bg-panel-2 text-fg/80"}`}
+                // the keyboard stays open
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={props.onLoop}
+                aria-pressed={props.looping}
+                title="This line's bars over and over, while you write it"
+              >
+                <Restart className={`h-4 w-4 ${props.looping ? "animate-spin [animation-duration:2.5s]" : ""}`} /> {props.looping ? "Stop" : "Loop"}
+              </button>
+            )}
             <button className="btn-primary flex-1 justify-center rounded-xl py-2" onClick={props.onSave}>
               Save
             </button>
@@ -2836,6 +2872,16 @@ function LineCard(props: {
             >
               <Play className="h-3 w-3" /> Play
             </button>
+            {props.onLoop && (
+              <button
+                className={`flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1 font-semibold ${props.looping ? "bg-accent text-white" : "bg-panel-2 text-fg/80"}`}
+                onClick={props.onLoop}
+                title="This line's bars over and over, while you write it"
+                aria-pressed={props.looping}
+              >
+                <Restart className={`h-3 w-3 ${props.looping ? "animate-spin [animation-duration:2.5s]" : ""}`} /> {props.looping ? "Looping · stop" : "Loop"}
+              </button>
+            )}
             <button
               className={`flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1 font-semibold ${props.notes ? "bg-accent-soft text-accent" : "bg-panel-2 text-fg/80"}`}
               onClick={props.onNotes}
