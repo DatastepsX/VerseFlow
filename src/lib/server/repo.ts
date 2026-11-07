@@ -28,6 +28,7 @@ import type {
 import { lineFlowFrom, lineStarts, linesIn, nextFlowName, ownWords, unlinked } from "@/lib/flow/pattern";
 import { fixPairs } from "@/lib/flow/rhymelines";
 import { nextSinging, roomForLine } from "@/lib/flow/room";
+import { lineFlowOfPart, patternFromPart } from "@/lib/flow/partflow";
 import { songSections, type SungLine } from "@/lib/audio/song-lines";
 import { prosody } from "@/lib/rhyme/prosody";
 import { sectionRanges } from "@/lib/audio/song-map";
@@ -1972,6 +1973,32 @@ export async function createFlow(projectId: string, pattern: FlowPattern) {
 export async function updateFlow(projectId: string, flowId: string, pattern: FlowPattern) {
   check(await db().from("flows").update({ pattern }).eq("id", flowId).eq("project_id", projectId));
   await touch(projectId);
+}
+
+/**
+ * The flow of a part taken from its lyrics as they are now (edited, optimised): its own lines follow it (their
+ * syllables, stresses and breaks from the words), and another part can use it — the same lines, rhythm and
+ * length, in its style. Done again, it overwrites the part's flow with the lyrics as they are then.
+ */
+export async function partFlow(projectId: string, sectionId: string) {
+  const tree = await getTree(projectId);
+  const section = tree.sections.find((s) => s.id === sectionId);
+  if (!section) throw new NotFound("Part not found");
+  const audio = tree.audio;
+  if (!audio?.bpm) throw new Error("The beat needs a tempo for flows.");
+  const bar = ((audio.beats_per_bar ?? 4) * 60) / audio.bpm;
+  const lines = section.lines.filter((l) => l.kind === "lyric");
+  const made = patternFromPart(lines, tree.project.language, bar, audio.beat_offset ?? 0, { id: section.id, name: section.name });
+  if (!made) throw new Error(`“${section.name}” has no written lines on the beat yet.`);
+  const mine = tree.flows.find((f) => f.pattern.part?.id === sectionId);
+  const flowId = mine ? mine.id : (await createFlow(projectId, made.pattern)).id;
+  if (mine) await updateFlow(projectId, mine.id, made.pattern);
+  for (const [i, id] of made.ids.entries()) {
+    const l = lines.find((x) => x.id === id)!;
+    const flow = lineFlowOfPart(made.pattern, i, made.start, bar, flowId, l.flow);
+    if (JSON.stringify(flow) !== JSON.stringify(l.flow)) await updateLine(id, { flow }, "flow");
+  }
+  return flowId;
 }
 
 /**

@@ -1174,7 +1174,8 @@ export function SongApp({
     },
   };
   type UseOpts = { write: boolean; brief: LyricsBrief | null };
-  const useFlow = async (use: { flowId: string } | { pattern: import("@/lib/types").FlowPattern }, opts: UseOpts) => {
+  type FlowUse = { flowId: string } | { pattern: import("@/lib/types").FlowPattern } | { fromSection: string };
+  const useFlow = async (use: FlowUse, opts: UseOpts) => {
     if (!flowSheet) return;
     const sec0 = tree.sections.find((x) => x.id === flowSheet.sectionId);
     // the brief stays with the part: its lyrics now, and every rewrite later, follow it
@@ -1190,7 +1191,7 @@ export function SongApp({
     // the result: the part's new lines (Lyrics opens on it)
     setView("lyrics");
   };
-  const applyFlowSheet = async (use: { flowId: string } | { pattern: import("@/lib/types").FlowPattern }, opts: UseOpts) => {
+  const applyFlowSheet = async (use: FlowUse, opts: UseOpts) => {
     if (!flowSheet) return;
     const post = async <T,>(body: unknown): Promise<T> => {
       const res = await fetch(`/api/projects/${pid}/flows`, { method: "POST", headers: { "content-type": "application/json", ...undoHeaders() }, body: JSON.stringify(body) });
@@ -1199,6 +1200,8 @@ export function SongApp({
       return data;
     };
     let flowId = "flowId" in use ? use.flowId : null;
+    // another part's flow, from its lyrics as they are now (that part follows it too)
+    if ("fromSection" in use) flowId = (await post<{ flow: { id: string } }>({ action: "fromPart", sectionId: use.fromSection })).flow.id;
     if (!flowId) flowId = (await post<{ flow: { id: string } }>({ action: "create", pattern: (use as { pattern: unknown }).pattern })).flow.id;
     const out = await post<{ tree: ProjectTree; write: string[] }>({ action: "apply", flowId, sectionId: flowSheet.sectionId, fromLineId: flowSheet.fromLineId });
     setTree(out.tree);
@@ -2317,6 +2320,27 @@ export function SongApp({
               stretchSeconds={st.end - st.start}
               brief={tree.project.settings?.briefs?.[sec.id] ?? null}
               audio={sheetAudio}
+              parts={tree.sections
+                .filter((x) => x.id !== sec.id && x.lines.some((l) => l.kind === "lyric" && l.text.trim() && l.audio_at !== null))
+                .map((x) => ({ id: x.id, name: x.name, lines: x.lines.filter((l) => l.kind === "lyric") }))}
+              onFromLyrics={
+                !flowSheet.fromLineId && sec.lines.some((l) => l.kind === "lyric" && l.text.trim() && l.audio_at !== null)
+                  ? async () => {
+                      await undoStep(`Flow from the lyrics · ${sec.name}`, async () => {
+                        const res = await fetch(`/api/projects/${pid}/flows`, {
+                          method: "POST",
+                          headers: { "content-type": "application/json", ...undoHeaders() },
+                          body: JSON.stringify({ action: "fromPart", sectionId: sec.id }),
+                        });
+                        const data = (await res.json().catch(() => ({}))) as { tree?: ProjectTree; error?: string };
+                        if (!res.ok || !data.tree) throw new Error(data.error ?? "Something went wrong");
+                        setTree(data.tree);
+                      });
+                      setFlowSheet(null);
+                      setNote(`“${sec.name}” now follows its lyrics — pick it under “Like another part” in another part's flow.`);
+                    }
+                  : null
+              }
               onUse={useFlow}
               onClose={() => {
                 stopPlay();

@@ -1,4 +1,4 @@
-import { applyFlow, createFlow, getTree, updateFlow } from "@/lib/server/repo";
+import { applyFlow, createFlow, getTree, partFlow, updateFlow } from "@/lib/server/repo";
 import { body, handle } from "@/lib/server/http";
 import type { FlowPattern, PatternLine } from "@/lib/types";
 import { access } from "@/lib/server/users";
@@ -6,6 +6,7 @@ import { access } from "@/lib/server/users";
 /**
  * The song's flows (patterns of 2 or 4 lines):
  *  create {pattern}                                → {flow, tree}
+ *  fromPart {sectionId}                            → {flow, tree}  the part's flow from its lyrics as they are now
  *  update {flowId, pattern}                        → {tree}
  *  apply {flowId, sectionId, fromLineId?, withText} → {tree, write}  the part (or the stretch from a line) follows
  *                                                    the flow; write = its new lines without text (to be written, AI)
@@ -26,6 +27,12 @@ export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]/f
       await updateFlow(id, b.flowId, pattern);
       return Response.json({ tree: await getTree(id) });
     }
+    // a part's flow from its lyrics as they are now (its own lines follow it): another part can use it
+    if (b.action === "fromPart") {
+      if (!b.sectionId) return Response.json({ error: "sectionId required" }, { status: 400 });
+      const flowId = await partFlow(id, b.sectionId);
+      return Response.json({ flow: { id: flowId }, tree: await getTree(id) });
+    }
     if (b.action === "apply") {
       if (!b.flowId || !b.sectionId) return Response.json({ error: "flowId and sectionId required" }, { status: 400 });
       const write = await applyFlow(id, b.flowId, b.sectionId, typeof b.fromLineId === "string" ? b.fromLineId : null, b.withText === true);
@@ -40,7 +47,7 @@ function cleanPattern(v: unknown): FlowPattern | null {
   const p = v as Record<string, unknown>;
   const num = (x: unknown) => typeof x === "number" && Number.isFinite(x);
   const ints = (x: unknown) => (Array.isArray(x) ? x.filter(num).map((n) => Math.round(n as number)).slice(0, 64) : []);
-  const lines = (Array.isArray(p.lines) ? p.lines : []).slice(0, 4).map((x): PatternLine | null => {
+  const lines = (Array.isArray(p.lines) ? p.lines : []).slice(0, 48).map((x): PatternLine | null => {
     if (!x || typeof x !== "object") return null;
     const l = x as Record<string, unknown>;
     if (!num(l.syllables) || (l.syllables as number) < 1) return null;
@@ -56,14 +63,17 @@ function cleanPattern(v: unknown): FlowPattern | null {
       ...(l.sung ? { sung: true } : {}),
       ...(l.commaPauses ? { commaPauses: true } : {}),
       // sung with its own spacing: the bar it is timed from
-      ...(num(l.at) && (l.at as number) >= 0 && (l.at as number) < 64 ? { at: Math.round(l.at as number) } : {}),
+      ...(num(l.at) && (l.at as number) >= 0 && (l.at as number) < 256 ? { at: Math.round((l.at as number) * 1000) / 1000 } : {}),
     };
   });
-  if (lines.some((l) => !l) || (lines.length !== 2 && lines.length !== 4) || !num(p.bar) || (p.bar as number) <= 0) return null;
+  if (lines.some((l) => !l) || lines.length < 1 || !num(p.bar) || (p.bar as number) <= 0) return null;
   return {
     lines: lines as PatternLine[],
     scheme: p.scheme === "ABAB" ? "ABAB" : "AABB",
     bar: p.bar as number,
     source: p.source === "sing" || p.source === "tap" || p.source === "both" ? p.source : "write",
+    ...(p.part && typeof p.part === "object" && typeof (p.part as { id?: unknown }).id === "string"
+      ? { part: { id: String((p.part as { id: string }).id), name: String((p.part as { name?: unknown }).name ?? "").slice(0, 60) } }
+      : {}),
   };
 }

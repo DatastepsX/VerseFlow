@@ -315,6 +315,8 @@ export interface FlowPattern {
   /** the bar length (s) the offsets were made for */
   bar: number;
   source: "write" | "sing" | "tap" | "both";
+  /** taken from a part's lyrics (its lines, their rhythm, as long): that part — its style is followed too */
+  part?: { id: string; name: string };
 }
 
 export interface SongFlow {

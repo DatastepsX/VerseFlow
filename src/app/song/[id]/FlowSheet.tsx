@@ -5,7 +5,8 @@ import { cleanBrief, MOODS, PERSPECTIVES, RHYMES, WORDS, type LyricsBrief } from
 import { useEffect, useRef, useState } from "react";
 import { chipsOf, dropStrays, lineCuts, lineFromText, lineStarts, linesFromWords, linesIn, linesFromBreaks, linesFromOnsets, relayout, type Onset } from "@/lib/flow/pattern";
 import { quantizeTaps } from "@/lib/flow/grid";
-import type { FlowPattern, PatternLine, SongFlow } from "@/lib/types";
+import type { FlowPattern, Line, PatternLine, SongFlow } from "@/lib/types";
+import { patternFromPart } from "@/lib/flow/partflow";
 import { Check, Hand, Headphones, LineBreak, Mic, Pencil, Play, Restart, Sparkles } from "@/components/icons";
 
 type Mode = "write" | "sing" | "tap" | "both";
@@ -53,6 +54,8 @@ export function FlowSheet({
   stretchSeconds,
   brief: initialBrief,
   audio,
+  parts,
+  onFromLyrics,
   onUse,
   onClose,
 }: {
@@ -73,8 +76,12 @@ export function FlowSheet({
   stretchSeconds: number;
   /** the part's brief for its lyrics, as set before */
   brief: LyricsBrief | null;
-  /** use it: an existing flow (unchanged) or a new one — with your sung lines kept or not, the lyrics written or not */
-  onUse: (use: { flowId: string } | { pattern: FlowPattern }, opts: { write: boolean; brief: LyricsBrief | null }) => Promise<void>;
+  /** the song's other parts with lyrics on the beat: this part can follow one (its lines, rhythm, length, style) */
+  parts: { id: string; name: string; lines: Pick<Line, "id" | "text" | "audio_at" | "flow">[] }[];
+  /** this part has written lines: its flow taken from them (the lyrics as they are now overwrite its flow) */
+  onFromLyrics: (() => Promise<void>) | null;
+  /** use it: an existing flow (unchanged), a new one, or another part's (from its lyrics as they are now) — the lyrics written or not */
+  onUse: (use: { flowId: string } | { pattern: FlowPattern } | { fromSection: string }, opts: { write: boolean; brief: LyricsBrief | null }) => Promise<void>;
   onClose: () => void;
 }) {
   const initial = flows.find((f) => f.id === initialFlowId) ?? null;
@@ -86,6 +93,9 @@ export function FlowSheet({
     }
   });
   const [picked, setPicked] = useState<string | null>(initial?.id ?? null);
+  /** another part to follow: its lines' rhythm from its lyrics, as long, in its style */
+  const [likePart, setLikePart] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
   const [lines, setLines] = useState<PatternLine[]>(() => initial?.pattern.lines.map((l) => ({ ...l })) ?? [emptyLine(), emptyLine()]);
   const [scheme, setScheme] = useState<FlowPattern["scheme"]>(initial?.pattern.scheme ?? "AABB");
   const [changed, setChanged] = useState(false);
@@ -323,9 +333,11 @@ export function FlowSheet({
     audio.play(Math.max(0, from), barStart + at[at.length - 1] + Math.max(bar, (last?.offsets[last.offsets.length - 1] ?? 0) + bar / 2) + 0.4, clicks);
   };
 
-  const ready = lines.every((l) => l.syllables > 0);
+  const like = parts.find((x) => x.id === likePart) ?? null;
+  const likePattern = like ? patternFromPart(like.lines, lang, bar, 0, like)?.pattern ?? null : null;
+  const ready = likePattern ? true : lines.every((l) => l.syllables > 0);
   const pattern: FlowPattern = { lines, scheme: p === 4 ? scheme : "AABB", bar, source: mode };
-  const total = ready ? linesIn(pattern, bar, stretchSeconds) : linesInStretch;
+  const total = likePattern ? linesIn(likePattern, bar, stretchSeconds) : ready ? linesIn(pattern, bar, stretchSeconds) : linesInStretch;
   // the confirm step: where, your sung lines, the brief for the lyrics
   const [confirming, setConfirming] = useState(false);
   const [brief, setBrief] = useState<LyricsBrief>(initialBrief ?? {});
@@ -335,7 +347,7 @@ export function FlowSheet({
   const use = async (write: boolean) => {
     setBusy(true);
     try {
-      await onUse(picked && !changed ? { flowId: picked } : { pattern }, { write, brief: cleanBrief(brief) });
+      await onUse(like ? { fromSection: like.id } : picked && !changed ? { flowId: picked } : { pattern }, { write, brief: cleanBrief(brief) });
     } catch (err) {
       setHint(err instanceof Error ? err.message : "Something went wrong");
       setBusy(false);
@@ -357,8 +369,79 @@ export function FlowSheet({
           <p className="text-xs text-muted">for {scope}</p>
         </div>
 
+        {/* the lyrics of this part changed: its flow follows them */}
+        {onFromLyrics && (
+          <button
+            className="flex w-full items-center gap-2 rounded-2xl bg-accent-soft px-3 py-2.5 text-left text-sm font-semibold text-accent disabled:opacity-50"
+            disabled={syncing || busy}
+            onClick={async () => {
+              setSyncing(true);
+              try {
+                await onFromLyrics();
+              } catch (err) {
+                setHint(err instanceof Error ? err.message : "Something went wrong");
+              } finally {
+                setSyncing(false);
+              }
+            }}
+          >
+            <Pencil className="h-4 w-4 shrink-0" />
+            <span className="min-w-0 flex-1">
+              {syncing ? "Taking the flow from the lyrics…" : "Take this part's flow from its lyrics"}
+              <span className="block text-[11px] font-normal text-muted">Edited the lines? Their syllables, stresses and breaks become the part&apos;s flow — free</span>
+            </span>
+          </button>
+        )}
+
+        {/* another part to follow: its rhythm, length and style (from its lyrics as they are now) */}
+        {parts.length > 0 && (
+          <div>
+            <p className="label">Like another part</p>
+            <div className="no-scrollbar -mx-4 flex gap-2 overflow-x-auto px-4 pb-1">
+              {parts.map((x) => {
+                const written = x.lines.filter((l) => l.text.trim());
+                const on = likePart === x.id;
+                return (
+                  <button
+                    key={x.id}
+                    onClick={() => {
+                      setLikePart(on ? null : x.id);
+                      setConfirming(false);
+                    }}
+                    className={`w-44 shrink-0 rounded-2xl p-3 text-left ring-1 ${on ? "bg-accent-soft ring-accent" : "bg-panel-2 ring-transparent"}`}
+                    aria-pressed={on}
+                  >
+                    <span className="flex items-center justify-between text-sm font-bold">
+                      <span className="truncate">{x.name}</span>
+                      <span className="shrink-0 text-[11px] font-medium text-muted">{written.length} lines</span>
+                    </span>
+                    <span className="mt-1 block truncate text-xs">{written[0]?.text}</span>
+                    <span className="block truncate text-xs text-fg/70">{written[1]?.text}</span>
+                    <span className="block truncate text-[10px] text-muted">rhythm, length and style · its lyrics now</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {like && likePattern && (
+          <div className="space-y-1 rounded-2xl bg-panel-2/70 p-3 text-sm">
+            <p className="font-semibold">Like “{like.name}”</p>
+            <p className="text-xs text-muted">
+              {total} line{total === 1 ? "" : "s"} here with the rhythm of its {likePattern.lines.length} lines — syllables, stresses and breaks from its lyrics as they are now — written in its
+              style, with new words. Its own flow is updated from its lyrics too.
+            </p>
+            {likePattern.lines.slice(0, 4).map((l, i) => (
+              <p key={i} className="truncate text-xs text-fg/80">
+                <span className="font-mono text-[10px] text-muted">{l.syllables} syl</span> {l.text}
+              </p>
+            ))}
+          </div>
+        )}
+
         {/* the song's flows: pick one */}
-        {flows.length > 0 && (
+        {!like && flows.length > 0 && (
           <div>
             <p className="label">Your flows</p>
             <div className="no-scrollbar -mx-4 flex gap-2 overflow-x-auto px-4 pb-1">
@@ -366,6 +449,7 @@ export function FlowSheet({
                 <button
                   key={f.id}
                   onClick={() => {
+                    setLikePart(null);
                     setPicked(f.id);
                     setLines(f.pattern.lines.map((l) => ({ ...l })));
                     setScheme(f.pattern.scheme);
@@ -375,6 +459,7 @@ export function FlowSheet({
                 >
                   <span className="flex items-center justify-between text-sm font-bold">
                     {f.name}
+                    {f.pattern.part ? ` · ${f.pattern.part.name}` : ""}
                     <span className="text-[11px] font-medium text-muted">
                       {f.pattern.lines.length} lines{f.pattern.lines.length === 4 ? ` · ${f.pattern.scheme}` : ""}
                     </span>
@@ -388,6 +473,8 @@ export function FlowSheet({
           </div>
         )}
 
+        {!like && (
+        <>
         {/* how to make it */}
         <div className="flex rounded-full bg-panel-2 p-1" role="tablist">
           {(
@@ -544,11 +631,13 @@ export function FlowSheet({
             linked — rapped fast (double-time). Or type the words joined: <span className="font-mono">questa-vita-che</span>
           </p>
         </div>
+        </>
+        )}
 
         {hint && <p className="rounded-xl bg-warn-soft px-3 py-2 text-sm text-warn">{hint}</p>}
 
         <div className="flex gap-2">
-          <button className="btn justify-center rounded-2xl border-0 bg-panel-2 px-4 py-3" disabled={!ready || phase !== "idle"} onClick={listen}>
+          <button className="btn justify-center rounded-2xl border-0 bg-panel-2 px-4 py-3" disabled={!ready || phase !== "idle" || !!like} onClick={listen}>
             <Play className="h-4 w-4" /> Listen
           </button>
           {!confirming && (

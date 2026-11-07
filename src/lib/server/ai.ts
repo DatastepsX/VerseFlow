@@ -731,6 +731,18 @@ export async function flowSuggest(tree: ProjectTree, lineIds: string[], call: { 
       }
     }
   }
+  // lines following the flow of another part (taken from its lyrics): written in that part's style
+  const styles = [...new Set(targets.map((x) => x.l.flow?.flowId).filter(Boolean))]
+    .map((fid) => tree.flows.find((f) => f.id === fid)?.pattern.part)
+    .filter((pt): pt is { id: string; name: string } => !!pt)
+    .map((pt) => {
+      const nums = targets.filter((x) => tree.flows.find((f) => f.id === x.l.flow?.flowId)?.pattern.part?.id === pt.id && x.s.id !== pt.id).map((x) => num.get(x.l.id)!);
+      return nums.length
+        ? `Lines ${nums[0]}–${nums[nums.length - 1]} follow the flow of the part “${pt.name}” (its lines are in THE SONG): write them in its style — the same voice, tone, kind of images, wordplay, rhyme density and line shapes — with new words that continue the song (never copy or paraphrase its lines).`
+        : "";
+    })
+    .filter(Boolean);
+  if (styles.length) rhymes.push(...styles);
   const st = project.settings ?? {};
   // the writer's brief for each part being written: it comes before what they sang
   const briefs = [...new Set(targets.map((x) => x.s.id))]
