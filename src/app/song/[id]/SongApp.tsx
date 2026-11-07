@@ -1234,6 +1234,33 @@ export function SongApp({
       setBusyLine(null);
     }
   };
+  /** the quality check of a line as it is now (null: not checked since its text changed) */
+  const checkOf = (l: Pick<Line, "id" | "text">) => {
+    const c = tree.project.settings?.checks?.[l.id];
+    return c && c.text === l.text ? c : null;
+  };
+  /** what checking these lines costs: lines checked as they are now aren't read again */
+  const checkCost = (ls: Line[]) => (ls.some((l) => l.text.trim() && !checkOf(l)) ? "1 call" : "checked");
+  /** grammar, wording, sense: 1 call for the lines not checked yet as they are (no change to the lyrics, no undo step) */
+  const runCheck = async (key: string, ls: Line[], what: string) => {
+    if (running.current.has(key)) return;
+    running.current.add(key);
+    setBusyLine(key);
+    try {
+      const t = await call(`/api/projects/${pid}`, { action: "checkLines", lineIds: ls.map((l) => l.id) });
+      if (!t) return;
+      const checks = t.project.settings?.checks ?? {};
+      const bad = ls.filter((l) => l.text.trim() && checks[l.id]?.text === l.text && !checks[l.id]?.ok).length;
+      setNote(bad ? `${what}: ${bad} line${bad === 1 ? " needs" : "s need"} work — the notes are under ${bad === 1 ? "it" : "them"}` : `${what}: reads well — nothing to fix`);
+    } finally {
+      running.current.delete(key);
+      setBusyLine(null);
+    }
+  };
+  /** a checked line's fix put in (the writer's choice) */
+  const applyFix = (l: LyricLine, fix: string) =>
+    lineAction(l.id, () => call(`/api/lines/${l.id}`, { text: fix, status: "APPROVED_EDITED", action: "edit" }, "PATCH"), "Use the fix");
+  const dismissCheck = (l: LyricLine) => void call(`/api/projects/${pid}`, { action: "dismissCheck", lineId: l.id });
   /** lines written a group at a time (1 call per ~8 lines, one after the other: each sees the ones before) — with how far it is */
   const [writing, setWriting] = useState<{ done: number; total: number; since: number } | null>(null);
   const writeInGroups = async (lines: Pick<Line, "id" | "flow">[]) => {
@@ -1852,6 +1879,26 @@ export function SongApp({
                   : `Write the ${missing.length} empty line${missing.length === 1 ? "" : "s"} · ${missingCalls} call${missingCalls === 1 ? "" : "s"}`}
               </button>
             )}
+            {/* the quality check of the whole text: grammar, wording, sense (1 call; lines checked as they are: free) */}
+            {(() => {
+              const written = lyricLines.filter((l) => l.text.trim());
+              if (!written.length) return null;
+              const bad = written.filter((l) => checkOf(l)?.ok === false).length;
+              const cost = checkCost(written);
+              return (
+                <button
+                  className="flex w-full items-center justify-center gap-2 rounded-2xl bg-panel-2 px-4 py-2.5 text-[13px] font-semibold text-fg/80 disabled:opacity-60"
+                  disabled={busyLine === "check:all" || cost === "checked"}
+                  onClick={() => void runCheck("check:all", written, "The whole text")}
+                  title="Grammar, wording, sense — every line read like a native speaker would; the ones that need work get a note and a fix"
+                >
+                  <Check className="h-4 w-4 text-accent" />
+                  {busyLine === "check:all" ? "Checking the whole text…" : cost === "checked" ? "Whole text checked" : "Check the whole text"}
+                  <span className="text-[11px] font-medium text-muted">· {cost}</span>
+                  {bad > 0 && <span className="rounded-full bg-warn-soft px-2 py-0.5 text-[11px] text-warn">{bad} to optimise</span>}
+                </button>
+              );
+            })()}
             {tree.sections.map((s) => {
               const lines = s.lines.filter((l) => l.kind === "lyric") as LyricLine[];
               if (!lines.length) return null;
@@ -1925,6 +1972,19 @@ export function SongApp({
                         {writing && writing.total > 1 ? ` · ${writing.done + 1} of ${writing.total}` : "…"}
                         {writing && <Elapsed since={writing.since} />}
                       </span>
+                    )}
+                    {lines.some((l) => l.text.trim()) && (
+                      <button
+                        className="flex shrink-0 items-center gap-1 rounded-full bg-panel-2 px-2.5 py-1 text-xs font-semibold text-accent disabled:opacity-50"
+                        disabled={busyLine === `check:${s.id}`}
+                        onClick={() => void runCheck(`check:${s.id}`, lines, s.name)}
+                        title="Grammar, wording, sense of this part's lines"
+                      >
+                        <Check className="h-3.5 w-3.5" />
+                        {busyLine === `check:${s.id}` ? "Checking…" : "Check"}
+                        <span className="font-medium text-muted">· {checkCost(lines)}</span>
+                        {lines.some((l) => checkOf(l)?.ok === false) && <span className="h-1.5 w-1.5 rounded-full bg-warn" />}
+                      </button>
                     )}
                     {tree.audio && <PartVocals off={partVocalsOff(s.id)} busy={separating} onToggle={() => void togglePartVocals(s.id)} />}
                     {tree.audio && (
@@ -2063,6 +2123,12 @@ export function SongApp({
                             isNewNote={notesSeen.isNew}
                             onNotes={() => setNotesFor(l.id)}
                             onRhymes={(word) => setRhymeWord({ word, lineId: l.id })}
+                            check={checkOf(l)}
+                            checkBusy={busyLine === `check:${l.id}`}
+                            checkLabel={`${partner?.text.trim() ? "Check couplet" : "Check"} · ${checkCost(partner?.text.trim() ? [l, partner] : [l])}`}
+                            onCheck={() => void runCheck(`check:${l.id}`, partner?.text.trim() ? [l, partner] : [l], partner?.text.trim() ? "The couplet" : "The line")}
+                            onUseFix={(fix) => void applyFix(l, fix)}
+                            onDismissCheck={() => dismissCheck(l)}
                             onNewPart={
                               s.lines.findIndex((x) => x.id === l.id) > 0
                                 ? () => {
@@ -2505,6 +2571,13 @@ function LineCard(props: {
   onNotes: () => void;
   /** a word double-tapped: its rhymes */
   onRhymes: (word: string) => void;
+  /** the quality check of the line as it is now */
+  check: import("@/lib/types").LineCheck | null;
+  checkBusy: boolean;
+  checkLabel: string;
+  onCheck: () => void;
+  onUseFix: (fix: string) => void;
+  onDismissCheck: () => void;
   /** the line's notes (shown under it) and which are new to you */
   noteList: LineNote[];
   isNewNote: (n: LineNote) => boolean;
@@ -2592,6 +2665,12 @@ function LineCard(props: {
           kept && <Check className="mt-2 h-4 w-4 shrink-0 text-ok" aria-label="kept" />
         )}
       </button>
+      {props.check && !props.check.ok && (
+        <button className="ml-3 flex max-w-full items-center gap-1 rounded-full px-1 text-left text-[11px] font-semibold text-warn" onClick={props.onToggle}>
+          <span className="shrink-0">● needs work ·</span>
+          <span className="truncate font-normal">{props.check.issue}</span>
+        </button>
+      )}
       <NotePreview notes={props.noteList} isNew={props.isNewNote} onOpen={props.onNotes} />
       </div>
     );
@@ -2646,6 +2725,28 @@ function LineCard(props: {
             {lineText}
           </button>
           {l.text.trim() && <WordChips text={l.text} onWord={props.onRhymes} />}
+          {props.check && !props.check.ok && (
+            <div className="mt-2 space-y-1.5 rounded-2xl bg-warn-soft/60 p-2.5">
+              <p className="text-xs font-semibold text-warn">
+                Needs work · <span className="font-normal text-fg/80">{props.check.issue}</span>
+              </p>
+              {props.check.fix && <p className="rounded-xl bg-panel px-2.5 py-2 text-sm">{props.check.fix}</p>}
+              <div className="flex gap-1.5">
+                {props.check.fix && (
+                  <button
+                    className="flex h-8 flex-1 items-center justify-center gap-1 rounded-xl bg-ok-soft text-[13px] font-semibold text-ok disabled:opacity-50"
+                    disabled={props.busy}
+                    onClick={() => props.onUseFix(props.check!.fix!)}
+                  >
+                    <Check className="h-3.5 w-3.5" /> Use this line
+                  </button>
+                )}
+                <button className="flex h-8 flex-1 items-center justify-center rounded-xl bg-panel text-[13px] font-semibold text-fg/70" onClick={props.onDismissCheck}>
+                  Keep mine
+                </button>
+              </div>
+            </div>
+          )}
           {props.beatGrid && (l.flow || l.audio_at !== null) ? (
             <button className="group mt-1.5 flex items-center gap-2" onClick={props.onGrid} title="Set this line's flow: sing it or tap it" aria-expanded={props.gridOpen}>
               {l.flow?.syllables ? <Pattern flow={l.flow} /> : null}
@@ -2695,6 +2796,16 @@ function LineCard(props: {
                 title="A new flow from this line on"
               >
                 <AudioLines className="h-3 w-3" /> Flow from here
+              </button>
+            )}
+            {l.text.trim() && (
+              <button
+                className={`flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1 font-semibold disabled:opacity-60 ${props.check?.ok ? "bg-ok-soft text-ok" : "bg-panel-2 text-fg/80"}`}
+                disabled={props.checkBusy || props.checkLabel.endsWith("checked")}
+                onClick={props.onCheck}
+                title="Grammar, wording, sense — read like a native speaker would"
+              >
+                <Check className="h-3 w-3" /> {props.checkBusy ? "Checking…" : props.check?.ok && props.checkLabel.endsWith("checked") ? "Reads well" : props.checkLabel}
               </button>
             )}
             {l.text.trim() && (

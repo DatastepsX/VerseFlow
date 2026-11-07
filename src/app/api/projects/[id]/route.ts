@@ -13,6 +13,8 @@ import {
   setSound,
   copyPartSound,
   redetectParts,
+  saveChecks,
+  dismissCheck,
   setLineTimes,
   undo,
   updateProject,
@@ -23,6 +25,7 @@ import type { Project, ProjectSettings } from "@/lib/types";
 import { FX_PRESETS } from "@/lib/fx/presets";
 import { cleanPreset } from "@/lib/fx/match";
 import { access, addMember, currentUserId } from "@/lib/server/users";
+import { checkLyrics } from "@/lib/server/ai";
 
 export async function GET(_req: Request, ctx: RouteContext<"/api/projects/[id]">) {
   return handle(async () => {
@@ -56,7 +59,7 @@ export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]">
   return handle(async () => {
     await access((await ctx.params).id, "edit");
     const { id } = await ctx.params;
-    const b = await body<{ action: string; name?: string; group_size?: number; label?: string; audio_start?: number | null; times?: { id: string; at: number | null }[]; text?: string; artistId?: string; color?: string; notes?: string; lanes?: string[]; lane?: string; preset?: string; key?: unknown; sectionId?: unknown; part?: unknown; custom?: unknown; from?: unknown; to?: unknown; levels?: unknown }>(req);
+    const b = await body<{ action: string; name?: string; group_size?: number; label?: string; audio_start?: number | null; times?: { id: string; at: number | null }[]; text?: string; artistId?: string; color?: string; notes?: string; lanes?: string[]; lane?: string; preset?: string; key?: unknown; sectionId?: unknown; part?: unknown; custom?: unknown; from?: unknown; to?: unknown; levels?: unknown; lineIds?: unknown; lineId?: unknown }>(req);
     switch (b.action) {
       case "undo":
       case "redo": {
@@ -124,6 +127,16 @@ export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]">
         });
         break;
       }
+      case "checkLines": {
+        // grammar, wording, sense: 1 call for the lines not checked as they are now (none: no call)
+        const ids = (Array.isArray(b.lineIds) ? b.lineIds : []).filter((x): x is string => typeof x === "string").slice(0, 400);
+        const r = await checkLyrics(await getTree(id), ids);
+        await saveChecks(id, r.checked, r.flagged);
+        break;
+      }
+      case "dismissCheck":
+        if (typeof b.lineId === "string") await dismissCheck(id, b.lineId);
+        break;
       case "redetectParts":
         // the parts found again from when the lines are sung (instrumentals, beat changes) — no API call
         await redetectParts(id);

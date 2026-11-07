@@ -873,3 +873,78 @@ function patternOf(f: { syllables: number; stress: number[]; held: boolean; paus
   // a break: the word group ends there
   return marked.map((p, i) => (i > 0 && breaks.has(i) ? ` | ${p}` : i > 0 ? `${fast.has(i) && !fast.has(i + 1) ? " " : fast.has(i + 1) && !fast.has(i) ? " " : "-"}${p}` : p)).join("");
 }
+
+/* ---------- quality check: grammar, wording, sense ---------- */
+
+const CHECK_SCHEMA = {
+  type: "object",
+  properties: {
+    flagged: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: { line: { type: "integer" }, issue: { type: "string" }, fix: { type: "string" } },
+        required: ["line", "issue", "fix"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["flagged"],
+  additionalProperties: false,
+};
+
+/** lines read in one call at most (the whole song is usually fewer) */
+export const CHECK_MAX = 80;
+
+/**
+ * The lines read like a native speaker and an editor would: grammar, wording nobody would say, lines that make no
+ * sense or contradict the song. One call (low effort) for up to CHECK_MAX lines; only the lines that need work
+ * come back (short answers), each with a fix on the same rhythm and rhyme. Lines already checked as they are
+ * now are not read again.
+ */
+export async function checkLyrics(tree: ProjectTree, lineIds: string[]) {
+  if (!aiConfigured()) throw new AiUnavailable("AI is not configured yet (ANTHROPIC_API_KEY missing).");
+  const { project } = tree;
+  const lang = project.language;
+  const done = project.settings?.checks ?? {};
+  const all = tree.sections.flatMap((s) => s.lines.filter((l) => l.kind === "lyric" && l.text.trim()).map((l) => ({ l, s })));
+  const want = new Set(lineIds);
+  const todo = all.filter((x) => want.has(x.l.id) && done[x.l.id]?.text !== x.l.text).slice(0, CHECK_MAX);
+  if (!todo.length) return { checked: [] as { id: string; text: string }[], flagged: new Map<string, { issue: string; fix: string }>() };
+  const check = new Set(todo.map((x) => x.l.id));
+  const num = new Map(all.map((x, i) => [x.l.id, i + 1]));
+  const listing = tree.sections
+    .map((s) => {
+      const rows = s.lines
+        .filter((l) => l.kind === "lyric" && l.text.trim())
+        .map((l) => `${num.get(l.id)}. ${check.has(l.id) ? "[CHECK] " : ""}${l.text.trim()}${l.flow?.syllables ? `  (${l.flow.syllables} syllables)` : ""}`);
+      return rows.length ? `${s.name}:\n${rows.join("\n")}` : "";
+    })
+    .filter(Boolean)
+    .join("\n\n");
+  const prompt = `PROJECT
+Title: ${project.title}
+Language: ${langName(lang)}
+${project.concept ? `Story / concept: ${project.concept}\n` : ""}
+THE LYRICS (every line numbered; the ones to check are marked [CHECK])
+${listing}
+
+TASK
+Read every [CHECK] line as a native ${langName(lang)} speaker and a careful lyric editor would, in the context of the song. Flag a line only when it really needs work:
+- a grammar mistake (agreement, tense, articles, prepositions, word order);
+- wording a native speaker would never use, or a phrase that sounds translated or forced;
+- a line that makes no sense, contradicts the lines around it or the song, or a broken image;
+- a word that is only there to fill the rhythm or force the rhyme.
+Lyrics may be poetic, elliptic, use slang or bend the language on purpose — that is fine; don't flag style, only what sounds wrong.
+For every flagged line: "issue" says what's wrong in a few words (in English, quote the words concerned), "fix" is the line improved — natural ${langName(lang)}, the same meaning, about the same number of syllables, and the same last word (the rhyme) unless the last word is the problem.
+Return only the flagged lines ("line" = its number); none: an empty list.`;
+  const parsed = await callJson<{ flagged: { line: number; issue: string; fix: string }[] }>(project.id, "quality_check", prompt, CHECK_SCHEMA, SYSTEM, "low");
+  const byNum = new Map(all.map((x, i) => [i + 1, x.l]));
+  const flagged = new Map<string, { issue: string; fix: string }>();
+  for (const f of parsed.flagged) {
+    const l = byNum.get(f.line);
+    const fix = cleanLyric(f.fix);
+    if (l && check.has(l.id) && f.issue.trim()) flagged.set(l.id, { issue: f.issue.trim().slice(0, 200), fix: fix && fix !== l.text.trim() ? fix : "" });
+  }
+  return { checked: todo.map((x) => ({ id: x.l.id, text: x.l.text })), flagged };
+}

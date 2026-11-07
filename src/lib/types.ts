@@ -46,7 +46,19 @@ export interface Artist {
   notes?: string;
 }
 
+/** a line read for quality (grammar, wording, sense): for the text it had then */
+export interface LineCheck {
+  text: string;
+  ok: boolean;
+  /** what's wrong, short */
+  issue?: string;
+  /** the line improved: same rhythm and rhyme */
+  fix?: string;
+}
+
 export interface ProjectSettings {
+  /** the quality check of each line (by line id) — no longer shown once the line's text changes */
+  checks?: Record<string, LineCheck>;
   /** recording layers (Lead, Double, Ad-libs…) */
   lanes?: string[];
   /** the sound of each layer: an effect preset id (lib/fx/presets; none: raw) */

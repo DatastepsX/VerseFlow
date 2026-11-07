@@ -1363,6 +1363,30 @@ export async function applyPolish(sectionId: string, slots: { index: number; opt
   await touch(section.project_id);
 }
 
+// ---------- quality check ----------
+
+/** what the quality check found: each line read (as its text was), the ones that need work with why and a fix */
+export async function saveChecks(projectId: string, checked: { id: string; text: string }[], flagged: Map<string, { issue: string; fix: string }>) {
+  if (!checked.length) return;
+  const settings = await projectSettings(projectId);
+  const checks = { ...(settings.checks ?? {}) };
+  for (const c of checked) {
+    const f = flagged.get(c.id);
+    checks[c.id] = f ? { text: c.text, ok: false, issue: f.issue, ...(f.fix ? { fix: f.fix } : {}) } : { text: c.text, ok: true };
+  }
+  check(await db().from("projects").update({ settings: { ...settings, checks } }).eq("id", projectId));
+  await touch(projectId);
+}
+
+/** the writer keeps the line as it is: it counts as checked */
+export async function dismissCheck(projectId: string, lineId: string) {
+  const settings = await projectSettings(projectId);
+  const c = settings.checks?.[lineId];
+  if (!c) return;
+  check(await db().from("projects").update({ settings: { ...settings, checks: { ...settings.checks, [lineId]: { text: c.text, ok: true } } } }).eq("id", projectId));
+  await touch(projectId);
+}
+
 // ---------- performers ----------
 
 async function projectSettings(projectId: string) {
