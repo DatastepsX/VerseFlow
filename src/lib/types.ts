@@ -81,6 +81,8 @@ export interface ProjectSettings {
   extensions?: { at: number; from: number; to?: number; len: number; vocals?: boolean }[];
   /** which take a version came from (a take continued in pieces, a synced copy): take id → the first take of its line */
   takeOf?: Record<string, string>;
+  /** pieces recorded on a take (Continue): their own takes, played with it — the first take of that line */
+  takePieces?: Record<string, string>;
   /** sounds from the library (or made from a voice) this song uses, kept with it: everyone working on it hears them */
   customFx?: Record<string, import("./fx/presets").FxPreset>;
   /** each take's fade in / out (s), set in Record → ✂ Cut — they shape how it plays, the recording stays */

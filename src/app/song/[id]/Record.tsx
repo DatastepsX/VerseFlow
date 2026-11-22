@@ -503,6 +503,8 @@ function RecordScreen({ r, tree, setTree, rangeOf, bar, timeline, onBusy, host, 
               takes={takes}
               tree={tree}
               lane={r.lane}
+              busy={!idle}
+              onDeleteAll={(id) => r.removeAll(id)}
               row={(t) => {
                 const playingThis = r.status === "playing" && r.playingTake === t.id;
                 return (
@@ -858,13 +860,24 @@ function TakeGroups<T extends { id: string; take_no: number; chosen: boolean }>(
   tree,
   lane,
   row,
+  onDeleteAll,
+  busy,
 }: {
   takes: T[];
   tree: ProjectTree;
   lane: string;
   row: (t: T) => ReactNode;
+  /** the whole take: all its versions and pieces */
+  onDeleteAll: (id: string) => void;
+  busy: boolean;
 }) {
-  const of = tree.project.settings?.takeOf ?? {};
+  // versions (synced, joined) and pieces recorded on it: one card per take
+  const pieceOf = tree.project.settings?.takePieces ?? {};
+  const of = { ...(tree.project.settings?.takeOf ?? {}), ...pieceOf };
+  const startOf = (id: string) => {
+    const t = tree.takes.find((x) => x.id === id);
+    return t ? t.start_at + (t.trim_in ?? 0) : 0;
+  };
   const noteOf = (id: string) => tree.takes.find((x) => x.id === id)?.note ?? null;
   const byKey = new Map<string, T[]>();
   for (const t of takes) {
@@ -874,7 +887,7 @@ function TakeGroups<T extends { id: string; take_no: number; chosen: boolean }>(
   const groups = [...byKey.entries()]
     .map(([key, members]) => {
       const sorted = [...members].sort((a, b) => a.take_no - b.take_no);
-      return { key, head: sorted.find((m) => m.id === key) ?? sorted[0], members: sorted };
+      return { key, head: sorted.find((m) => m.id === key) ?? sorted[0], members: sorted.filter((m) => !pieceOf[m.id]), pieces: sorted.filter((m) => pieceOf[m.id]).sort((a, b) => startOf(a.id) - startOf(b.id)) };
     })
     .sort((a, b) => b.head.take_no - a.head.take_no);
   /** the version shown in each card (picked by tapping its chip) */
@@ -920,8 +933,8 @@ function TakeGroups<T extends { id: string; take_no: number; chosen: boolean }>(
         </div>
       )}
       {groups.map((g) => {
-        const shown = g.members.find((m) => m.id === view[g.key]) ?? g.members.find((m) => m.chosen) ?? g.members[g.members.length - 1];
-        const inSong = g.members.some((m) => m.chosen);
+        const shown = g.members.find((m) => m.id === view[g.key]) ?? g.members.find((m) => m.chosen) ?? g.members[g.members.length - 1] ?? g.pieces[0];
+        const inSong = g.members.some((m) => m.chosen) || g.pieces.some((m) => m.chosen);
         return (
           <div
             key={g.key}
@@ -933,7 +946,19 @@ function TakeGroups<T extends { id: string; take_no: number; chosen: boolean }>(
                 {lane} take {g.head.take_no}
               </span>
               {g.members.length > 1 && <span className="text-[11px] text-muted">{g.members.length} versions</span>}
+              {g.pieces.length > 0 && <span className="text-[11px] text-muted">+ {g.pieces.length} piece{g.pieces.length === 1 ? "" : "s"}</span>}
               {inSong && <span className="ml-auto text-[11px] font-semibold text-accent">in the song</span>}
+              <button
+                className={`${inSong ? "" : "ml-auto"} flex h-7 shrink-0 items-center gap-1 rounded-full px-2 text-[11px] font-semibold text-bad/80 active:bg-bad-soft disabled:opacity-40`}
+                disabled={busy}
+                onClick={() => {
+                  const n = g.members.length + g.pieces.length;
+                  if (window.confirm(`Delete ${lane} take ${g.head.take_no} completely${n > 1 ? ` — all ${n} recordings in it (versions and pieces)` : ""}? This can't be undone.`)) onDeleteAll(g.key);
+                }}
+                title="The whole take: all its versions and pieces"
+              >
+                <Trash className="h-3.5 w-3.5" /> Delete take
+              </button>
             </div>
             {/* its versions: tap one to see (and play, cut, use) it */}
             {g.members.length > 1 && (
@@ -951,7 +976,16 @@ function TakeGroups<T extends { id: string; take_no: number; chosen: boolean }>(
                 ))}
               </div>
             )}
-            {row(shown)}
+            {shown && row(shown)}
+            {/* pieces recorded on it: each its own row, whole — played with the take, overlapping where they do */}
+            {g.pieces.map((m, i) => (
+              <div key={m.id} className="space-y-1">
+                <p className="px-2 pt-1 text-[11px] font-semibold text-muted">
+                  Piece {i + 2} · from {Math.floor(startOf(m.id) / 60)}:{String(Math.floor(startOf(m.id) % 60)).padStart(2, "0")} · plays with the take
+                </p>
+                {row(m)}
+              </div>
+            ))}
           </div>
         );
       })}

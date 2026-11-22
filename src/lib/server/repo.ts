@@ -1445,7 +1445,9 @@ export async function takeUploadUrl(projectId: string) {
 /** a new take becomes the chosen one of its section + layer (the latest is usually the keeper) */
 export async function saveTake(
   projectId: string,
-  t: { path: string; section_id: string | null; lane: string; start_at: number; duration: number; sample_rate: number; peaks: number[]; note?: string | null; created_by?: string | null },
+  t: { path: string; section_id: string | null; lane: string; start_at: number; duration: number; sample_rate: number; peaks: number[]; note?: string | null; created_by?: string | null; trim_in?: number },
+  /** a piece of a take recorded on: it plays with the takes in the song (they stay chosen) */
+  keep = false,
 ) {
   noteActivity(projectId, "takes");
   if (!t.path.startsWith(`${projectId}/take-`)) throw new Error("Invalid take path");
@@ -1460,7 +1462,7 @@ export async function saveTake(
     unchoose = unchoose.is("section_id", null);
   }
   const prev = check(await prevQ) as { take_no: number }[];
-  check(await unchoose);
+  if (!keep) check(await unchoose);
   const row = check(
     await db()
       .from("takes")
@@ -1497,6 +1499,13 @@ export async function chooseTake(id: string) {
   q = t.section_id ? q.eq("section_id", t.section_id) : q.is("section_id", null);
   check(await q);
   check(await db().from("takes").update({ chosen: true }).eq("id", id));
+  // the take's pieces play with whichever version of it is used
+  const settings = await projectSettings(t.project_id);
+  const root = settings.takeOf?.[id] ?? settings.takePieces?.[id] ?? id;
+  const pieces = Object.entries(settings.takePieces ?? {})
+    .filter(([p, r]) => r === root && p !== id)
+    .map(([p]) => p);
+  if (pieces.length) check(await db().from("takes").update({ chosen: true }).in("id", pieces).eq("lane", t.lane));
   return t.project_id;
 }
 
@@ -1530,6 +1539,58 @@ export async function linkTake(projectId: string, id: string, of: string) {
   await updateProject(projectId, { settings: { ...settings, takeOf } });
 }
 
+/**
+ * A piece recorded on a take (Continue, a line tapped): its own take, whole — it plays together with the take,
+ * overlapping it where it does. The take before stops where the piece takes over (its cut, editable).
+ */
+export async function linkPiece(projectId: string, id: string, base: string, baseTrimOut: number | null) {
+  const settings = await projectSettings(projectId);
+  const takePieces = { ...(settings.takePieces ?? {}) };
+  // the card it belongs to: the first take of that line
+  const root = settings.takeOf?.[base] ?? settings.takePieces?.[base] ?? base;
+  takePieces[id] = root;
+  await updateProject(projectId, { settings: { ...settings, takePieces } });
+  if (baseTrimOut !== null) {
+    const b = check(await db().from("takes").select("trim_in, trim_out, duration").eq("id", base).maybeSingle()) as { trim_in: number; trim_out: number | null; duration: number } | null;
+    const cur = b ? (b.trim_out ?? b.duration) : 0;
+    if (b && baseTrimOut < cur - 0.05 && baseTrimOut > b.trim_in + 0.2) await trimTake(base, b.trim_in, baseTrimOut);
+  }
+}
+
+/** a whole take: all its versions and pieces, their files — the latest take left in its part is used */
+export async function deleteTakeGroup(id: string) {
+  const t = await getTake(id);
+  const settings = await projectSettings(t.project_id);
+  const root = settings.takeOf?.[id] ?? settings.takePieces?.[id] ?? id;
+  let q = db().from("takes").select("id, path").eq("project_id", t.project_id).eq("lane", t.lane);
+  q = t.section_id ? q.eq("section_id", t.section_id) : q.is("section_id", null);
+  const all = check(await q) as { id: string; path: string }[];
+  const inIt = (x: string) => x === root || settings.takeOf?.[x] === root || settings.takePieces?.[x] === root;
+  const gone = all.filter((x) => inIt(x.id));
+  if (!gone.length) return t.project_id;
+  check(await db().from("takes").delete().in("id", gone.map((x) => x.id)));
+  await db().storage.from(BUCKET).remove(gone.map((x) => x.path));
+  const fades = { ...(settings.takeFades ?? {}) };
+  const takeOf = { ...(settings.takeOf ?? {}) };
+  const takePieces = { ...(settings.takePieces ?? {}) };
+  for (const x of gone) {
+    delete fades[x.id];
+    delete takeOf[x.id];
+    delete takePieces[x.id];
+  }
+  await updateProject(t.project_id, { settings: { ...settings, takeFades: fades, takeOf, takePieces } });
+  // nothing of this layer in the part plays now: the latest take left does
+  const rest = all.filter((x) => !inIt(x.id));
+  if (rest.length) {
+    let c = db().from("takes").select("id, chosen, created_at").eq("project_id", t.project_id).eq("lane", t.lane);
+    c = t.section_id ? c.eq("section_id", t.section_id) : c.is("section_id", null);
+    const left = check(await c.order("created_at", { ascending: false })) as { id: string; chosen: boolean }[];
+    if (!left.some((x) => x.chosen) && left[0]) check(await db().from("takes").update({ chosen: true }).eq("id", left[0].id));
+  }
+  await touch(t.project_id);
+  return t.project_id;
+}
+
 /** a take's fade in / out (s; both 0: none) — kept with the song (settings.takeFades), the recording stays */
 export async function setTakeFade(id: string, fade: { in: number; out: number }) {
   const t = await getTake(id);
@@ -1558,12 +1619,14 @@ export async function deleteTake(id: string) {
   await db().storage.from(BUCKET).remove([t.path]);
   // its fades and its place among versions go with it
   const settings = await projectSettings(t.project_id);
-  if (settings.takeFades?.[id] || settings.takeOf?.[id]) {
+  if (settings.takeFades?.[id] || settings.takeOf?.[id] || settings.takePieces?.[id]) {
     const fades = { ...(settings.takeFades ?? {}) };
     delete fades[id];
     const takeOf = { ...(settings.takeOf ?? {}) };
     delete takeOf[id];
-    await updateProject(t.project_id, { settings: { ...settings, takeFades: fades, takeOf } });
+    const takePieces = { ...(settings.takePieces ?? {}) };
+    delete takePieces[id];
+    await updateProject(t.project_id, { settings: { ...settings, takeFades: fades, takeOf, takePieces } });
   }
   if (t.chosen) {
     let q = db().from("takes").select("id").eq("project_id", t.project_id).eq("lane", t.lane);

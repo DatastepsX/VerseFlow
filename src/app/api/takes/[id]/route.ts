@@ -1,4 +1,4 @@
-import { chooseTake, deleteTake, getTree, setLineTimes, setTakeFade, setTakeMix, shiftTake, takeProject, trimTake, updateLine } from "@/lib/server/repo";
+import { chooseTake, deleteTake, deleteTakeGroup, getTree, setLineTimes, setTakeFade, setTakeMix, shiftTake, takeProject, trimTake, updateLine } from "@/lib/server/repo";
 import { alignTake } from "@/lib/server/transcribe";
 import { alignmentText, alignTakeLines } from "@/lib/flow/align";
 import { body, handle, treeResponse } from "@/lib/server/http";
@@ -27,10 +27,12 @@ export async function PATCH(req: Request, ctx: RouteContext<"/api/takes/[id]">) 
   });
 }
 
-export async function DELETE(_req: Request, ctx: RouteContext<"/api/takes/[id]">) {
+/** ?all=1: the whole take — all its versions and pieces */
+export async function DELETE(req: Request, ctx: RouteContext<"/api/takes/[id]">) {
   return handle(async () => {
     await accessVia("takes", (await ctx.params).id, "edit");
-    return treeResponse(await deleteTake((await ctx.params).id));
+    const id = (await ctx.params).id;
+    return treeResponse(new URL(req.url).searchParams.get("all") === "1" ? await deleteTakeGroup(id) : await deleteTake(id));
   });
 }
 

@@ -1,4 +1,4 @@
-import { linkTake, saveTake, takeUploadUrl, takeUrls } from "@/lib/server/repo";
+import { linkTake, linkPiece, saveTake, takeUploadUrl, takeUrls } from "@/lib/server/repo";
 import { body, handle, treeResponse } from "@/lib/server/http";
 import { access } from "@/lib/server/users";
 
@@ -31,6 +31,9 @@ export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]/t
       sample_rate?: number;
       peaks?: number[];
       note?: string;
+      piece?: string;
+      trim_in?: number;
+      base_trim_out?: number;
     }>(req);
     if (b.action === "uploadUrl") return Response.json(await takeUploadUrl(id));
     if (b.action === "save") {
@@ -47,7 +50,10 @@ export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]/t
         peaks: Array.isArray(b.peaks) ? b.peaks.slice(0, 400).map((x) => Math.max(0, Math.min(1, Number(x) || 0))) : [],
         note: typeof b.note === "string" ? b.note.slice(0, 80) : null,
         created_by: uid,
-      });
+        ...(num(b.trim_in) !== null && num(b.trim_in)! > 0 ? { trim_in: Math.round(num(b.trim_in)! * 1000) / 1000 } : {}),
+      }, typeof b.piece === "string");
+      // a piece recorded on a take: played with it (the take before stops where the piece takes over)
+      if (typeof b.piece === "string" && /^[0-9a-f-]{36}$/.test(b.piece)) await linkPiece(id, takeId, b.piece, num(b.base_trim_out));
       // a version of another take (continued in pieces, synced): kept together with it
       if (typeof b.of === "string" && /^[0-9a-f-]{36}$/.test(b.of)) await linkTake(id, takeId, b.of);
       const res = await treeResponse(id);

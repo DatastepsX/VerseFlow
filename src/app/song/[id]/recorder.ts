@@ -7,7 +7,7 @@ import { positionIn, type Timeline } from "@/lib/audio/timeline";
 import type { PlayLayer, StudioEngine } from "@/lib/studio/engine";
 import { lastTake, type RemoteCmd, type RemoteState, type RemoteTake } from "@/lib/studio/remote";
 import { leadOf, syncTakes } from "@/lib/studio/sync";
-import { findJoint, joinTakes, partsOf } from "@/lib/studio/join";
+import { findJoint } from "@/lib/studio/join";
 import { takeWindow } from "@/lib/studio/timing";
 import { encodeWav, peaksOf } from "@/lib/studio/wav";
 import type { ProjectSettings, ProjectTree, Take } from "@/lib/types";
@@ -95,6 +95,8 @@ export interface Recorder {
   takeGain: (id: string, gain: number) => void;
   choose: (id: string) => void;
   remove: (id: string) => void;
+  /** a whole take: all its versions and pieces */
+  removeAll: (id: string) => void;
   /** a take earlier (−) / later (+) on the beat, in seconds; on this device later takes follow (the delay setting) */
   shift: (id: string, by: number) => void;
   addLane: (name: string) => void;
@@ -341,7 +343,10 @@ export function useLocalRecorder(o: {
   const takesOf = (l: string) => sectionTakes.filter((t) => t.lane === l);
   /** where the current layer's take in this part ends: "Continue" goes on from there (a take reaching the part's end: none) */
   const continueAt = (() => {
-    const t = takesOf(lane).find((x) => x.chosen);
+    // the take playing last (a take continued in pieces: the piece that ends last)
+    const t = takesOf(lane)
+      .filter((x) => x.chosen)
+      .sort((a, b) => b.start_at + Math.min(b.duration, b.trim_out ?? b.duration) - (a.start_at + Math.min(a.duration, a.trim_out ?? a.duration)))[0];
     if (!t || !range) return null;
     const end = t.start_at + Math.min(t.duration, t.trim_out ?? t.duration);
     // just after the last sung word (the take's level), not the silence before stop was pressed
@@ -515,7 +520,9 @@ export function useLocalRecorder(o: {
   const start = async (e: StudioEngine, l: string, from?: number) => {
     if (!range) return;
     // continuing: the layer's take in this part so far, and where the new piece joins it
-    const base = from !== undefined ? (takesOf(l).find((t) => t.chosen) ?? null) : null;
+    const playing = takesOf(l).filter((t) => t.chosen);
+    // the take playing where the new piece goes on (pieces: the latest one that starts before it)
+    const base = from !== undefined ? ([...playing].filter((t) => t.start_at < from).sort((a, b) => b.start_at - a.start_at)[0] ?? playing[0] ?? null) : null;
     if (base && from !== undefined) {
       const at = Math.max(range.start - countIn * bar, from);
       // what is heard first: the whole take so far from where it starts to play, or a few bars before the joint
@@ -590,17 +597,27 @@ export function useLocalRecorder(o: {
           `The ${deviceName()}'s microphone sent no sound, so the take wasn't kept. It is being switched on again — record once more.${o.host ? " Keep the VerseFlow tab open (not in the background) on it." : ""}${!headphones ? " With a USB microphone, turn “I wear headphones” on: the phone's voice processing can silence it." : ""}`,
         );
       }
-      // a take continued: the take so far up to the joint, the new piece from it — one take
-      let out = { samples: rec.samples, sampleRate: rec.sampleRate, at: rec.startAt };
+      // a take continued: the new piece is kept whole, as its own take on top of the take so far (it plays with
+      // it, overlapping where it does) — it starts just before your voice, the run-up cut (editable: Cut)
+      const out = { samples: rec.samples, sampleRate: rec.sampleRate, at: rec.startAt };
       let note: string | null = null;
+      let piece: { base: string; trimIn: number; baseTrimOut: number | null } | null = null;
       if (joint) {
         await loadTakes([joint.base]);
         const before = buffers.current.get(joint.base.id);
-        if (!before) throw new Error("The take so far couldn't be loaded — record the piece again.");
-        const so = { samples: before.getChannelData(0), sampleRate: before.sampleRate, at: joint.base.start_at, clip: clipOf(joint.base) };
-        // coming in early (a pickup, a breath before the line): the joint moves back so the first syllables stay
-        out = joinTakes(so, out, findJoint(so, out, joint.at));
-        note = `${partsOf(joint.base.note) + 1} parts`;
+        let j = joint.at;
+        if (before) {
+          const so = { samples: before.getChannelData(0), sampleRate: before.sampleRate, at: joint.base.start_at, clip: clipOf(joint.base) };
+          // coming in early (a pickup, a breath before the line): the piece starts where the voice does
+          j = findJoint(so, out, joint.at);
+        }
+        piece = {
+          base: joint.base.id,
+          trimIn: Math.max(0, j - 0.12 - out.at),
+          // the take before stops where the piece comes in (from a line tapped: its old words from there are left out)
+          baseTrimOut: Math.max(0, j + 0.05 - joint.base.start_at),
+        };
+        note = "piece";
       }
       const wav = encodeWav([out.samples], out.sampleRate, 24);
       const { data: up } = await api(`/api/projects/${pid}/takes`, { action: "uploadUrl" });
@@ -620,8 +637,8 @@ export function useLocalRecorder(o: {
         sample_rate: out.sampleRate,
         peaks: peaksOf(out.samples, 160),
         ...(note ? { note } : {}),
-        // a take continued: a new version of the same take (kept together with it)
-        ...(joint ? { of: joint.base.id } : {}),
+        // a piece recorded on a take: its own take, played with it
+        ...(piece ? { piece: piece.base, trim_in: piece.trimIn, base_trim_out: piece.baseTrimOut } : {}),
       });
       // kept, but hardly a voice in it: most likely another microphone than the one sung into
       if (peak < 0.05)
@@ -633,7 +650,7 @@ export function useLocalRecorder(o: {
         buf.copyToChannel(out.samples as Float32Array<ArrayBuffer>, 0);
         buffers.current.set(id, buf);
       }
-      // the joined take keeps the volume and pan the take had
+      // the piece sounds like the take it goes on: its volume and pan
       if (id && joint && ((joint.base.gain ?? 1) !== 1 || (joint.base.pan ?? 0) !== 0))
         await api(`/api/takes/${id}`, { gain: joint.base.gain ?? 1, pan: joint.base.pan ?? 0 }, "PATCH").catch(() => {});
       // as loud as a voice sits in the beat — a phone or a quiet microphone records low (a continued take keeps a
@@ -825,6 +842,7 @@ export function useLocalRecorder(o: {
   const [clock] = useState(() => clockOf(engine));
   const choose = (id: string) => void api(`/api/takes/${id}`, undefined, "PATCH").catch(failed);
   const remove = (id: string) => void api(`/api/takes/${id}`, undefined, "DELETE").catch(failed);
+  const removeAll = (id: string) => void api(`/api/takes/${id}?all=1`, undefined, "DELETE").catch(failed);
   const shift = (id: string, by: number) => {
     void api(`/api/takes/${id}`, { shift: by }, "PATCH").catch(failed);
     // a take that sat late was recorded with too little delay compensation: the next ones get more
@@ -1028,6 +1046,7 @@ export function useLocalRecorder(o: {
     takeGain: (id, gain) => engine.current?.setLayerGain(id, gain),
     choose,
     remove,
+    removeAll,
     shift,
     addLane,
     sounds,
@@ -1170,6 +1189,8 @@ export function useRemoteRecorder(o: { tree: ProjectTree; section: [string | nul
     takeGain: () => {},
     choose: (takeId) => send({ t: "choose", takeId }),
     remove: (takeId) => send({ t: "delete", takeId }),
+    // the phone deletes it itself (the Mac follows the song within seconds)
+    removeAll: (takeId) => void fetch(`/api/takes/${takeId}?all=1`, { method: "DELETE" }).catch(() => {}),
     shift: (takeId, by) => send({ t: "shift", takeId, by }),
     addLane: (name) => {
       setLane(name.trim());
