@@ -35,3 +35,35 @@ test("pieces at another sample rate, and the parts count", () => {
   assert.equal(partsOf("2 parts"), 2);
   assert.equal(partsOf(null), 1);
 });
+
+import { findJoint } from "./join";
+
+const sr2 = 8000;
+/** a take from `at`: silence, a tone between t0 and t1 (song time), amplitude a; more tones may be added */
+function take(at: number, len: number, tones: [number, number, number][]) {
+  const x = new Float32Array(Math.round(len * sr2));
+  for (const [t0, t1, a] of tones)
+    for (let i = Math.max(0, Math.round((t0 - at) * sr2)); i < Math.min(x.length, Math.round((t1 - at) * sr2)); i++) x[i] += a * Math.sin(i * 0.3);
+  return { samples: x, sampleRate: sr2, at };
+}
+
+test("continuing a take: a voice coming in before the joint is kept — the joint moves to just before it", () => {
+  const before = take(0, 4, [[0, 2, 0.5]]); // the take so far: words until 2.0
+  const after = take(1, 5, [[2.6, 5, 0.4]]); // the new piece comes in at 2.6 — the joint was planned at 3.0
+  const j = findJoint(before, after, 3);
+  assert.ok(j > 2.4 && j < 2.6, String(j));
+  const out = joinTakes(before, after, j);
+  // the first syllables of the new piece are in the take
+  const k = Math.round((2.65 - out.at) * sr2);
+  assert.ok(Math.abs(out.samples[k]) > 0 || Math.abs(out.samples[k + 1]) > 0);
+});
+
+test("the joint never moves into the last word, nor onto the take heard through the speakers", () => {
+  // the new piece also hears the take so far (no headphones): its words until 2.0, softer; the voice at 2.6
+  const before = take(0, 4, [[0, 2, 0.5]]);
+  const after = take(1, 5, [[1, 2, 0.15], [2.6, 5, 0.4]]);
+  const j = findJoint(before, after, 3);
+  assert.ok(j > 2.4 && j < 2.6, String(j));
+  // coming in late: the joint stays
+  assert.equal(findJoint(before, take(1, 5, [[3.4, 5, 0.4]]), 3), 3);
+});

@@ -7,7 +7,7 @@ import { positionIn, type Timeline } from "@/lib/audio/timeline";
 import type { PlayLayer, StudioEngine } from "@/lib/studio/engine";
 import { lastTake, type RemoteCmd, type RemoteState, type RemoteTake } from "@/lib/studio/remote";
 import { leadOf, syncTakes } from "@/lib/studio/sync";
-import { joinTakes, partsOf } from "@/lib/studio/join";
+import { findJoint, joinTakes, partsOf } from "@/lib/studio/join";
 import { takeWindow } from "@/lib/studio/timing";
 import { encodeWav, peaksOf } from "@/lib/studio/wav";
 import type { ProjectSettings, ProjectTree, Take } from "@/lib/types";
@@ -597,7 +597,9 @@ export function useLocalRecorder(o: {
         await loadTakes([joint.base]);
         const before = buffers.current.get(joint.base.id);
         if (!before) throw new Error("The take so far couldn't be loaded — record the piece again.");
-        out = joinTakes({ samples: before.getChannelData(0), sampleRate: before.sampleRate, at: joint.base.start_at, clip: clipOf(joint.base) }, out, joint.at);
+        const so = { samples: before.getChannelData(0), sampleRate: before.sampleRate, at: joint.base.start_at, clip: clipOf(joint.base) };
+        // coming in early (a pickup, a breath before the line): the joint moves back so the first syllables stay
+        out = joinTakes(so, out, findJoint(so, out, joint.at));
         note = `${partsOf(joint.base.note) + 1} parts`;
       }
       const wav = encodeWav([out.samples], out.sampleRate, 24);

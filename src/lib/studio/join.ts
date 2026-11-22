@@ -54,3 +54,48 @@ export function joinTakes(before: TakeAudio, after: TakeAudio, joint: number, fa
 
 /** "3 parts": how many pieces a take was recorded in (from its note) */
 export const partsOf = (note: string | null | undefined) => Number(/(\d+) parts/.exec(note ?? "")?.[1] ?? 1);
+
+/** the level (RMS) of a stretch of a take, song time [t0, t1) */
+function levelAt(x: TakeAudio, t0: number, t1: number) {
+  const a = Math.max(0, Math.floor((t0 - x.at) * x.sampleRate));
+  const b = Math.min(x.samples.length, Math.floor((t1 - x.at) * x.sampleRate));
+  if (b <= a) return 0;
+  let s = 0;
+  for (let i = a; i < b; i++) s += x.samples[i] * x.samples[i];
+  return Math.sqrt(s / (b - a));
+}
+
+/**
+ * Where a continued take really joins: the planned joint (after the last word, or a line's start) — or earlier,
+ * when the new piece's voice comes in before it (a pickup, coming in early): then just before that voice, so its
+ * first syllables aren't cut. Never into the take so far's last word, and never from the take so far heard
+ * through the speakers (the search starts once its voice has stopped). Pure.
+ */
+export function findJoint(before: TakeAudio, after: TakeAudio, joint: number, frame = 0.02): number {
+  const end = (x: TakeAudio) => x.at + x.samples.length / x.sampleRate;
+  // the take so far: where its voice stops before the joint (its words up to there)
+  const bFrom = Math.max(before.at, joint - 8);
+  let bPeak = 0;
+  for (let t = bFrom; t < joint; t += frame) bPeak = Math.max(bPeak, levelAt(before, t, t + frame));
+  let voiceEnd = Math.max(before.at, joint - 4);
+  if (bPeak > 0)
+    for (let t = Math.min(joint, end(before)) - frame; t >= joint - 4; t -= frame)
+      if (levelAt(before, t, t + frame) > bPeak * 0.12) {
+        voiceEnd = t + frame;
+        break;
+      }
+  // the new piece: its voice's level, and its quiet before it (the noise floor)
+  const from = Math.max(after.at, voiceEnd + 0.05);
+  if (from >= joint - 0.03) return joint;
+  const frames: number[] = [];
+  for (let t = from; t < Math.min(end(after), joint + 4); t += frame) frames.push(levelAt(after, t, t + frame));
+  if (!frames.length) return joint;
+  const peak = Math.max(...frames);
+  const floor = [...frames].sort((p, q) => p - q)[Math.floor(frames.length * 0.2)] ?? 0;
+  const thr = Math.max(peak * 0.1, floor * 3, 0.003);
+  const onset = frames.findIndex((v) => v > thr);
+  if (onset < 0) return joint;
+  const at = from + onset * frame;
+  if (at >= joint - 0.03) return joint;
+  return Math.max(voiceEnd + 0.03, at - 0.08);
+}
