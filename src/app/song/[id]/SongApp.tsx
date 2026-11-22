@@ -27,6 +27,7 @@ import { RecordView } from "./Record";
 import { Mixer, type ExportOptions } from "./Mixer";
 import { RhymeSheet, useWordTaps, WordChips } from "./RhymeWords";
 import { Composer } from "./Composer";
+import { PlaceSheet } from "./PlaceSheet";
 import { NewNotesBanner, NotePreview, NotesSheet, notesOf, useNotesSeen } from "./Notes";
 import { encodeMp3, exportStems as exportStemsZip, logicNote, renderAll, safeName, type Stem } from "@/lib/studio/export";
 import { encodeWav } from "@/lib/studio/wav";
@@ -938,6 +939,8 @@ export function SongApp({
   const [partMenu, setPartMenu] = useState<string | null>(null);
   /** the line whose notes are open */
   const [notesFor, setNotesFor] = useState<string | null>(null);
+  /** the part being placed on the beat (its lines written by hand) */
+  const [placing, setPlacing] = useState<string | null>(null);
   /** what finding the parts again did */
   const [partsNote, setPartsNote] = useState<string | null>(null);
   // once, when the song opens: its instrumentals start where the singing before them stops (free)
@@ -2049,6 +2052,17 @@ export function SongApp({
                         {writing && <Elapsed since={writing.since} />}
                       </span>
                     )}
+                    {/* a part written by hand: where it goes in the beat */}
+                    {tree.audio && lines.some((l) => l.text.trim()) && role !== "viewer" && (
+                      <button
+                        className={`flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold ${lines.some((l) => l.audio_at === null) || s.audio_start === null ? "bg-accent text-white" : "bg-panel-2 text-accent"}`}
+                        onClick={() => setPlacing(s.id)}
+                        title="Where this part starts in the beat — slide it into place"
+                      >
+                        <AudioLines className="h-3.5 w-3.5" />
+                        {lines.some((l) => l.audio_at === null) || s.audio_start === null ? "Place on the beat" : `Move · ${fmtTime(s.audio_start)}`}
+                      </button>
+                    )}
                     {hereOn("part", s.id).map((h) => (
                       <span key={h.key} className="flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold" style={{ background: `${hereColor(h.key)}22`, color: hereColor(h.key) }} title={`${hereName(h)} is in this part`}>
                         <span className="h-1.5 w-1.5 rounded-full" style={{ background: hereColor(h.key) }} />
@@ -2585,6 +2599,41 @@ export function SongApp({
               pasting={copied ? (tree.sections.find((x) => x.id === copied)?.name ?? null) : null}
               onPaste={() => pastePart(sec.id)}
               onClose={() => setPartMenu(null)}
+            />
+          );
+        })()}
+      {placing &&
+        tree.audio &&
+        (() => {
+          const sec = tree.sections.find((x) => x.id === placing);
+          if (!sec) return null;
+          const lyric = sec.lines.filter((l) => l.kind === "lyric");
+          const timed = lyric.filter((l) => l.audio_at !== null);
+          return (
+            <PlaceSheet
+              name={sec.name}
+              lines={lyric.map((l) => l.text.trim())}
+              duration={tree.audio.duration ?? total}
+              bar={beatGrid ? (beatGrid.beats_per_bar * 60) / (beatGrid.bpm ?? 1) : null}
+              origin={beatGrid?.beat_offset ?? 0}
+              initialStart={sec.audio_start ?? timed[0]?.audio_at ?? null}
+              initialStep={timed.length > 1 ? timed[1].audio_at! - timed[0].audio_at! : null}
+              others={tree.sections
+                .filter((x) => x.id !== sec.id && x.audio_start !== null && x.lines.some((l) => l.text.trim()))
+                .map((x) => {
+                  const r = partRange(x);
+                  // a part placed by hand ends with its last line, not where the next part starts
+                  const last = Math.max(...x.lines.map((l) => l.audio_at ?? 0));
+                  return { name: x.name, start: r.start, end: Math.min(r.end, last > r.start ? last + 3 : r.end) };
+                })}
+              onHear={(from, until) => void play(from, until)}
+              onStop={stopPlay}
+              playing={playing}
+              onPlace={async (start, step) => {
+                await lineAction(sec.id, () => call(`/api/projects/${pid}`, { action: "placePart", sectionId: sec.id, start, step }), `Place “${sec.name}” on the beat`);
+                setNote(`“${sec.name}” starts at ${fmtTime(start)} — play it, or Loop a line to write on it`);
+              }}
+              onClose={() => setPlacing(null)}
             />
           );
         })()}

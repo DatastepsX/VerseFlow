@@ -2476,3 +2476,24 @@ export async function presence(projectId: string, me: Omit<Here, "at" | "name"> 
   }
   return Object.values(all).filter((h) => h.key !== me.key && now - h.at < HERE_FRESH_MS);
 }
+
+// ---------- a part placed on the beat (written by hand: its lines had no place in the song) ----------
+
+/**
+ * A part's lines put on the beat from `start` (a bar line), one every `step` seconds (1 or 2 bars) — the part
+ * starts there. Lines' times are playback metadata (setLineTimes: no line event). The parts after it that start
+ * before its last line moves on are left as they are: the writer places each one.
+ */
+export async function placePart(projectId: string, sectionId: string, start: number, step: number) {
+  const tree = await getTree(projectId);
+  const section = tree.sections.find((s) => s.id === sectionId);
+  if (!section) throw new NotFound("Part not found");
+  const duration = tree.audio?.duration ?? Infinity;
+  const at = Math.max(0, Math.min(start, duration));
+  const lines = section.lines.filter((l) => l.kind === "lyric");
+  check(await db().from("sections").update({ audio_start: Math.round(at * 1000) / 1000 }).eq("id", sectionId));
+  await setLineTimes(
+    projectId,
+    lines.map((l, i) => ({ id: l.id, at: at + i * step < duration ? at + i * step : null })),
+  );
+}

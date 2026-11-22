@@ -14,6 +14,7 @@ import {
   copyPartSound,
   redetectParts,
   fitParts,
+  placePart,
   saveChecks,
   dismissCheck,
   setLineTimes,
@@ -65,7 +66,7 @@ export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]">
   return handle(async () => {
     await access((await ctx.params).id, "edit");
     const { id } = await ctx.params;
-    const b = await body<{ action: string; name?: string; group_size?: number; label?: string; audio_start?: number | null; times?: { id: string; at: number | null }[]; text?: string; artistId?: string; color?: string; notes?: string; lanes?: string[]; lane?: string; preset?: string; key?: unknown; sectionId?: unknown; part?: unknown; custom?: unknown; from?: unknown; to?: unknown; levels?: unknown; lineIds?: unknown; lineId?: unknown; once?: unknown; what?: unknown; previous?: unknown; rhyme?: unknown; word?: unknown; line?: unknown }>(req);
+    const b = await body<{ action: string; name?: string; group_size?: number; label?: string; audio_start?: number | null; times?: { id: string; at: number | null }[]; text?: string; artistId?: string; color?: string; notes?: string; lanes?: string[]; lane?: string; preset?: string; key?: unknown; sectionId?: unknown; part?: unknown; custom?: unknown; from?: unknown; to?: unknown; levels?: unknown; lineIds?: unknown; lineId?: unknown; once?: unknown; what?: unknown; start?: unknown; step?: unknown; previous?: unknown; rhyme?: unknown; word?: unknown; line?: unknown }>(req);
     switch (b.action) {
       case "undo":
       case "redo": {
@@ -143,6 +144,13 @@ export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]">
       case "dismissCheck":
         if (typeof b.lineId === "string") await dismissCheck(id, b.lineId);
         break;
+      case "placePart": {
+        // a part's lines on the beat from a bar, one every 1 or 2 bars (no API call)
+        const ok = (v: unknown, lo: number, hi: number): v is number => typeof v === "number" && Number.isFinite(v) && v >= lo && v <= hi;
+        if (typeof b.sectionId !== "string" || !ok(b.start, 0, 3600) || !ok(b.step, 0.5, 30)) return Response.json({ error: "sectionId, start and step required" }, { status: 400 });
+        await placePart(id, b.sectionId, b.start, b.step);
+        break;
+      }
       case "nextLine": {
         // the next bar after the writer's line: 3 options on its length and flow (1 call) — nothing is changed
         const previous = typeof b.previous === "string" ? b.previous.trim().slice(0, 300) : "";
