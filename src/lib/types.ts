@@ -57,6 +57,8 @@ export interface LineCheck {
 }
 
 export interface ProjectSettings {
+  /** how the song was started: from a beat (its parts and flow found) or from scratch (written by hand) */
+  start?: "beat" | "scratch";
   /** the quality check of each line (by line id) — no longer shown once the line's text changes */
   checks?: Record<string, LineCheck>;
   /** recording layers (Lead, Double, Ad-libs…) */

@@ -198,7 +198,9 @@ export async function createProject(input: {
       .select()
       .single(),
   ) as Project;
-  const sections = defaultSections(input.type).map((s, i) => ({ ...s, project_id: project.id, position: i + 1 }));
+  // from scratch: one part to start writing in (more are added as the song grows)
+  const start = input.settings?.start === "scratch" ? [{ name: "Verse 1", group_size: 2 }] : defaultSections(input.type);
+  const sections = start.map((s, i) => ({ ...s, project_id: project.id, position: i + 1 }));
   check(await db().from("sections").insert(sections));
   return project;
 }

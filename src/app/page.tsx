@@ -4,7 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { ChevronRight, Mic, Music, Plus, Sliders } from "@/components/icons";
+import { ChevronRight, Mic, Music, Pencil, Plus, Sliders } from "@/components/icons";
 import { api } from "@/lib/client/api";
 import { BEAT_ACCEPT, MAX_BEAT_BYTES, uploadBeat } from "@/lib/client/beat";
 import { LANGUAGES, PROJECT_TYPES, type Project, type ProjectType } from "@/lib/types";
@@ -20,6 +20,8 @@ export default function Home() {
   const [projects, setProjects] = useState<ProjectRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sheet, setSheet] = useState(false);
+  /** how the song starts: from a beat (its parts and flow found, lyrics written to it) or from scratch (you write) */
+  const [start, setStart] = useState<"beat" | "scratch" | null>(null);
   const [more, setMore] = useState(false);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
@@ -39,7 +41,7 @@ export default function Home() {
 
   const create = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!beat && !form.text.trim()) {
+    if (start === "beat" && !beat && !form.text.trim()) {
       setError("Choose your beat first.");
       return;
     }
@@ -53,7 +55,7 @@ export default function Home() {
           type: form.type,
           language: form.language,
           concept: form.concept.trim() || null,
-          settings: { genre: form.genre.trim() || undefined, simpleLanguage: true },
+          settings: { genre: form.genre.trim() || undefined, simpleLanguage: true, start: start ?? "beat" },
           text: form.text.trim() || undefined,
         },
       });
@@ -67,7 +69,8 @@ export default function Home() {
         }
       }
       // the song opens checking whether the track has lyrics (then it reads them and the flow)
-      router.push(`/song/${p.id}${uploaded && !form.text.trim() ? "?detect=1" : ""}`);
+      // from scratch: straight to writing (a beat only plays along); from a beat: its lyrics and flow are found
+      router.push(`/song/${p.id}${start === "scratch" ? "?view=lyrics" : uploaded && !form.text.trim() ? "?detect=1" : ""}`);
     } catch (err) {
       setError((err as Error).message);
       setBusy(false);
@@ -86,7 +89,7 @@ export default function Home() {
             <Sliders className="h-[18px] w-[18px]" />
           </Link>
         </div>
-        <p className="mt-2.5 text-sm text-muted">Upload a beat · sing your flow · get your lyrics</p>
+        <p className="mt-2.5 text-sm text-muted">Start from a beat — or from scratch, with your own bars</p>
       </header>
 
       {error && !sheet && <p className="mb-4 rounded-xl bg-bad-soft px-3 py-2 text-sm text-bad">{error}</p>}
@@ -95,7 +98,10 @@ export default function Home() {
       {projects?.length === 0 && (
         <button
           className="flex flex-col items-center gap-2 rounded-2xl border-2 border-dashed border-line px-6 py-12 text-center"
-          onClick={() => setSheet(true)}
+          onClick={() => {
+          setStart(null);
+          setSheet(true);
+        }}
         >
           <span className="flex h-14 w-14 items-center justify-center rounded-full bg-accent text-white shadow-lg shadow-accent/30"><Music className="h-7 w-7" /></span>
           <span className="font-semibold">Start your first song</span>
@@ -123,7 +129,10 @@ export default function Home() {
       {/* new song */}
       <button
         className="fixed bottom-[max(1.25rem,env(safe-area-inset-bottom))] left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 rounded-full bg-accent px-6 py-3.5 text-base font-bold text-white shadow-xl shadow-accent/30 active:scale-95"
-        onClick={() => setSheet(true)}
+        onClick={() => {
+          setStart(null);
+          setSheet(true);
+        }}
       >
         <Plus className="h-5 w-5" /> New song
       </button>
@@ -138,13 +147,37 @@ export default function Home() {
             <div className="mx-auto h-1.5 w-10 rounded-full bg-line" />
             <h2 className="text-xl font-bold">New song</h2>
 
+            {/* two ways in: the beat leads, or you do */}
+            {start === null ? (
+              <div className="space-y-2.5 pb-2">
+                <button type="button" className="flex w-full items-start gap-3 rounded-2xl bg-panel-2/70 px-4 py-4 text-left ring-1 ring-line/60 active:bg-accent-soft" onClick={() => setStart("beat")}>
+                  <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-accent text-white"><Music className="h-5 w-5" /></span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block font-semibold">From a beat</span>
+                    <span className="text-xs text-muted">Upload a beat or a song: its parts are found, you sing or tap the flow, the lyrics are written to it.</span>
+                  </span>
+                </button>
+                <button type="button" className="flex w-full items-start gap-3 rounded-2xl bg-panel-2/70 px-4 py-4 text-left ring-1 ring-line/60 active:bg-accent-soft" onClick={() => setStart("scratch")}>
+                  <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-fg text-bg"><Pencil className="h-5 w-5" /></span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block font-semibold">Start from scratch</span>
+                    <span className="text-xs text-muted">You write your bars — with rhymes, endings and next-line ideas when you want them. With a beat to write on, or without.</span>
+                  </span>
+                </button>
+              </div>
+            ) : (
+            <>
+            <button type="button" className="-mt-2 text-xs font-semibold text-accent" onClick={() => setStart(null)}>
+              ← {start === "beat" ? "From a beat" : "Start from scratch"} · change
+            </button>
+
             <label className="flex cursor-pointer items-center gap-3 rounded-2xl border-2 border-dashed border-accent/50 bg-accent-soft/40 px-4 py-4">
               <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-accent text-white"><Music className="h-5 w-5" /></span>
               <span className="min-w-0 flex-1">
-                <span className="block font-semibold">{beat ? beat.name : "Choose your beat"}</span>
+                <span className="block font-semibold">{beat ? beat.name : start === "scratch" ? "Add a beat to write on (optional)" : "Choose your beat"}</span>
                 <span className="text-xs text-muted">
-                  {beat ? `${(beat.size / 1024 / 1024).toFixed(1)} MB` : "A beat, or a song with your vocals — up to 50 MB"}
-                  <span className="block">Vocals are recognised automatically · 1 recognition</span>
+                  {beat ? `${(beat.size / 1024 / 1024).toFixed(1)} MB` : start === "scratch" ? "It plays while you write — or start without one, and add it later" : "A beat, or a song with your vocals — up to 50 MB"}
+                  {start === "beat" && <span className="block">Vocals are recognised automatically · 1 recognition</span>}
                 </span>
               </span>
               <input
@@ -232,8 +265,10 @@ export default function Home() {
 
             {error && <p className="rounded-xl bg-bad-soft px-3 py-2 text-sm text-bad">{error}</p>}
             <button className="btn-primary w-full justify-center rounded-2xl py-3.5 text-base" disabled={busy}>
-              {busy ? (status ?? "Creating…") : "Create song"}
+              {busy ? (status ?? "Creating…") : start === "scratch" ? (beat ? "Start writing on the beat" : "Start writing") : "Create song"}
             </button>
+            </>
+            )}
           </form>
         </div>
       )}

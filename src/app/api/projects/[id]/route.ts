@@ -26,7 +26,8 @@ import type { Project, ProjectSettings } from "@/lib/types";
 import { FX_PRESETS } from "@/lib/fx/presets";
 import { cleanPreset } from "@/lib/fx/match";
 import { access, addMember, currentUserId } from "@/lib/server/users";
-import { checkLyrics } from "@/lib/server/ai";
+import { checkLyrics, nextLines, rhymeEndings } from "@/lib/server/ai";
+import { findRhymes } from "@/lib/rhyme/dictionary";
 import { noteActivity } from "@/lib/server/notify";
 
 export async function GET(_req: Request, ctx: RouteContext<"/api/projects/[id]">) {
@@ -54,6 +55,9 @@ export async function DELETE(_req: Request, ctx: RouteContext<"/api/projects/[id
   });
 }
 
+/** rhyme endings already written for a word in a line (this server instance): asked again, no new call */
+const ENDINGS_CACHE = new Map<string, { text: string; word: string }[]>();
+
 /** Project actions: undo, redo, duplicate, addSection, saveVersion */
 export const maxDuration = 300;
 
@@ -61,7 +65,7 @@ export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]">
   return handle(async () => {
     await access((await ctx.params).id, "edit");
     const { id } = await ctx.params;
-    const b = await body<{ action: string; name?: string; group_size?: number; label?: string; audio_start?: number | null; times?: { id: string; at: number | null }[]; text?: string; artistId?: string; color?: string; notes?: string; lanes?: string[]; lane?: string; preset?: string; key?: unknown; sectionId?: unknown; part?: unknown; custom?: unknown; from?: unknown; to?: unknown; levels?: unknown; lineIds?: unknown; lineId?: unknown; once?: unknown; what?: unknown }>(req);
+    const b = await body<{ action: string; name?: string; group_size?: number; label?: string; audio_start?: number | null; times?: { id: string; at: number | null }[]; text?: string; artistId?: string; color?: string; notes?: string; lanes?: string[]; lane?: string; preset?: string; key?: unknown; sectionId?: unknown; part?: unknown; custom?: unknown; from?: unknown; to?: unknown; levels?: unknown; lineIds?: unknown; lineId?: unknown; once?: unknown; what?: unknown; previous?: unknown; rhyme?: unknown; word?: unknown; line?: unknown }>(req);
     switch (b.action) {
       case "undo":
       case "redo": {
@@ -139,6 +143,31 @@ export async function POST(req: Request, ctx: RouteContext<"/api/projects/[id]">
       case "dismissCheck":
         if (typeof b.lineId === "string") await dismissCheck(id, b.lineId);
         break;
+      case "nextLine": {
+        // the next bar after the writer's line: 3 options on its length and flow (1 call) — nothing is changed
+        const previous = typeof b.previous === "string" ? b.previous.trim().slice(0, 300) : "";
+        if (!previous) return Response.json({ error: "Write a line first." }, { status: 400 });
+        const tree = await getTree(id);
+        const sectionId = typeof b.sectionId === "string" && tree.sections.some((s) => s.id === b.sectionId) ? b.sectionId : null;
+        return Response.json({ options: await nextLines(tree, { sectionId, previous, rhyme: b.rhyme === true }) });
+      }
+      case "rhymeEndings": {
+        // endings that rhyme with a word, ranked for the line and the lyrics (1 call; the same again: from memory)
+        const word = typeof b.word === "string" ? b.word.trim().slice(0, 40) : "";
+        if (!word) return Response.json({ error: "Which word?" }, { status: 400 });
+        const tree = await getTree(id);
+        const line = typeof b.line === "string" ? b.line.trim().slice(0, 300) : "";
+        const sectionId = typeof b.sectionId === "string" && tree.sections.some((s) => s.id === b.sectionId) ? b.sectionId : null;
+        const key = `${id}|${word.toLowerCase()}|${line}`;
+        let endings = ENDINGS_CACHE.get(key);
+        if (!endings) {
+          const found = await findRhymes(word, tree.project.language);
+          endings = await rhymeEndings(tree, { word, line, sectionId, candidates: [...found.perfect, ...found.near].map((w) => w.word) });
+          ENDINGS_CACHE.set(key, endings);
+          if (ENDINGS_CACHE.size > 300) ENDINGS_CACHE.delete(ENDINGS_CACHE.keys().next().value!);
+        }
+        return Response.json({ endings });
+      }
       case "downloaded":
         // the others are told by email, right away
         noteActivity(id, "download", typeof b.what === "string" ? b.what.slice(0, 80) : "the song");

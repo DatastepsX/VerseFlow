@@ -948,3 +948,115 @@ Return only the flagged lines ("line" = its number); none: an empty list.`;
   }
   return { checked: todo.map((x) => ({ id: x.l.id, text: x.l.text })), flagged };
 }
+
+/* ---------- writing from scratch: the writer leads, the app assists ---------- */
+
+const LINES_SCHEMA = {
+  type: "object",
+  properties: { lines: { type: "array", items: { type: "string" } } },
+  required: ["lines"],
+  additionalProperties: false,
+};
+
+/** the part's lines so far (and the song's other parts, shorter), for context */
+function writtenContext(tree: ProjectTree, sectionId: string | null) {
+  return tree.sections
+    .map((s) => {
+      const ls = s.lines.filter((l) => l.kind === "lyric" && l.text.trim()).map((l) => l.text.trim());
+      if (!ls.length) return "";
+      return `${s.name}${s.id === sectionId ? " (the part being written)" : ""}:\n${(s.id === sectionId ? ls : ls.slice(-6)).join("\n")}`;
+    })
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+/**
+ * The next bar after the writer's line: `count` options with the same length and flow (syllables, stresses,
+ * ending) — rhyming with it when it is the second line of a couplet — continuing what the part says. Each
+ * option is nudged onto the syllable count. 1 call (low effort).
+ */
+export async function nextLines(tree: ProjectTree, o: { sectionId: string | null; previous: string; rhyme: boolean; count?: number }) {
+  if (!aiConfigured()) throw new AiUnavailable("AI is not configured yet (ANTHROPIC_API_KEY missing).");
+  const lang = tree.project.language;
+  const p = prosody(o.previous, lang);
+  const st = tree.project.settings ?? {};
+  const brief = o.sectionId ? briefPrompt(st.briefs?.[o.sectionId]) : "";
+  const prompt = `PROJECT
+Title: ${tree.project.title}
+Language: ${langName(lang)}
+${st.genre ? `Genre: ${st.genre}\n` : ""}${tree.project.concept ? `Story / concept: ${tree.project.concept}\n` : ""}${brief ? `The writer's brief: ${brief}\n` : ""}
+THE LYRICS SO FAR (written by the writer — they lead)
+${writtenContext(tree, o.sectionId) || "(nothing yet)"}
+
+THE LINE JUST WRITTEN
+“${o.previous}” → ${describeRhythm(p, lang)}
+
+TASK
+Suggest ${o.count ?? 3} options for the NEXT line, each:
+- the same length and flow as the line just written: ${p.syllables} sung syllables (±1), stresses in the same places, the same ending type — it must sit on the same beat;
+${o.rhyme ? `- rhyming with it: the last word truly rhymes with “${lastWord(o.previous)}” (same ending from the stressed vowel on, never the same word);\n` : "- free to start a new rhyme (it will be rhymed with by the line after it);\n"}- continuing what the lyrics say, in the writer's voice and style — concrete, natural, no filler, no clichés;
+- clearly different from each other (image or angle), ending on different words.
+Return only the lines.`;
+  const parsed = await callJson<{ lines: string[] }>(tree.project.id, "next_line", prompt, LINES_SCHEMA, SYSTEM, "low");
+  return parsed.lines
+    .map(cleanLyric)
+    .filter(Boolean)
+    .slice(0, o.count ?? 3)
+    .map((t) => {
+      let text = t;
+      for (let k = 0; k < 3; k++) {
+        const d = prosody(text, lang).syllables - p.syllables;
+        if (Math.abs(d) <= 1) break;
+        const next = adjustLength(text, lang, d > 0 ? -1 : 1);
+        if (!next) break;
+        text = next;
+      }
+      return text;
+    });
+}
+
+const ENDINGS_SCHEMA = {
+  type: "object",
+  properties: {
+    endings: {
+      type: "array",
+      items: { type: "object", properties: { text: { type: "string" }, word: { type: "string" } }, required: ["text", "word"], additionalProperties: false },
+    },
+  },
+  required: ["endings"],
+  additionalProperties: false,
+};
+
+/**
+ * Line endings that rhyme with a word: short pieces of a line (2–7 words) ending on a rhyme of `word`, ranked
+ * by how well they fit the line and the lyrics around it — best first. The rhyme dictionary's words are the
+ * start; others that truly rhyme may join. 1 call (low effort).
+ */
+export async function rhymeEndings(tree: ProjectTree, o: { word: string; line: string; sectionId: string | null; candidates: string[]; count?: number }) {
+  if (!aiConfigured()) throw new AiUnavailable("AI is not configured yet (ANTHROPIC_API_KEY missing).");
+  const lang = tree.project.language;
+  const n = o.count ?? 12;
+  const prompt = `PROJECT
+Title: ${tree.project.title}
+Language: ${langName(lang)}
+${tree.project.concept ? `Story / concept: ${tree.project.concept}\n` : ""}
+THE LYRICS SO FAR
+${writtenContext(tree, o.sectionId) || "(nothing yet)"}
+
+THE LINE THE WORD IS IN
+“${o.line || o.word}”
+
+RHYMES OF “${o.word}” FROM THE DICTIONARY (a start — others that truly rhyme are fine)
+${o.candidates.slice(0, 60).join(", ") || "(none found)"}
+
+TASK
+Write ${n} endings for the line that rhymes with “${o.word}” — the next line of a couplet: each a natural piece of a line (2 to 7 words) that ENDS on a word truly rhyming with “${o.word}” (same ending from the stressed vowel on; never “${o.word}” itself).
+Rank them by how well they fit: the meaning and images of the lyrics, the line “${o.line || o.word}”, the writer's voice — the best first. Use ${n} different rhyme words where you can.
+"word" = the rhyming last word of the ending.`;
+  const parsed = await callJson<{ endings: { text: string; word: string }[] }>(tree.project.id, "rhyme_endings", prompt, ENDINGS_SCHEMA, SYSTEM, "low");
+  const seen = new Set<string>();
+  return parsed.endings
+    .map((e) => ({ text: cleanLyric(e.text), word: e.word.trim().replace(/[^\p{L}\p{N}'’]+/gu, "") }))
+    .filter((e) => e.text && !seen.has(e.text.toLowerCase()) && seen.add(e.text.toLowerCase()))
+    .slice(0, n);
+}

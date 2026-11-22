@@ -169,7 +169,14 @@ export function WordChips({ text, onWord }: { text: string; onWord: (word: strin
   );
 }
 
-export function RhymeSheet({ word, lang, onClose, write }: { word: string; lang: string; onClose: () => void; write?: RhymeWrite }) {
+/** endings for the line that rhymes with the word: pieces of a line ending on a rhyme, best fit first (1 call) */
+export interface RhymeEndings {
+  load: () => Promise<{ text: string; word: string }[]>;
+  /** put one in (the line being written); none: tapped, it is copied */
+  use?: (text: string) => void;
+}
+
+export function RhymeSheet({ word, lang, onClose, write, endings }: { word: string; lang: string; onClose: () => void; write?: RhymeWrite; endings?: RhymeEndings }) {
   const key = `${word}|${lang}`;
   const [state, setState] = useState<{ key: string; r: RhymeResult | null } | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
@@ -192,6 +199,22 @@ export function RhymeSheet({ word, lang, onClose, write }: { word: string; lang:
     };
   }, [word, lang, key]);
   const result = state?.key === key ? state.r : undefined;
+  // the endings in context: asked once when the sheet opens (the server remembers them for this word and line)
+  const [ends, setEnds] = useState<{ key: string; list: { text: string; word: string }[] | null; err?: string } | null>(null);
+  const loadEndings = endings?.load;
+  useEffect(() => {
+    if (!loadEndings) return;
+    let gone = false;
+    loadEndings().then(
+      (list) => !gone && setEnds({ key, list }),
+      (e: unknown) => !gone && setEnds({ key, list: null, err: e instanceof Error ? e.message : "Couldn't write the endings" }),
+    );
+    return () => {
+      gone = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+  const endList = ends?.key === key ? ends : null;
   const copy = (w: string) =>
     void navigator.clipboard?.writeText(w).then(
       () => setCopied(w),
@@ -244,6 +267,41 @@ export function RhymeSheet({ word, lang, onClose, write }: { word: string; lang:
           </p>
         </div>
         {written && write && <WrittenOptions write={write} lineId={written.lineId} word={written.word} />}
+        {/* endings for the line that rhymes: best fit for the lyrics first */}
+        {endings && (
+          <div className="space-y-1.5">
+            <p className="label">
+              Line endings that rhyme · best fit first <span className="font-normal normal-case text-muted">· 1 call</span>
+            </p>
+            {!endList ? (
+              <p className="flex items-center gap-2 py-2 text-sm text-muted">
+                <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-accent border-r-transparent" /> Writing endings for your lyrics…
+              </p>
+            ) : endList.list === null ? (
+              <p className="text-xs text-bad">{endList.err}</p>
+            ) : (
+              endList.list.map((e, i) => (
+                <button
+                  key={e.text}
+                  className="flex w-full items-center gap-2 rounded-xl bg-panel-2/70 px-2.5 py-2 text-left text-sm active:bg-accent-soft"
+                  onClick={() => {
+                    if (endings.use) {
+                      endings.use(e.text);
+                      onClose();
+                    } else copy(e.text);
+                  }}
+                >
+                  <span className="w-4 shrink-0 text-center font-mono text-[10px] text-muted">{i + 1}</span>
+                  <span className="min-w-0 flex-1">
+                    {e.text.slice(0, Math.max(0, e.text.length - e.word.length))}
+                    <b className="text-accent">{e.text.slice(Math.max(0, e.text.length - e.word.length))}</b>
+                  </span>
+                  <span className="shrink-0 text-[10px] font-semibold text-muted">{endings.use ? "use" : copied === e.text ? "copied" : "copy"}</span>
+                </button>
+              ))
+            )}
+          </div>
+        )}
         {result === undefined ? (
           <p className="py-6 text-center text-sm text-muted">Looking for rhymes…</p>
         ) : result === null ? (

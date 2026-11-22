@@ -26,6 +26,7 @@ import { VoiceSheet, type VoiceInfo } from "./VoiceSheet";
 import { RecordView } from "./Record";
 import { Mixer, type ExportOptions } from "./Mixer";
 import { RhymeSheet, useWordTaps, WordChips } from "./RhymeWords";
+import { Composer } from "./Composer";
 import { NewNotesBanner, NotePreview, NotesSheet, notesOf, useNotesSeen } from "./Notes";
 import { encodeMp3, exportStems as exportStemsZip, logicNote, renderAll, safeName, type Stem } from "@/lib/studio/export";
 import { encodeWav } from "@/lib/studio/wav";
@@ -170,7 +171,9 @@ export function SongApp({
   const sectionIds = new Set(tree.sections.map((s) => s.id));
   const wholeFlow = [...tree.takes].reverse().find((t) => t.lane === "Flow" && t.chosen && !t.section_id) ?? null;
   const flowTakes = [...(wholeFlow ? [wholeFlow] : []), ...tree.takes.filter((t) => t.lane === "Flow" && t.chosen && t.section_id && sectionIds.has(t.section_id))];
-  const [view, setView] = useState<View>(initialView ?? (hasLines ? "lyrics" : "flow"));
+  /** a song started from scratch: written by hand, bar by bar (a beat only plays along, if any) */
+  const scratch = tree.project.settings?.start === "scratch";
+  const [view, setView] = useState<View>(initialView ?? (hasLines || scratch ? "lyrics" : "flow"));
   // the main device — where you record and play: this phone, or your Mac with the phone as its remote
   const [mainDevice] = usePref<"phone" | "mac">("vf.studio.main", "phone");
   const handheld = isHandheld();
@@ -951,7 +954,8 @@ export function SongApp({
       .catch(() => {});
   }, [needsFit, pid]);
   /** double-tapped word: its rhymes */
-  const [rhymeWord, setRhymeWord] = useState<{ word: string; lineId: string } | null>(null);
+  /** the word whose rhymes are shown: in a line (lineId), or the line being written (its text, where endings go) */
+  const [rhymeWord, setRhymeWord] = useState<{ word: string; lineId: string | null; line?: string; sectionId?: string; use?: (text: string) => void } | null>(null);
   /** notes new to you: shown in the lyrics until opened */
   const notesSeen = useNotesSeen(tree.project.id);
   /** the part merges into the one before it: its lines move there (one undo step) */
@@ -1912,7 +1916,7 @@ export function SongApp({
         )}
 
         {/* ----- LYRICS ----- */}
-        {view === "lyrics" && !hasLines && (
+        {view === "lyrics" && !hasLines && !scratch && (
           <div className="mt-10 text-center">
             <p className="text-muted">No lyrics yet.</p>
             <button className="btn-primary mt-4 rounded-full px-5 py-2.5" onClick={() => setView("flow")}>
@@ -1920,7 +1924,7 @@ export function SongApp({
             </button>
           </div>
         )}
-        {view === "lyrics" && hasLines && (
+        {view === "lyrics" && (hasLines || scratch) && (
           <div className="space-y-6">
             {missing.length > 0 && (
               <button
@@ -1960,7 +1964,7 @@ export function SongApp({
             })()}
             {tree.sections.map((s) => {
               const lines = s.lines.filter((l) => l.kind === "lyric") as LyricLine[];
-              if (!lines.length) return null;
+              if (!lines.length && !scratch) return null;
               if (isEmptyPart(s)) {
                 const r = partRange(s);
                 const calls = chunkLines(lines).length;
@@ -2322,6 +2326,42 @@ export function SongApp({
                       );
                     })}
                   </div>
+                  {/* writing by hand: the next bar — its length, its rhyme, ideas when asked (from scratch: always open) */}
+                  {role !== "viewer" &&
+                    (() => {
+                      const written = lines.filter((l) => l.text.trim());
+                      const prev = written[written.length - 1]?.text.trim() ?? null;
+                      // the second line of a couplet rhymes with the first
+                      const rhymeWith = prev && written.length % 2 === 1 ? prev : null;
+                      const isLast = tree.sections.filter((x) => x.lines.length || scratch).at(-1)?.id === s.id;
+                      return (
+                        <Composer
+                          key={`${s.id}:${written.length}`}
+                          lang={lang}
+                          previous={prev}
+                          rhymeWith={rhymeWith}
+                          startOpen={scratch && isLast}
+                          onAdd={async (text) => {
+                            let ok = false;
+                            await lineAction(s.id, async () => {
+                              ok = !!(await call(`/api/sections/${s.id}`, { action: "addLine", text, status: "APPROVED", kind: "lyric" }));
+                            }, "Write a line");
+                            if (!ok) throw new Error("The line wasn't added — try again.");
+                          }}
+                          onNextLine={async () => {
+                            const res = await fetch(`/api/projects/${pid}`, {
+                              method: "POST",
+                              headers: { "content-type": "application/json" },
+                              body: JSON.stringify({ action: "nextLine", sectionId: s.id, previous: prev, rhyme: !!rhymeWith }),
+                            });
+                            const d = (await res.json().catch(() => ({}))) as { options?: string[]; error?: string };
+                            if (!res.ok) throw new Error(d.error ?? "No suggestions now — try again.");
+                            return d.options ?? [];
+                          }}
+                          onRhymes={(word, line, use) => setRhymeWord({ word, lineId: null, line, sectionId: s.id, use })}
+                        />
+                      );
+                    })()}
                   {/* the beat goes on without vocals before the next part: room for another line of the flow */}
                   {(() => {
                     const room = roomForLine(tree.sections, s.id, tree.flows, tree.audio);
@@ -2341,6 +2381,26 @@ export function SongApp({
                 </section>
               );
             })}
+            {/* from scratch: the song grows part by part */}
+            {scratch && role !== "viewer" && (
+              <div className="flex gap-2">
+                {["Chorus", "Verse", "Bridge"].map((n) => (
+                  <button
+                    key={n}
+                    className="flex flex-1 items-center justify-center gap-1 rounded-2xl bg-panel-2 py-2.5 text-[13px] font-semibold text-fg/80 active:bg-accent-soft disabled:opacity-50"
+                    disabled={busyLine !== null}
+                    onClick={() => {
+                      // "Verse 2", "Chorus 2"… numbered after the ones there are
+                      const same = tree.sections.filter((x) => x.name === n || x.name.startsWith(`${n} `)).length;
+                      const name = n === "Chorus" && !same ? "Chorus" : `${n} ${same + 1}`;
+                      void lineAction("parts", () => call(`/api/projects/${pid}`, { action: "addSection", name }), `New part “${name}”`);
+                    }}
+                  >
+                    <Plus className="h-3.5 w-3.5" /> {n}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
@@ -2524,6 +2584,20 @@ export function SongApp({
               word={rhymeWord.word}
               lang={lang}
               onClose={() => setRhymeWord(null)}
+              endings={{
+                // endings for the line that rhymes with this one, best fit for the lyrics first (1 call)
+                load: async () => {
+                  const res = await fetch(`/api/projects/${pid}`, {
+                    method: "POST",
+                    headers: { "content-type": "application/json" },
+                    body: JSON.stringify({ action: "rhymeEndings", word: rhymeWord.word, line: line?.text ?? rhymeWord.line ?? "", sectionId: sec?.id ?? rhymeWord.sectionId ?? null }),
+                  });
+                  const d = (await res.json().catch(() => ({}))) as { endings?: { text: string; word: string }[]; error?: string };
+                  if (!res.ok) throw new Error(d.error ?? "Couldn't write the endings — try again.");
+                  return d.endings ?? [];
+                },
+                use: rhymeWord.use,
+              }}
               write={
                 line
                   ? {
