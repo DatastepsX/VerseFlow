@@ -21,6 +21,8 @@ export function Composer({
   rhymeWith,
   startOpen,
   onAdd,
+  autoCheck,
+  setAutoCheck,
   onNextLine,
   onRhymes,
   loadEndings,
@@ -33,6 +35,9 @@ export function Composer({
   /** open from the start (a song written from scratch); else a "+ Write a line" button */
   startOpen: boolean;
   onAdd: (text: string) => Promise<unknown>;
+  /** each line added is checked (grammar, wording — as you'd say it): 1 call per line */
+  autoCheck: boolean;
+  setAutoCheck: (on: boolean) => void;
   /** 3 next lines on the line before's length and flow (1 call) */
   onNextLine: (() => Promise<string[]>) | null;
   /** line endings that rhyme with the line before, best fit for the lyrics first (1 call; remembered) */
@@ -141,6 +146,14 @@ export function Composer({
     <div className="mt-2 space-y-2 rounded-3xl bg-panel px-3.5 py-3 ring-1 ring-accent/30">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] font-semibold text-muted">
         <span>{previous ? "Next bar" : "First bar"}</span>
+        <button
+          className={`order-last ml-auto rounded-full px-2 py-0.5 ${autoCheck ? "bg-ok-soft text-ok" : "bg-panel-2 text-muted"}`}
+          onClick={() => setAutoCheck(!autoCheck)}
+          aria-pressed={autoCheck}
+          title="Each line you add is checked: grammar, and wording as a native speaker would say it (1 call per line)"
+        >
+          {autoCheck ? "✓ Check each line · 1 call" : "Check each line: off"}
+        </button>
         {target !== null && (
           <span className={syl ? (Math.abs(syl - target) <= 1 ? "text-ok" : "text-warn") : ""} title="Syllables: this line / the line before">
             {syl || "–"}/{target} syl

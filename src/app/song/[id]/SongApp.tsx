@@ -691,6 +691,8 @@ export function SongApp({
   // ---------- recording the flow ----------
   // the same on this device as in Record: headphones or not, and the delay found by ear for each
   const [headphones, setHeadphones] = usePref("vf.studio.headphones", true);
+  /** writing by hand: each line added is checked for grammar and wording (1 call per line) */
+  const [autoCheck, setAutoCheck] = usePref("vf.write.autoCheck", true);
   const [latencyRaw] = usePref<number | null>(`vf.studio.latency.${deviceKind()}`, null);
   const [latencyVp] = usePref<number | null>(`vf.studio.latency.vp.${deviceKind()}`, null);
   /** how late the microphone hears you (s): the delay set in Record, else what the browser reports */
@@ -2353,12 +2355,18 @@ export function SongApp({
                           rhymeWith={rhymeWith}
                           startOpen={scratch && isLast}
                           onAdd={async (text) => {
-                            let ok = false;
+                            let added: Line | null = null;
+                            const before = new Set(lines.map((l) => l.id));
                             await lineAction(s.id, async () => {
-                              ok = !!(await call(`/api/sections/${s.id}`, { action: "addLine", text, status: "APPROVED", kind: "lyric" }));
+                              const t = await call(`/api/sections/${s.id}`, { action: "addLine", text, status: "APPROVED", kind: "lyric" });
+                              added = t?.sections.find((x) => x.id === s.id)?.lines.find((l) => !before.has(l.id) && l.text === text) ?? null;
                             }, "Write a line");
-                            if (!ok) throw new Error("The line wasn't added — try again.");
+                            if (!added) throw new Error("The line wasn't added — try again.");
+                            // checked right away (grammar, wording as you'd say it) — while the next bar is written
+                            if (autoCheck) void runCheck(`check:${(added as Line).id}`, [added], "The new line");
                           }}
+                          autoCheck={autoCheck}
+                          setAutoCheck={setAutoCheck}
                           onNextLine={async () => {
                             const res = await fetch(`/api/projects/${pid}`, {
                               method: "POST",
@@ -2825,6 +2833,11 @@ function LineCard(props: {
           {hereName(h)} {h.editing ? "is editing this line" : "has this line open"}
         </p>
       ))}
+      {props.checkBusy && (
+        <p className="ml-3 flex items-center gap-1 text-[11px] font-semibold text-muted">
+          <span className="inline-block h-2.5 w-2.5 animate-spin rounded-full border-2 border-accent border-r-transparent" /> checking grammar and wording…
+        </p>
+      )}
       {props.check && !props.check.ok && (
         <button className="ml-3 flex max-w-full items-center gap-1 rounded-full px-1 text-left text-[11px] font-semibold text-warn" onClick={props.onToggle}>
           <span className="shrink-0">● needs work ·</span>
