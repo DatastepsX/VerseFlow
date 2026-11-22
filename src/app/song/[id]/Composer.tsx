@@ -23,6 +23,7 @@ export function Composer({
   onAdd,
   onNextLine,
   onRhymes,
+  loadEndings,
 }: {
   lang: string;
   /** the line before (the last written one in the part): its length is the one to match */
@@ -34,6 +35,8 @@ export function Composer({
   onAdd: (text: string) => Promise<unknown>;
   /** 3 next lines on the line before's length and flow (1 call) */
   onNextLine: (() => Promise<string[]>) | null;
+  /** line endings that rhyme with the line before, best fit for the lyrics first (1 call; remembered) */
+  loadEndings: ((word: string, line: string) => Promise<{ text: string; word: string }[]>) | null;
   /** the rhymes of a word, with endings for the line (the rhyme sheet) — an ending picked there is added here */
   onRhymes: (word: string, line: string, use: (ending: string) => void) => void;
 }) {
@@ -65,6 +68,33 @@ export function Composer({
     };
   }, [word, lang, key]);
   const chips = found?.key === key ? found.words : [];
+
+  // the second line of a couplet: endings that rhyme, shown as soon as it is to be written
+  const [ends, setEnds] = useState<{ key: string; list: { text: string; word: string }[] | null; err?: string } | null>(null);
+  const endKey = rhymeWith ? `${rhymeWith}|${lang}` : "";
+  useEffect(() => {
+    if (!loadEndings || !rhymeWith || !word) return;
+    let gone = false;
+    loadEndings(word, rhymeWith).then(
+      (list) => !gone && setEnds({ key: endKey, list }),
+      (e: unknown) => !gone && setEnds({ key: endKey, list: null, err: e instanceof Error ? e.message : "No endings now" }),
+    );
+    return () => {
+      gone = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [endKey]);
+  const endList = ends?.key === endKey ? ends : null;
+  const [allEnds, setAllEnds] = useState(false);
+  /** an ending tapped: it ends the line being written (what is typed stays in front of it) */
+  const putEnding = (e: string) => {
+    setText((t) => (t.trim() ? `${t.trim()} ${e}` : e));
+    setTimeout(() => {
+      const el = box.current;
+      el?.focus();
+      el?.setSelectionRange(el.value.length, el.value.length);
+    }, 30);
+  };
 
   const add = async () => {
     const t = text.trim();
@@ -148,6 +178,37 @@ export function Composer({
         }}
         enterKeyHint="done"
       />
+      {/* endings that rhyme with the line before, best fit first: tap one to end the line on it */}
+      {loadEndings && rhymeWith && word && (
+        <div className="space-y-1">
+          <p className="px-1 text-[11px] font-semibold text-muted">
+            Endings on “-{word.slice(-4)}” · best fit first <span className="font-normal">· 1 call</span>
+          </p>
+          {!endList ? (
+            <p className="flex items-center gap-2 px-1 py-1 text-xs text-muted">
+              <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-accent border-r-transparent" /> Writing endings for your lyrics…
+            </p>
+          ) : endList.list === null ? (
+            <p className="px-1 text-xs text-bad">{endList.err}</p>
+          ) : (
+            <>
+              {(allEnds ? endList.list : endList.list.slice(0, 5)).map((e) => (
+                <button key={e.text} className="flex w-full items-center gap-2 rounded-xl bg-panel-2/70 px-2.5 py-1.5 text-left text-sm active:bg-accent-soft" onClick={() => putEnding(e.text)}>
+                  <span className="min-w-0 flex-1">
+                    … {e.text.slice(0, Math.max(0, e.text.length - e.word.length))}
+                    <b className="text-accent">{e.text.slice(Math.max(0, e.text.length - e.word.length))}</b>
+                  </span>
+                </button>
+              ))}
+              {endList.list.length > 5 && (
+                <button className="px-1 text-[11px] font-semibold text-accent" onClick={() => setAllEnds(!allEnds)}>
+                  {allEnds ? "Fewer" : `${endList.list.length - 5} more`}
+                </button>
+              )}
+            </>
+          )}
+        </div>
+      )}
       {/* the word to rhyme with: its rhymes, tap one to end the line on it (free) */}
       {chips.length > 0 && (
         <div className="no-scrollbar -mx-1 flex gap-1.5 overflow-x-auto px-1 pb-0.5">

@@ -1322,6 +1322,17 @@ export function SongApp({
   const applyFix = (l: LyricLine, fix: string) =>
     lineAction(l.id, () => call(`/api/lines/${l.id}`, { text: fix, status: "APPROVED_EDITED", action: "edit" }, "PATCH"), "Use the fix");
   const dismissCheck = (l: LyricLine) => void call(`/api/projects/${pid}`, { action: "dismissCheck", lineId: l.id });
+  /** line endings that rhyme with a word, ranked for the lyrics (1 call; the server remembers them) */
+  const loadEndings = async (word: string, line: string, sectionId: string | null) => {
+    const res = await fetch(`/api/projects/${pid}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "rhymeEndings", word, line, sectionId }),
+    });
+    const d = (await res.json().catch(() => ({}))) as { endings?: { text: string; word: string }[]; error?: string };
+    if (!res.ok) throw new Error(d.error ?? "Couldn't write the endings — try again.");
+    return d.endings ?? [];
+  };
   /** lines written a group at a time (1 call per ~8 lines, one after the other: each sees the ones before) — with how far it is */
   const [writing, setWriting] = useState<{ done: number; total: number; since: number } | null>(null);
   const writeInGroups = async (lines: Pick<Line, "id" | "flow">[]) => {
@@ -2359,6 +2370,7 @@ export function SongApp({
                             return d.options ?? [];
                           }}
                           onRhymes={(word, line, use) => setRhymeWord({ word, lineId: null, line, sectionId: s.id, use })}
+                          loadEndings={(word, line) => loadEndings(word, line, s.id)}
                         />
                       );
                     })()}
@@ -2586,16 +2598,7 @@ export function SongApp({
               onClose={() => setRhymeWord(null)}
               endings={{
                 // endings for the line that rhymes with this one, best fit for the lyrics first (1 call)
-                load: async () => {
-                  const res = await fetch(`/api/projects/${pid}`, {
-                    method: "POST",
-                    headers: { "content-type": "application/json" },
-                    body: JSON.stringify({ action: "rhymeEndings", word: rhymeWord.word, line: line?.text ?? rhymeWord.line ?? "", sectionId: sec?.id ?? rhymeWord.sectionId ?? null }),
-                  });
-                  const d = (await res.json().catch(() => ({}))) as { endings?: { text: string; word: string }[]; error?: string };
-                  if (!res.ok) throw new Error(d.error ?? "Couldn't write the endings — try again.");
-                  return d.endings ?? [];
-                },
+                load: () => loadEndings(rhymeWord.word, line?.text ?? rhymeWord.line ?? "", sec?.id ?? rhymeWord.sectionId ?? null),
                 use: rhymeWord.use,
               }}
               write={

@@ -17,6 +17,9 @@ const SHORT_WORDS = new Set(
   "io tu me te se re ne da di fa va sa ma ha la lo li le ci vi mi ti si no so do ho ai tre due tra fra blu".split(" "),
 );
 
+/** the real Italian words that start "i" + a vowel (the others in the list are fragments) */
+const I_VOWEL_WORDS = new Set(["io", "ieri", "iena", "iene", "iella", "iato", "iati", "iodio", "ione", "ioni", "iosa", "iuta", "ionico", "ionica", "iettatore", "iettatura", "ieratico", "ieratica"]);
+
 let italian: { byKey: Map<string, Entry[]>; byVowels: Map<string, Entry[]> } | null = null;
 
 function loadItalian() {
@@ -33,6 +36,8 @@ function loadItalian() {
   const isFragment = (w: string, r: number) => {
     // impossible Italian word starts: "nna", "mbria", "pple"
     if (/^([bcdfglmnpqrstvz])\1|^[lnmr][^aeiou]|^[^aeiou]{4}/.test(w)) return true;
+    // words cut off a "gi…" or "li…" word ("iovanni", "ianni", "iorno"): Italian hardly starts "i"+vowel
+    if (/^i[aeiou]/.test(w) && !I_VOWEL_WORDS.has(w)) return true;
     if (w.length < 3) return !SHORT_WORDS.has(w);
     if (w.length < 5 && !/^[aeiou]/.test(w)) return false;
     for (const c of "abcdefghilmnopqrstuvz") {
